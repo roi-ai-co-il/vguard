@@ -103,6 +103,105 @@ function base64UrlDecode(s: string): string {
   }
 }
 
+/**
+ * Sensitive data analysis (S2+4).
+ *
+ * Scans response bodies the page actually fetched. Pattern bank covers PII,
+ * secrets, internal URLs, and absolute-path stack traces. The body itself
+ * never leaves the worker — only `{ type, redactedSample, sourceUrl }` does.
+ */
+interface SensitiveDataHit {
+  type:
+    | 'email'
+    | 'phone-il'
+    | 'phone-intl'
+    | 'israeli-id'
+    | 'credit-card'
+    | 'jwt-in-body'
+    | 'aws-key'
+    | 'github-pat'
+    | 'openai-key'
+    | 'anthropic-key'
+    | 'stripe-key'
+    | 'internal-url'
+    | 'stack-trace-abs-path'
+  redactedSample: string
+  sourceUrl: string
+}
+
+function redact(s: string, keepFront = 4, keepBack = 4): string {
+  if (s.length <= keepFront + keepBack + 3) return '***'
+  return s.slice(0, keepFront) + '…' + s.slice(-keepBack)
+}
+
+function luhnValid(num: string): boolean {
+  const digits = num.replace(/\D/g, '')
+  if (digits.length < 13 || digits.length > 19) return false
+  let sum = 0
+  let alt = false
+  for (let i = digits.length - 1; i >= 0; i--) {
+    let d = parseInt(digits[i], 10)
+    if (alt) {
+      d *= 2
+      if (d > 9) d -= 9
+    }
+    sum += d
+    alt = !alt
+  }
+  return sum % 10 === 0
+}
+
+const SENSITIVE_PATTERNS: Array<{
+  type: SensitiveDataHit['type']
+  re: RegExp
+  validator?: (m: string) => boolean
+}> = [
+  { type: 'email', re: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g },
+  { type: 'phone-il', re: /\b(?:\+972[-\s]?|0)5\d[-\s]?\d{3}[-\s]?\d{4}\b/g },
+  { type: 'phone-intl', re: /\b\+(?:[1-9]\d{0,2})[-\s]?\d{1,4}[-\s]?\d{1,4}[-\s]?\d{1,9}\b/g },
+  { type: 'israeli-id', re: /(?<![\d.])[\d]{9}(?![\d.])/g, validator: (m) => /^[0-9]{9}$/.test(m) },
+  { type: 'credit-card', re: /\b(?:\d[ -]?){13,19}\b/g, validator: luhnValid },
+  { type: 'jwt-in-body', re: /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g },
+  { type: 'aws-key', re: /\bAKIA[0-9A-Z]{16}\b/g },
+  { type: 'github-pat', re: /\b(?:ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{82})\b/g },
+  { type: 'openai-key', re: /\bsk-(?:proj-)?[A-Za-z0-9_-]{40,}\b/g },
+  { type: 'anthropic-key', re: /\bsk-ant-api03-[A-Za-z0-9_-]{40,}\b/g },
+  { type: 'stripe-key', re: /\bsk_live_[A-Za-z0-9]{20,}\b/g },
+  // Internal URLs - private IPs / *.internal / *.local / localhost
+  { type: 'internal-url', re: /\bhttps?:\/\/(?:localhost|127(?:\.\d{1,3}){3}|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2[0-9]|3[01])(?:\.\d{1,3}){2}|169\.254(?:\.\d{1,3}){2}|[\w-]+\.(?:internal|local|corp|lan|home))(?::\d{1,5})?[^\s"'`<>]*/gi },
+  // Stack traces with absolute Unix or Windows paths
+  { type: 'stack-trace-abs-path', re: /(?:^|[\s(])(?:[A-Za-z]:\\[A-Za-z0-9_\\.\- ]+|\/(?:home|var|usr|opt|root)\/[A-Za-z0-9_\/.\- ]+)(?::\d+(?::\d+)?)?(?:[\s)]|$)/gm },
+]
+
+function analyzeBodyForSensitiveData(
+  body: string,
+  sourceUrl: string,
+  budget: { remaining: number },
+): SensitiveDataHit[] {
+  if (budget.remaining <= 0) return []
+  const out: SensitiveDataHit[] = []
+  // Cap body at 64KB for regex work — large JSON pages get truncated.
+  const text = body.length > 64 * 1024 ? body.slice(0, 64 * 1024) : body
+  for (const pat of SENSITIVE_PATTERNS) {
+    if (budget.remaining <= 0) break
+    pat.re.lastIndex = 0
+    const matches = text.match(pat.re) || []
+    const seenSamples = new Set<string>()
+    for (const m of matches) {
+      if (pat.validator && !pat.validator(m)) continue
+      const key = pat.type + ':' + m
+      if (seenSamples.has(key)) continue
+      seenSamples.add(key)
+      // Per-pattern cap of 3 samples per body to avoid noise blowup.
+      if (seenSamples.size > 3) break
+      out.push({ type: pat.type, redactedSample: redact(m), sourceUrl })
+      budget.remaining -= 1
+      if (budget.remaining <= 0) break
+    }
+  }
+  return out
+}
+
 function analyzeJwt(source: JwtAnalysis['source'], keyName: string, value: string): JwtAnalysis | null {
   if (typeof value !== 'string' || value.length < 30 || value.length > 4096) return null
   if (!JWT_RE.test(value)) return null
@@ -162,6 +261,8 @@ interface ScanResult {
   sessionStorageKeys: string[]
   /** JWTs detected anywhere (cookie value or storage value). Values are never sent back — only analysis. */
   jwtAnalysis: JwtAnalysis[]
+  /** S2+4 — sensitive data found in response bodies (raw bodies never sent back). */
+  sensitiveDataFindings: SensitiveDataHit[]
   durationMs: number
 }
 
@@ -207,6 +308,14 @@ app.post('/scan', async (req, res) => {
     requestStartedAt.set(req, Date.now())
   })
 
+  // S2+4 — sensitive-data scanning runs on captured response bodies.
+  // Hard caps so the worker doesn't OOM on chatty SPAs.
+  const sensitiveDataFindings: SensitiveDataHit[] = []
+  const sensitiveBudget = { remaining: 60 } // total hits across all responses
+  let bodiesScanned = 0
+  const MAX_BODIES_SCANNED = 25
+  const MAX_BODY_BYTES = 256 * 1024
+
   page.on('response', async (resp) => {
     if (networkRequests.length >= 200) return
     const req = resp.request()
@@ -226,6 +335,36 @@ app.post('/scan', async (req, res) => {
       hasAuthHeader: Boolean(reqHeaders['authorization'] || reqHeaders['cookie']),
       hasOriginHeader: Boolean(reqHeaders['origin']),
     })
+
+    // S2+4 — capture body for first-party HTML/JSON/JS+text responses, scan locally.
+    if (bodiesScanned >= MAX_BODIES_SCANNED) return
+    if (sensitiveBudget.remaining <= 0) return
+    const ct = (respHeaders['content-type'] || '').toLowerCase()
+    const isTextual =
+      ct.startsWith('text/') ||
+      ct.startsWith('application/json') ||
+      ct.startsWith('application/xml') ||
+      ct.startsWith('application/ld+json') ||
+      ct.startsWith('application/javascript') ||
+      ct.startsWith('application/graphql')
+    if (!isTextual) return
+    if (contentLength !== undefined && contentLength > MAX_BODY_BYTES) return
+    let respUrlHost = ''
+    try {
+      respUrlHost = new URL(resp.url()).hostname
+    } catch {
+      return
+    }
+    if (respUrlHost !== parsed.hostname && !respUrlHost.endsWith('.' + parsed.hostname)) return
+    bodiesScanned += 1
+    try {
+      const body = await resp.text()
+      const trimmed = body.length > MAX_BODY_BYTES ? body.slice(0, MAX_BODY_BYTES) : body
+      const hits = analyzeBodyForSensitiveData(trimmed, resp.url(), sensitiveBudget)
+      for (const h of hits) sensitiveDataFindings.push(h)
+    } catch {
+      // body read failed - skip
+    }
   })
   page.on('pageerror', (err) => {
     if (consoleErrors.length >= 50) return
@@ -331,6 +470,7 @@ app.post('/scan', async (req, res) => {
     localStorageKeys,
     sessionStorageKeys,
     jwtAnalysis,
+    sensitiveDataFindings,
     durationMs: Date.now() - t0,
   }
   return res.json(result)

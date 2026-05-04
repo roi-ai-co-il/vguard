@@ -99,6 +99,25 @@ interface LiveApiMap {
   unauthApiCalls: ApiCallEntry[]
 }
 
+interface WorkerSensitiveDataHit {
+  type:
+    | 'email'
+    | 'phone-il'
+    | 'phone-intl'
+    | 'israeli-id'
+    | 'credit-card'
+    | 'jwt-in-body'
+    | 'aws-key'
+    | 'github-pat'
+    | 'openai-key'
+    | 'anthropic-key'
+    | 'stripe-key'
+    | 'internal-url'
+    | 'stack-trace-abs-path'
+  redactedSample: string
+  sourceUrl: string
+}
+
 interface WorkerScanResult {
   ok: true
   url: string
@@ -111,6 +130,8 @@ interface WorkerScanResult {
   sessionStorageKeys: string[]
   /** Stage 2.4 — JWTs decoded by the worker (values never sent back). Optional for compat. */
   jwtAnalysis?: WorkerJwtAnalysis[]
+  /** S2+4 — PII / secrets / internal URLs / stack traces in response bodies. */
+  sensitiveDataFindings?: WorkerSensitiveDataHit[]
   durationMs: number
 }
 
@@ -452,6 +473,83 @@ function analyzeBrowserScan(data: WorkerScanResult): Finding[] {
           .map((x) => `${x.j.source}:${x.j.keyName} → ${x.sensitive.join(', ')}`)
           .join('\n'),
         fixPrompt: `Audit your JWT issuance: which claims are inside? If \`role\`, \`permissions\`, \`email\`, or any PII is in the token, move them to a server-side session lookup keyed by the JWT's \`sub\` (user id). Re-issue tokens with only the minimum claims (\`sub\`, \`exp\`, \`iat\`, \`scope\` if needed). Any client code that read the claim from the JWT now needs an API call instead — that's the right tradeoff for security.`,
+      })
+    }
+  }
+
+  // 6.6. Stage 2.4 — Sensitive data in response bodies (S2+4). Worker
+  //      scanned response bodies locally; sends back only `{type, redactedSample, sourceUrl}`.
+  const sd = data.sensitiveDataFindings ?? []
+  if (sd.length > 0) {
+    const buckets = new Map<string, WorkerSensitiveDataHit[]>()
+    for (const h of sd) {
+      const key =
+        h.type === 'aws-key' || h.type === 'github-pat' || h.type === 'openai-key' ||
+        h.type === 'anthropic-key' || h.type === 'stripe-key' || h.type === 'jwt-in-body'
+          ? 'secret'
+          : h.type === 'email' || h.type === 'phone-il' || h.type === 'phone-intl' ||
+            h.type === 'israeli-id' || h.type === 'credit-card'
+            ? 'pii'
+            : h.type === 'internal-url'
+              ? 'internal'
+              : 'stack'
+      const arr = buckets.get(key) ?? []
+      arr.push(h)
+      buckets.set(key, arr)
+    }
+
+    const secrets = buckets.get('secret') ?? []
+    if (secrets.length > 0) {
+      findings.push({
+        id: 'stage2-secret-in-response',
+        severity: 'critical',
+        category: 'secrets',
+        title: `${secrets.length} secret${secrets.length === 1 ? '' : 's'} returned in response bod${secrets.length === 1 ? 'y' : 'ies'}`,
+        description: `Stage 2 captured response bodies your browser fetched and found ${secrets.length} server-issued secret${secrets.length === 1 ? '' : 's'} in them. APIs should never return raw provider keys, JWTs, or AWS access keys to the browser. Whatever this token is, it's now in browser memory + dev-tools network panel — assume any user can read it.`,
+        evidence: secrets.slice(0, 8).map((s) => `${s.type} "${s.redactedSample}" in ${s.sourceUrl}`).join('\n'),
+        fixPrompt: `Audit each endpoint above and remove the leaked secret from the response body. Common patterns: (1) an admin endpoint returns a service-role config object that includes a secret instead of just the public fields — split the response. (2) An error handler dumps the full env or config — replace with a generic message and log the detail server-side. (3) A development helper endpoint was left enabled in production — gate it behind NODE_ENV !== 'production'. After fixing, treat each secret as compromised and rotate at the issuing service.`,
+      })
+    }
+
+    const pii = buckets.get('pii') ?? []
+    if (pii.length > 0) {
+      // PII in own-data responses (logged-in user's profile) is fine; PII in
+      // a public/unauth endpoint is the leak. We can't tell which here, so
+      // flag as warn and let the user audit per source.
+      findings.push({
+        id: 'stage2-pii-in-response',
+        severity: 'warn',
+        category: 'meta',
+        title: `${pii.length} PII match${pii.length === 1 ? '' : 'es'} in response bod${pii.length === 1 ? 'y' : 'ies'}`,
+        description: `Stage 2 found PII patterns (emails, phone numbers, Israeli IDs, credit cards) in response bodies the browser fetched. Some are legitimate (the logged-in user's own profile); some are leaks (an unauthenticated endpoint that returns other users' data, or a debug endpoint that dumps a database). Audit the sources below.`,
+        evidence: pii.slice(0, 8).map((p) => `${p.type} "${p.redactedSample}" in ${p.sourceUrl}`).join('\n'),
+        fixPrompt: `For each endpoint above: confirm the caller is authenticated AND authorized to see this data. (1) Anonymous endpoints should never return user emails/phones unless explicitly intentional (e.g. public author byline). (2) Authenticated endpoints should filter to ONLY the requesting user's data — IDOR class bug if /api/users/123 returns user 124's data. (3) Credit cards should never round-trip — if you see one in a response, you have a major PCI violation; mask server-side before sending.`,
+      })
+    }
+
+    const internal = buckets.get('internal') ?? []
+    if (internal.length > 0) {
+      findings.push({
+        id: 'stage2-internal-url-leak',
+        severity: 'warn',
+        category: 'meta',
+        title: `${internal.length} internal URL${internal.length === 1 ? '' : 's'} leaked in response bod${internal.length === 1 ? 'y' : 'ies'}`,
+        description: `Response bodies referenced private-IP, *.internal, *.local, or localhost URLs. These are infrastructure-recon gold for attackers — they reveal internal service topology, hostname conventions, and ports that aren't supposed to be public knowledge. Often appear in error stack traces, debug responses, or accidentally-shipped dev configs.`,
+        evidence: internal.slice(0, 8).map((u) => `${u.redactedSample} in ${u.sourceUrl}`).join('\n'),
+        fixPrompt: `Find where each internal URL is constructed and stop returning it to the client. (1) Replace internal hostnames with public-DNS equivalents server-side. (2) Strip stack traces from error responses in production — return a correlation ID instead, and log the trace to your error tracker. (3) Don't ship dev config defaults; require env vars to be explicitly set in prod and fail loudly if missing.`,
+      })
+    }
+
+    const stacks = buckets.get('stack') ?? []
+    if (stacks.length > 0) {
+      findings.push({
+        id: 'stage2-stack-trace-in-response',
+        severity: 'warn',
+        category: 'meta',
+        title: `${stacks.length} response${stacks.length === 1 ? '' : 's'} include absolute file paths`,
+        description: `Found absolute filesystem paths (Unix /home/.../, /opt/..., /var/... or Windows C:\\...) in response bodies. Almost always a stack trace from an unhandled error. Reveals the exact code structure, OS, deployment user, and sometimes credential paths to an attacker.`,
+        evidence: stacks.slice(0, 6).map((s) => `${s.redactedSample} in ${s.sourceUrl}`).join('\n'),
+        fixPrompt: `Add a top-level error handler that produces a sanitized response in production. Express: \`app.use((err, req, res, next) => { logger.error(err); res.status(500).json({ error: 'Internal error', traceId }) })\`. Next.js: customize \`error.tsx\` / API \`onError\` to never include err.stack. Verify by triggering a controlled error in prod (e.g. malformed JSON body) and confirming the response has no path strings.`,
       })
     }
   }
