@@ -31,6 +31,17 @@ export interface Finding {
   description: string
   evidence: string
   fixPrompt: string
+  /**
+   * CVSS-style risk score 0.0–10.0 (10 = worst). Derived from severity +
+   * category weight + per-finding overrides. Lets the UI rank "fix-first"
+   * within the same severity bucket. Set by `risk-scorer.applyRisk`.
+   */
+  riskScore?: number
+  /**
+   * Human-readable risk band: `low` (0–3), `medium` (3–6), `high` (6–8),
+   * `severe` (8–10). Derived from `riskScore` so the UI doesn't recompute.
+   */
+  riskBand?: 'low' | 'medium' | 'high' | 'severe'
 }
 
 export interface ScanError {
@@ -75,6 +86,15 @@ export interface ScanResult {
   }
   /** When true, the result already includes Stage 3 findings appended. */
   stage?: 1 | 3
+  /**
+   * Composite 0–100 risk score for the whole scan (100 = worst). Independent
+   * of `vibeScore`: vibeScore = "how good is this site"; aggregateRisk =
+   * "how dangerous are the open issues, weighted by per-finding riskScore".
+   * One critical can produce a higher aggregateRisk than ten infos.
+   */
+  aggregateRisk?: number
+  /** Risk band for the overall scan, mirrors per-finding bands. */
+  aggregateRiskBand?: 'low' | 'medium' | 'high' | 'severe'
 }
 
 export interface ScanFailure {

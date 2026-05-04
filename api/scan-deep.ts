@@ -4,6 +4,7 @@ import { runScan } from './_lib/scanner.js'
 import { runDeepScan } from './_lib/deep-scanner.js'
 import { getCachedVerification, incrementScanCount } from './_lib/verification-store.js'
 import { enrichFindings } from './_lib/fix-prompt-composer.js'
+import { aggregateBand, applyRisk, computeAggregateRisk } from './_lib/risk-scorer.js'
 import type { ScanResponse } from '../src/lib/scanner-types.js'
 
 export const config = {
@@ -143,7 +144,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       finalUrl: stage1.meta.finalUrl,
       detectedFramework: stage1.meta.detectedFramework,
     })
-    const allFindings = [...stage1.findings, ...enrichedDeep]
+    // Stage 1 findings already carry riskScore from runScan; score the deep
+    // additions and concat. Aggregate risk is recomputed over the union.
+    const scoredDeep = applyRisk(enrichedDeep)
+    const allFindings = [...stage1.findings, ...scoredDeep]
     const totals = {
       critical: allFindings.filter((f) => f.severity === 'critical').length,
       warn: allFindings.filter((f) => f.severity === 'warn').length,
@@ -154,6 +158,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       0,
       100 - totals.critical * 20 - totals.warn * 7 - totals.info * 2,
     )
+    const aggregateRisk = computeAggregateRisk(allFindings)
     const sevOrder = { critical: 0, warn: 1, info: 2, ok: 3 } as const
     allFindings.sort((a, b) => sevOrder[a.severity] - sevOrder[b.severity])
 
@@ -162,6 +167,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       findings: allFindings,
       totals,
       vibeScore,
+      aggregateRisk,
+      aggregateRiskBand: aggregateBand(aggregateRisk),
       durationMs: stage1.durationMs + deep.durationMs,
       stage: 3,
     }

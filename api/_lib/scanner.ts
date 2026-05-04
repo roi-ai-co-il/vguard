@@ -7,6 +7,7 @@ import * as tls from 'node:tls'
 import { getDomain } from 'tldts'
 import type { Finding, ScanResponse, Severity } from '../../src/lib/scanner-types.js'
 import { enrichFindings } from './fix-prompt-composer.js'
+import { aggregateBand, applyRisk, computeAggregateRisk } from './risk-scorer.js'
 
 const FETCH_TIMEOUT_MS = 4000
 const PROBE_TIMEOUT_MS = 2500
@@ -2546,6 +2547,8 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
   findings.sort((a, b) => sevOrder[a.severity] - sevOrder[b.severity])
 
   const enriched = enrichFindings(findings, { finalUrl, detectedFramework })
+  const scored = applyRisk(enriched)
+  const aggregateRisk = computeAggregateRisk(scored)
 
   return {
     ok: true,
@@ -2553,8 +2556,10 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
     scannedAt: new Date().toISOString(),
     durationMs: Date.now() - t0,
     vibeScore,
+    aggregateRisk,
+    aggregateRiskBand: aggregateBand(aggregateRisk),
     totals,
-    findings: enriched,
+    findings: scored,
     stage: 1 as const,
     meta: {
       finalUrl,
