@@ -8,6 +8,7 @@ import { getDomain } from 'tldts'
 import type { Finding, ScanResponse, Severity } from '../../src/lib/scanner-types.js'
 import { enrichFindings } from './fix-prompt-composer.js'
 import { aggregateBand, applyRisk, computeAggregateRisk } from './risk-scorer.js'
+import { buildAttackSurface } from './attack-surface.js'
 
 const FETCH_TIMEOUT_MS = 4000
 const PROBE_TIMEOUT_MS = 2500
@@ -2550,6 +2551,21 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
   const scored = applyRisk(enriched)
   const aggregateRisk = computeAggregateRisk(scored)
 
+  const attackSurface = buildAttackSurface({
+    primaryDomain: url.hostname,
+    baseDomain: getBaseDomain(url.hostname),
+    finalUrl,
+    html,
+    bundleTextAll,
+    responseHeaders: mainResp.headers,
+    detected: {
+      supabaseProjectIds: Array.from(supabaseProjectIds),
+      s3BucketHosts: Array.from(s3BucketHosts),
+      firebaseIds: Array.from(firebaseIdsCollected),
+      aiEndpoints,
+    },
+  })
+
   return {
     ok: true,
     url: rawUrl,
@@ -2560,6 +2576,7 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
     aggregateRiskBand: aggregateBand(aggregateRisk),
     totals,
     findings: scored,
+    attackSurface,
     stage: 1 as const,
     meta: {
       finalUrl,

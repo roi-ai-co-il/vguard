@@ -95,6 +95,46 @@ export interface ScanResult {
   aggregateRisk?: number
   /** Risk band for the overall scan, mirrors per-finding bands. */
   aggregateRiskBand?: 'low' | 'medium' | 'high' | 'severe'
+  /**
+   * Structured attack-surface map for this site. A flat machine-readable
+   * picture of the asset (domains, endpoints, third-party scripts, auth
+   * providers, data stores) that an MCP/agent or a security reviewer can
+   * scan without re-doing detection. Always present on Stage 1+.
+   */
+  attackSurface?: AttackSurface
+}
+
+export type CdnProvider =
+  | 'cloudflare'
+  | 'aws-cloudfront'
+  | 'fastly'
+  | 'akamai'
+  | 'vercel'
+  | 'netlify'
+  | 'sucuri'
+  | null
+
+export interface AttackSurface {
+  primaryDomain: string
+  baseDomain: string
+  /** Detected CDN/edge in front of the origin, from response headers. */
+  cdn: CdnProvider
+  /**
+   * Public endpoints the scanner saw referenced in HTML, bundles, sitemaps,
+   * or platform detection. Deduped by `path`; `source` is the strongest
+   * signal we had for it.
+   */
+  endpoints: { path: string; source: 'html' | 'bundle' | 'detected' | 'sitemap' }[]
+  /** External scripts loaded into the page (cross-origin only). */
+  thirdPartyScripts: string[]
+  /** `<form action="..." method="...">` entries from the main HTML. */
+  forms: { action: string; method: string }[]
+  /** Auth/identity providers detected from bundles + globals. */
+  authProviders: string[]
+  /** Data backends referenced from bundles (Supabase project, S3 bucket, Firebase). */
+  dataStores: { kind: 'supabase' | 's3' | 'firebase' | 'cloudfront'; ref: string }[]
+  /** Subdomains resolved during the scan. Empty in v1.2 — passive CT lookup TODO. */
+  subdomains: string[]
 }
 
 export interface ScanFailure {
