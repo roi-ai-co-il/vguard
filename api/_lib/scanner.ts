@@ -1472,6 +1472,100 @@ function detectFramework(html: string): string | null {
   return null
 }
 
+/**
+ * S1+2 — Deep fingerprinting (versions).
+ *
+ * Looks for explicit version strings in HTML + bundles. Order matters —
+ * earlier patterns win because they tend to be more authoritative (meta
+ * generator > __NEXT_DATA__ buildId > bundle string match).
+ *
+ * Returns { name, version } when both are known, just `name` when only
+ * the framework is identified, null when nothing matches.
+ */
+function detectFrameworkAndVersion(
+  html: string,
+  bundleText: string,
+): { name: string; version: string | null } | null {
+  // 1. <meta name="generator" content="Framework X.Y.Z">
+  const genMatch = html.match(
+    /<meta\s+name=["']generator["']\s+content=["']([^"']+)["']/i,
+  )
+  if (genMatch) {
+    const content = genMatch[1].trim()
+    const verMatch = content.match(/^([A-Za-z][A-Za-z0-9. -]+?)\s+v?(\d+(?:\.\d+){0,2}[A-Za-z0-9.\-+]*)\b/)
+    if (verMatch) return { name: verMatch[1].trim(), version: verMatch[2] }
+    return { name: content, version: null }
+  }
+
+  // 2. Next.js — buildId is just a hash but the bundle path patterns reveal
+  //    the major. `_next/static/chunks/pages/_app-` is App-Router-era; the
+  //    react-server-dom-webpack version often appears verbatim.
+  if (html.includes('__NEXT_DATA__') || html.includes('/_next/')) {
+    const corpus = html + bundleText
+    // explicit `next/${version}` lines or version constants
+    const m1 = corpus.match(/"next"\s*:\s*"(\d+\.\d+\.\d+(?:[.-][A-Za-z0-9.-]+)?)"/)
+    if (m1) return { name: 'Next.js', version: m1[1] }
+    const m2 = corpus.match(/next\/dist\/[^"'\s]*\bversion\s*["']\s*:?\s*["'](\d+\.\d+\.\d+)["']/)
+    if (m2) return { name: 'Next.js', version: m2[1] }
+    return { name: 'Next.js', version: null }
+  }
+
+  // 3. Nuxt — window.__NUXT__ + nuxt: { version }
+  if (html.includes('window.__NUXT__')) {
+    const m = (html + bundleText).match(/"nuxt"\s*:\s*"(\d+\.\d+\.\d+)"/)
+    if (m) return { name: 'Nuxt', version: m[1] }
+    return { name: 'Nuxt', version: null }
+  }
+
+  // 4. SvelteKit
+  if (html.includes('SvelteKit') || html.includes('/_app/immutable/')) {
+    const m = (html + bundleText).match(/"@sveltejs\/kit"\s*:\s*"(\d+\.\d+\.\d+)"/)
+    if (m) return { name: 'SvelteKit', version: m[1] }
+    return { name: 'SvelteKit', version: null }
+  }
+
+  // 5. Remix
+  if (html.includes('window.__remixContext')) {
+    const m = (html + bundleText).match(/"@remix-run\/(?:react|node)"\s*:\s*"(\d+\.\d+\.\d+)"/)
+    if (m) return { name: 'Remix', version: m[1] }
+    return { name: 'Remix', version: null }
+  }
+
+  // 6. Astro
+  if (html.includes('astro-island')) {
+    const m = (html + bundleText).match(/"astro"\s*:\s*"(\d+\.\d+\.\d+)"/)
+    if (m) return { name: 'Astro', version: m[1] }
+    return { name: 'Astro', version: null }
+  }
+
+  // 7. Vite — version sometimes embedded in dev-mode banners (skip in prod)
+  if (html.includes('id="root"') && html.includes('type="module"')) {
+    return { name: 'Vite + React', version: null }
+  }
+
+  // 8. WordPress — generator meta usually catches this in #1, but also check
+  //    wp-content paths
+  if (/\/wp-(?:content|includes)\//.test(html)) {
+    return { name: 'WordPress', version: null }
+  }
+
+  return null
+}
+
+/**
+ * Extract React version from the bundle. React doesn't tag its bundles
+ * with the version directly, but `__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED.ReactCurrentDispatcher`
+ * presence + `react/jsx-runtime` import paths and a few known version
+ * tags get us close.
+ */
+function detectReactVersion(bundleText: string): string | null {
+  const m = bundleText.match(/"react"\s*:\s*"(\d+\.\d+\.\d+)"/)
+  if (m) return m[1]
+  const m2 = bundleText.match(/react@(\d+\.\d+\.\d+)/)
+  if (m2) return m2[1]
+  return null
+}
+
 export async function runScan(rawUrl: string): Promise<ScanResponse> {
   const t0 = Date.now()
 
@@ -2888,6 +2982,11 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
   // S1+5 — content-aware risk: classify the route from the final URL path
   // and let the scorer bump risk for sensitive contexts (admin/auth/checkout).
   const routeContext = classifyRouteContext(new URL(finalUrl).pathname)
+  // S1+2 — deep fingerprinting; `detectFramework` already gave us the name,
+  // but we want the version too for downstream CVE matching + UI display.
+  const fwAndVersion = detectFrameworkAndVersion(html, bundleTextAll)
+  const detectedFrameworkVersion = fwAndVersion?.version ?? null
+  const detectedReactVersion = detectReactVersion(bundleTextAll)
   const scored = applyRisk(enriched, routeContext)
   const aggregateRisk = computeAggregateRisk(scored)
 
@@ -2923,6 +3022,8 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
       httpStatus: mainResp.status,
       contentType: mainResp.headers.get('content-type'),
       detectedFramework,
+      detectedFrameworkVersion,
+      detectedReactVersion,
       bundlesFetched,
       bundlesSizeBytes,
       routeContext,

@@ -69,6 +69,10 @@ export interface ScanResult {
     httpStatus: number
     contentType: string | null
     detectedFramework: string | null
+    /** S1+2 — Specific version when extractable (e.g. "15.0.3" for Next.js). */
+    detectedFrameworkVersion?: string | null
+    /** S1+2 — React version when detectable from the bundle. */
+    detectedReactVersion?: string | null
     bundlesFetched: number
     bundlesSizeBytes: number
     /** S1+5 — Route context classification (sensitive / public / unknown). */
