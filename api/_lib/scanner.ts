@@ -1260,6 +1260,141 @@ const ADMIN_HARD_PREFIXES = [
   '/management',
 ]
 
+/**
+ * S1+4 — API / behavior analysis (passive + lightweight active).
+ *
+ * Three probes: OpenAPI/Swagger spec exposure, GraphQL endpoint presence,
+ * and tRPC client signature in the bundle. None require user consent —
+ * GET-only against well-known paths, no payloads.
+ *
+ *   - OpenAPI spec: if /openapi.json or /swagger.json or /api-docs returns
+ *     JSON with the right shape, extract { path, methods } pairs. Public
+ *     specs are extremely common in Next.js + tRPC + FastAPI projects.
+ *   - GraphQL: GET /graphql returns 400 with PersistedQueryNotSupported /
+ *     "GET requests only support" / "Must provide query" → endpoint exists.
+ *   - tRPC: bundle text contains '@trpc/client' or 'createTRPCNext'.
+ */
+interface ApiSurfaceProbeResult {
+  openapi: {
+    foundAt: string | null
+    endpoints: { path: string; methods: string[] }[]
+  }
+  graphql: {
+    foundAt: string | null
+    introspection: 'allowed' | 'denied' | 'unknown'
+  }
+  trpcDetected: boolean
+}
+
+async function probeApiSurface(
+  origin: string,
+  bundleText: string,
+): Promise<ApiSurfaceProbeResult> {
+  const out: ApiSurfaceProbeResult = {
+    openapi: { foundAt: null, endpoints: [] },
+    graphql: { foundAt: null, introspection: 'unknown' },
+    trpcDetected: /@trpc\/(?:client|next|react-query|server)|createTRPCNext|createTRPCReact/.test(
+      bundleText,
+    ),
+  }
+
+  // OpenAPI/Swagger probes
+  const specPaths = ['/openapi.json', '/swagger.json', '/api-docs', '/api/openapi.json', '/swagger/v1/swagger.json']
+  for (const p of specPaths) {
+    try {
+      const target = new URL(p, origin).toString()
+      const r = await fetchWithTimeout(
+        target,
+        {
+          method: 'GET',
+          headers: { Accept: 'application/json' },
+          redirect: 'manual',
+        },
+        2000,
+      )
+      if (r.status !== 200) continue
+      const ct = r.headers.get('content-type') || ''
+      if (!ct.includes('json')) continue
+      // Cap body at 512KB — OpenAPI specs >1MB exist but are rare.
+      const text = await readBoundedText(r, 512 * 1024).then((x) => x.text)
+      let spec: unknown
+      try {
+        spec = JSON.parse(text)
+      } catch {
+        continue
+      }
+      // Confirm shape — must have `paths` (OpenAPI 3) or `swagger` field
+      if (typeof spec !== 'object' || spec === null) continue
+      const obj = spec as Record<string, unknown>
+      const paths = obj['paths']
+      if (!paths || typeof paths !== 'object') continue
+      out.openapi.foundAt = target
+      // Extract first ~40 endpoint definitions
+      const endpoints: { path: string; methods: string[] }[] = []
+      for (const [path, methods] of Object.entries(paths as Record<string, unknown>)) {
+        if (endpoints.length >= 40) break
+        if (typeof methods !== 'object' || methods === null) continue
+        const verbs = Object.keys(methods).filter((k) =>
+          /^(get|post|put|patch|delete|options|head)$/i.test(k),
+        )
+        if (verbs.length > 0) endpoints.push({ path, methods: verbs.map((v) => v.toUpperCase()) })
+      }
+      out.openapi.endpoints = endpoints
+      break // first hit wins
+    } catch {
+      // skip
+    }
+  }
+
+  // GraphQL probe — GET /graphql usually 400s with a recognizable error
+  try {
+    const target = new URL('/graphql', origin).toString()
+    const r = await fetchWithTimeout(
+      target,
+      { method: 'GET', headers: { Accept: 'application/json' }, redirect: 'manual' },
+      2000,
+    )
+    if (r.status === 400 || r.status === 405 || r.status === 200) {
+      const txt = (await readBoundedText(r, 8 * 1024).then((x) => x.text)).slice(0, 4096)
+      if (
+        /must provide (?:a )?query|persistedquerynotsupported|graphql.*must be a post|get requests.*only|introspectionquery|GraphQL operation/i.test(
+          txt,
+        )
+      ) {
+        out.graphql.foundAt = target
+        // Try a tiny introspection query
+        try {
+          const introResp = await fetchWithTimeout(
+            target,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+              body: JSON.stringify({ query: '{__schema{queryType{name}}}' }),
+            },
+            2000,
+          )
+          if (introResp.status === 200) {
+            const introTxt = await readBoundedText(introResp, 4096).then((x) => x.text)
+            if (/__schema/.test(introTxt) && /queryType/.test(introTxt)) {
+              out.graphql.introspection = 'allowed'
+            } else {
+              out.graphql.introspection = 'denied'
+            }
+          } else {
+            out.graphql.introspection = 'denied'
+          }
+        } catch {
+          out.graphql.introspection = 'unknown'
+        }
+      }
+    }
+  } catch {
+    // skip — graphql endpoint just doesn't exist or is offline
+  }
+
+  return out
+}
+
 async function discoverAndProbeAdminRoutes(
   bundleText: string,
   html: string,
@@ -2570,6 +2705,67 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
       description: `Found references to ${aiEndpoints.join(', ')} in the HTML or bundles. AI endpoints often accept user-supplied prompts and forward them to a model. Common gotchas: accepting "system" override from the request body, no rate limit, no auth. We did NOT actively probe these — flag is informational so you can audit them yourself.`,
       evidence: aiEndpoints.slice(0, 6).join('\n'),
       fixPrompt: `For each AI endpoint, audit: (1) Is the system prompt set ONLY server-side? Reject any "system" or "messages[0].role==system" override from the request body. (2) Is there auth? Random visitors should not be able to spend tokens on your account. (3) Is there a per-IP / per-user rate limit? (4) Is the prompt template escaped to prevent indirect injection from user data? (5) Does the response stream go through a content filter for PII / unsafe completions? See OWASP LLM Top 10 for the full checklist.`,
+    })
+  }
+
+  // === API SURFACE PROBES (S1+4) ===
+  // OpenAPI / Swagger / GraphQL / tRPC discovery — public spec exposure
+  // is a recon goldmine for attackers; introspection on prod is even more so.
+  const apiProbe = await probeApiSurface(url.origin, bundleTextAll).catch(
+    (): ApiSurfaceProbeResult => ({
+      openapi: { foundAt: null, endpoints: [] },
+      graphql: { foundAt: null, introspection: 'unknown' },
+      trpcDetected: false,
+    }),
+  )
+  if (apiProbe.openapi.foundAt) {
+    findings.push({
+      id: 'paths-openapi-spec-public',
+      severity: 'warn',
+      category: 'paths',
+      title: `OpenAPI / Swagger spec is publicly accessible (${apiProbe.openapi.endpoints.length} endpoint${
+        apiProbe.openapi.endpoints.length === 1 ? '' : 's'
+      })`,
+      description: `Found a public OpenAPI/Swagger specification at ${apiProbe.openapi.foundAt}. This is a complete API map — every endpoint, every method, every parameter, every response shape. Attackers love public specs because they remove guesswork: they get a checklist of attack surface, sorted by likelihood of bugs. Public specs are FINE for documentation portals; problematic for internal admin/control APIs.`,
+      evidence: `${apiProbe.openapi.foundAt}\n${apiProbe.openapi.endpoints
+        .slice(0, 6)
+        .map((e) => `  ${e.methods.join(',')} ${e.path}`)
+        .join('\n')}${apiProbe.openapi.endpoints.length > 6 ? `\n  + ${apiProbe.openapi.endpoints.length - 6} more` : ''}`,
+      fixPrompt: `Decide: is this spec meant to be public? If YES (public dev docs), fine — but ensure none of the listed endpoints expose admin / internal / debug actions; segregate those into a separate spec served only to authenticated developer accounts. If NO, gate the spec route behind auth (Express: \`app.use('/openapi.json', requireAuth)\`; Next.js: middleware on the matcher; FastAPI: \`app.include_router(api_router, dependencies=[Depends(get_current_user)])\`). Don't rely on obscurity — search engines have already indexed it.`,
+    })
+  }
+  if (apiProbe.graphql.foundAt) {
+    if (apiProbe.graphql.introspection === 'allowed') {
+      findings.push({
+        id: 'paths-graphql-introspection',
+        severity: 'warn',
+        category: 'paths',
+        title: 'GraphQL introspection is enabled in production',
+        description: `${apiProbe.graphql.foundAt} responded to a \`{__schema{queryType{name}}}\` query — introspection is on. That gives any anonymous visitor your full type system, every field, every mutation. Same problem as a public OpenAPI spec, but worse: most teams forget GraphQL introspection is even ON because it's a default in many frameworks (Apollo Server, Hot Chocolate, etc.).`,
+        evidence: `${apiProbe.graphql.foundAt} accepts {__schema{queryType{name}}} → 200`,
+        fixPrompt: `Disable introspection in production. Apollo Server: \`new ApolloServer({ introspection: process.env.NODE_ENV !== 'production' })\`. graphql-yoga: \`disableIntrospection()\` plugin. Hasura/Postgraphile: their docs cover the env-var. Verify after deploy: GET ${apiProbe.graphql.foundAt} should still work for known queries but \`{__schema{...}}\` should return an error like "GraphQL introspection is not allowed". Keep introspection ON in dev/staging — disable only on prod.`,
+      })
+    } else {
+      findings.push({
+        id: 'paths-graphql-detected',
+        severity: 'info',
+        category: 'paths',
+        title: 'GraphQL endpoint detected',
+        description: `${apiProbe.graphql.foundAt} responds like a GraphQL endpoint. Introspection is ${apiProbe.graphql.introspection === 'denied' ? 'correctly disabled' : 'unknown — we could not confirm either way from this scan'}. GraphQL adds an attack surface (depth/recursion attacks, field-level authorization gaps, batch-query DoS) that's worth auditing on its own.`,
+        evidence: `${apiProbe.graphql.foundAt} (introspection=${apiProbe.graphql.introspection})`,
+        fixPrompt: `Audit your GraphQL setup: (1) introspection OFF in prod (verified above if 'denied'), (2) max query depth + complexity limits (graphql-depth-limit, graphql-cost-analysis), (3) field-level authorization on every resolver — don't rely on top-level "is the user authenticated", check ownership per field, (4) disable batched queries if not needed (Apollo Server option), (5) rate-limit at the request level to prevent DoS.`,
+      })
+    }
+  }
+  if (apiProbe.trpcDetected) {
+    findings.push({
+      id: 'meta-trpc-detected',
+      severity: 'info',
+      category: 'meta',
+      title: 'tRPC client detected in bundle',
+      description: `Your bundle imports tRPC client code. tRPC procedures usually live at \`/api/trpc/<router>.<procedure>\`; they're typed end-to-end (great for DX) but each procedure needs its own auth/authorization gate — there's no shared route-level middleware like REST often has. We didn't probe individual procedures (no spec to enumerate them), so review your routers manually.`,
+      evidence: 'bundle imports @trpc/client or createTRPCNext',
+      fixPrompt: `For every tRPC procedure: confirm it uses \`protectedProcedure\` or your custom auth middleware before \`.input(...)\`. The default \`publicProcedure\` is callable by anyone — easy to miss. Common bug: a public procedure accidentally returns data that should be auth-gated (user list, draft posts, etc.). Run \`grep -rn 'publicProcedure' src/server/\` and audit each one.`,
     })
   }
 
