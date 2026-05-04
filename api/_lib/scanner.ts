@@ -8,7 +8,7 @@ import { getDomain } from 'tldts'
 import type { Finding, ScanResponse, Severity } from '../../src/lib/scanner-types.js'
 import { enrichFindings } from './fix-prompt-composer.js'
 import { aggregateBand, applyRisk, classifyRouteContext, computeAggregateRisk } from './risk-scorer.js'
-import { buildAttackSurface } from './attack-surface.js'
+import { buildAttackSurface, discoverSubdomainsFromCT } from './attack-surface.js'
 
 const FETCH_TIMEOUT_MS = 4000
 const PROBE_TIMEOUT_MS = 2500
@@ -1645,6 +1645,9 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
     () => [] as { param: string; reflectedRaw: boolean }[],
   )
   const sqliP = probeSqliErrors(url.toString()).catch(() => [] as { param: string; pattern: string }[])
+  // S1+3 — passive subdomain discovery via crt.sh, capped at 4s timeout.
+  // Runs in parallel; failure → empty list (don't block the scan).
+  const subdomainsP = discoverSubdomainsFromCT(getBaseDomain(url.hostname)).catch(() => [] as string[])
 
   let mainResp: Response
   try {
@@ -2990,6 +2993,7 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
   const scored = applyRisk(enriched, routeContext)
   const aggregateRisk = computeAggregateRisk(scored)
 
+  const subdomains = await subdomainsP
   const attackSurface = buildAttackSurface({
     primaryDomain: url.hostname,
     baseDomain: getBaseDomain(url.hostname),
@@ -3003,6 +3007,7 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
       firebaseIds: Array.from(firebaseIdsCollected),
       aiEndpoints,
     },
+    subdomains,
   })
 
   return {

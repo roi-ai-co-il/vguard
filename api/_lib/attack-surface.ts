@@ -33,6 +33,82 @@ interface BuildInput {
     firebaseIds: string[]
     aiEndpoints: string[]
   }
+  /** S1+3 — Pre-resolved list of subdomains from crt.sh (caller controls latency). */
+  subdomains?: string[]
+}
+
+/**
+ * S1+3 — Passive subdomain discovery via Certificate Transparency.
+ *
+ * crt.sh aggregates every cert ever issued by a public CA. Querying for
+ * `%.<domain>` gives every subdomain that's had a cert. No DNS brute-
+ * forcing, no active scanning — just public log data.
+ *
+ * Skipped for shared-platform apexes (vercel.app, netlify.app, pages.dev,
+ * lovable.app, replit.app, etc.) — those have hundreds of thousands of
+ * irrelevant subdomains.
+ */
+const SHARED_PLATFORM_BASES = new Set([
+  'vercel.app',
+  'netlify.app',
+  'pages.dev',
+  'github.io',
+  'lovable.app',
+  'replit.app',
+  'glitch.me',
+  'fly.dev',
+  'azurewebsites.net',
+  'herokuapp.com',
+  'firebaseapp.com',
+  'web.app',
+])
+
+export async function discoverSubdomainsFromCT(
+  baseDomain: string,
+): Promise<string[]> {
+  if (!baseDomain || baseDomain.length < 4) return []
+  if (SHARED_PLATFORM_BASES.has(baseDomain)) return []
+  // crt.sh can be slow; bound to ~4s.
+  const controller = new AbortController()
+  const t = setTimeout(() => controller.abort(), 4000)
+  try {
+    const url = `https://crt.sh/?q=${encodeURIComponent('%.' + baseDomain)}&output=json`
+    const r = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        Accept: 'application/json',
+        'User-Agent': 'VibeSecure-Scanner/0.1 (+https://vibesecure.dev)',
+      },
+    })
+    if (!r.ok) return []
+    const ct = (r.headers.get('content-type') || '').toLowerCase()
+    if (!ct.includes('json')) return []
+    const data = (await r.json()) as Array<{ name_value?: string }>
+    if (!Array.isArray(data)) return []
+    const out = new Set<string>()
+    for (const row of data) {
+      const v = row?.name_value
+      if (typeof v !== 'string') continue
+      // name_value can be newline-separated multi-SAN list
+      for (const raw of v.split(/\r?\n/)) {
+        const host = raw.trim().toLowerCase()
+        if (!host) continue
+        // Strip leading wildcard, drop entries that aren't under the base
+        const clean = host.startsWith('*.') ? host.slice(2) : host
+        if (!clean.endsWith('.' + baseDomain) && clean !== baseDomain) continue
+        // No control chars, reasonable length
+        if (clean.length > 253) continue
+        if (/[^a-z0-9.-]/.test(clean)) continue
+        out.add(clean)
+      }
+      if (out.size >= 200) break
+    }
+    return Array.from(out).sort().slice(0, 60)
+  } catch {
+    return []
+  } finally {
+    clearTimeout(t)
+  }
 }
 
 const MAX_ENDPOINTS = 80
@@ -229,6 +305,6 @@ export function buildAttackSurface(input: BuildInput): AttackSurface {
     forms,
     authProviders,
     dataStores,
-    subdomains: [], // TODO v1.3: passive CT lookup via crt.sh
+    subdomains: input.subdomains ?? [],
   }
 }
