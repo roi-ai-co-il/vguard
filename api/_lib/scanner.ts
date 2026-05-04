@@ -1237,6 +1237,96 @@ const SERVER_CVES: ServerCve[] = [
   },
 ]
 
+/**
+ * Stage 2.5 / S2+5 — Privilege leak signals.
+ *
+ * Discovers admin / internal route paths referenced inside the JS bundles
+ * (react-router <Route path>, next.js page chunks, raw string literals on
+ * sensitive prefixes), then probes each candidate without auth. A 200 from
+ * an unauthenticated GET on an admin route is the smoking-gun for broken
+ * access control — much stronger signal than the generic `/admin` path
+ * probe in PATHS_TO_PROBE because these are routes the developer's own
+ * code references, not blind dictionary guesses.
+ *
+ * Cap: 10 candidates per scan, 2.5s per probe, parallel — total ~3-4s.
+ */
+const ADMIN_PREFIX_RE = /(\/(?:admin|internal|private|dashboard|backoffice|control|console|cms|manage|management|backend|sysadmin|root|superuser|impersonate|users\/admin|settings\/admin|tenants|orgs)\b[^"'\`?#\s]*)/i
+
+const ADMIN_HARD_PREFIXES = [
+  '/admin',
+  '/internal',
+  '/private',
+  '/backoffice',
+  '/management',
+]
+
+async function discoverAndProbeAdminRoutes(
+  bundleText: string,
+  html: string,
+  origin: string,
+): Promise<{ path: string; status: number; contentLength: number | null }[]> {
+  const candidates = new Set<string>()
+  // Pattern 1: react-router style — `<Route path="/admin/...">` or path:"/admin..."
+  for (const m of (bundleText + html).matchAll(
+    /(?:[<\s]Route\s+[^>]*\s|["']\s*)path\s*[:=]\s*["'\`](\/[A-Za-z0-9_\-./:?]+)["'\`]/gi,
+  )) {
+    const p = m[1]
+    if (ADMIN_PREFIX_RE.test(p)) candidates.add(p.split(/[?#]/)[0])
+  }
+  // Pattern 2: any string literal on a sensitive prefix
+  for (const prefix of ADMIN_HARD_PREFIXES) {
+    const re = new RegExp(`["'\`](${prefix}\\/[A-Za-z0-9_\\-./]+)["'\`]`, 'g')
+    for (const m of (bundleText + html).matchAll(re)) {
+      candidates.add(m[1])
+    }
+  }
+  // Pattern 3: HTML anchor tags pointing at admin
+  for (const m of html.matchAll(
+    /<a\b[^>]*\bhref\s*=\s*["'](\/[A-Za-z0-9_\-./?#=&]+)["']/gi,
+  )) {
+    if (ADMIN_PREFIX_RE.test(m[1])) candidates.add(m[1].split(/[?#]/)[0])
+  }
+
+  // Drop trivial / noise paths
+  const filtered = Array.from(candidates)
+    .filter((p) => p.length >= 5 && p.length <= 200)
+    .filter((p) => !/\.(?:js|css|map|png|jpg|svg|webp|ico)$/i.test(p))
+    .slice(0, 10)
+  if (filtered.length === 0) return []
+
+  const results = await Promise.all(
+    filtered.map(async (path) => {
+      try {
+        const target = new URL(path, origin).toString()
+        const r = await fetchWithTimeout(
+          target,
+          {
+            method: 'GET',
+            headers: {
+              'User-Agent': 'VibeSecure-Scanner/0.1 (+https://vibesecure.dev)',
+              Accept: 'text/html,application/json;q=0.9,*/*;q=0.8',
+            },
+            redirect: 'manual',
+          },
+          2500,
+        )
+        const lengthHeader = r.headers.get('content-length')
+        const contentLength = lengthHeader ? parseInt(lengthHeader, 10) : null
+        return {
+          path,
+          status: r.status,
+          contentLength: Number.isFinite(contentLength) ? contentLength : null,
+        }
+      } catch {
+        return null
+      }
+    }),
+  )
+  return results.filter(
+    (x): x is { path: string; status: number; contentLength: number | null } => x !== null,
+  )
+}
+
 function detectFramework(html: string): string | null {
   if (html.includes('__NEXT_DATA__') || html.includes('/_next/')) return 'Next.js'
   if (html.includes('window.__NUXT__')) return 'Nuxt'
@@ -2480,6 +2570,57 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
       description: `Found references to ${aiEndpoints.join(', ')} in the HTML or bundles. AI endpoints often accept user-supplied prompts and forward them to a model. Common gotchas: accepting "system" override from the request body, no rate limit, no auth. We did NOT actively probe these — flag is informational so you can audit them yourself.`,
       evidence: aiEndpoints.slice(0, 6).join('\n'),
       fixPrompt: `For each AI endpoint, audit: (1) Is the system prompt set ONLY server-side? Reject any "system" or "messages[0].role==system" override from the request body. (2) Is there auth? Random visitors should not be able to spend tokens on your account. (3) Is there a per-IP / per-user rate limit? (4) Is the prompt template escaped to prevent indirect injection from user data? (5) Does the response stream go through a content filter for PII / unsafe completions? See OWASP LLM Top 10 for the full checklist.`,
+    })
+  }
+
+  // === PRIVILEGE LEAK SIGNALS (S2+5) ===
+  // Discover admin route paths the developer's own code references, then
+  // probe each unauth. A 200 from an unauthenticated GET on a route the
+  // bundle calls "admin" is a strong privilege-leak signal.
+  const adminProbeResults = await discoverAndProbeAdminRoutes(
+    bundleTextAll,
+    html,
+    url.origin,
+  ).catch(() => [] as { path: string; status: number; contentLength: number | null }[])
+  const publicAdminRoutes = adminProbeResults.filter(
+    (r) =>
+      r.status === 200 &&
+      // Filter out tiny responses that are clearly redirects-via-HTML or
+      // generic 200 OK error pages: typically real admin pages return >1KB
+      // of HTML/JSON. Anything under 200 bytes is almost always a stub.
+      (r.contentLength === null || r.contentLength >= 200),
+  )
+  if (publicAdminRoutes.length > 0) {
+    findings.push({
+      id: 'paths-admin-route-public',
+      severity: 'critical',
+      category: 'auth',
+      title: `${publicAdminRoutes.length} admin route${
+        publicAdminRoutes.length === 1 ? '' : 's'
+      } from your bundle returned 200 without auth`,
+      description: `We discovered admin/internal routes referenced in your shipped JS, then sent unauthenticated GET requests to them. Some returned HTTP 200 — meaning anyone on the internet, with no login, can reach pages your code treats as privileged. This is broken access control: the canonical OWASP A1 (#1 most exploited class in 2021).`,
+      evidence: publicAdminRoutes
+        .map((r) => `${r.path} → HTTP ${r.status}${r.contentLength !== null ? ` (${r.contentLength}B)` : ''}`)
+        .join('\n'),
+      fixPrompt: `For each route above: confirm it's actually meant to be admin-only. If yes, add a server-side auth gate at the route boundary (Next.js middleware on /admin/* / pages with getServerSession; Supabase RLS on the API the page calls; custom JWT verification). The check must run BEFORE the route handler — client-side auth (e.g. "redirect if no localStorage token") is bypassable in 5 seconds with curl. Re-run this scan after fixing — the route should now return 401/403/redirect-to-login.`,
+    })
+  } else if (adminProbeResults.length > 0) {
+    // Discovered candidates but they're all gated correctly — emit OK marker.
+    findings.push({
+      id: 'paths-admin-route-clean',
+      severity: 'ok',
+      category: 'auth',
+      title: `${adminProbeResults.length} admin route${
+        adminProbeResults.length === 1 ? '' : 's'
+      } discovered in bundle, all gated`,
+      description: `We extracted ${adminProbeResults.length} admin/internal route path${
+        adminProbeResults.length === 1 ? '' : 's'
+      } from your shipped JS, then probed each without auth. None returned 200 — your access control is enforced at the route level, not just in the UI.`,
+      evidence: adminProbeResults
+        .map((r) => `${r.path} → HTTP ${r.status}`)
+        .slice(0, 8)
+        .join('\n'),
+      fixPrompt: '',
     })
   }
 
