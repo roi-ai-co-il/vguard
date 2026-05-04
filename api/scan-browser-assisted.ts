@@ -14,6 +14,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import type { Finding } from '../src/lib/scanner-types.js'
 import { enrichFindings } from './_lib/fix-prompt-composer.js'
+import { applyRisk, classifyRouteContext } from './_lib/risk-scorer.js'
 
 export const config = {
   runtime: 'nodejs',
@@ -583,6 +584,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       finalUrl: workerData.finalUrl,
       detectedFramework: framework,
     })
+    // Apply the same content-aware risk scoring used in Stage 1 / Stage 3
+    // so Stage 2 findings don't ship without riskScore + riskBand.
+    let routeContext: 'sensitive' | 'public' | 'unknown' = 'unknown'
+    try {
+      routeContext = classifyRouteContext(new URL(workerData.finalUrl).pathname)
+    } catch {
+      // workerData.finalUrl invalid — keep 'unknown'
+    }
+    const scored = applyRisk(enriched, routeContext)
     const liveApiMap = buildLiveApiMap(workerData)
     return res.status(200).json({
       ok: true,
@@ -593,7 +603,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       workerDurationMs: workerData.durationMs,
       networkRequestCount: workerData.networkRequests.length,
       cookieCount: workerData.cookies.length,
-      findings: enriched,
+      findings: scored,
+      routeContext,
       liveApiMap,
     })
   } catch (e) {
