@@ -14,7 +14,7 @@
  * to the VibeSecure Vercel env vars).
  */
 import express from 'express'
-import { chromium, type Browser } from 'playwright-chromium'
+import { chromium, type Browser, type Request as PWRequest } from 'playwright-chromium'
 
 const app = express()
 app.use(express.json({ limit: '256kb' }))
@@ -41,11 +41,34 @@ function isPrivateHost(host: string): boolean {
   return false
 }
 
+/**
+ * Live API mapping (Stage 2.3) — every network entry now carries the metadata
+ * the proxy analyzer + UI need to spot weak APIs without re-fetching:
+ *   - contentType (from response headers — JSON / HTML / image classification)
+ *   - sizeBytes (from response body, undefined when streamed without length)
+ *   - durationMs (request → response latency)
+ *   - hasAuthHeader (Authorization OR Cookie present, name only — never value)
+ *   - hasOriginHeader (CORS visibility marker, useful for cross-origin audits)
+ *
+ * The proxy treats every new field as optional so an older worker still works.
+ */
+interface NetworkRequestEntry {
+  url: string
+  method: string
+  status: number
+  resourceType: string
+  contentType?: string
+  sizeBytes?: number
+  durationMs?: number
+  hasAuthHeader?: boolean
+  hasOriginHeader?: boolean
+}
+
 interface ScanResult {
   ok: true
   url: string
   finalUrl: string
-  networkRequests: { url: string; method: string; status: number; resourceType: string }[]
+  networkRequests: NetworkRequestEntry[]
   consoleErrors: string[]
   windowGlobals: Record<string, boolean>
   cookies: { name: string; httpOnly: boolean; secure: boolean; sameSite: string | undefined; domain: string }[]
@@ -89,14 +112,31 @@ app.post('/scan', async (req, res) => {
 
   const networkRequests: ScanResult['networkRequests'] = []
   const consoleErrors: string[] = []
+  // Track request-start timestamps so we can derive durationMs on response.
+  const requestStartedAt = new WeakMap<PWRequest, number>()
+
+  page.on('request', (req) => {
+    requestStartedAt.set(req, Date.now())
+  })
 
   page.on('response', async (resp) => {
     if (networkRequests.length >= 200) return
+    const req = resp.request()
+    const reqHeaders = req.headers()
+    const respHeaders = resp.headers()
+    const startedAt = requestStartedAt.get(req)
+    const contentLengthRaw = respHeaders['content-length']
+    const contentLength = contentLengthRaw ? parseInt(contentLengthRaw, 10) : undefined
     networkRequests.push({
       url: resp.url(),
-      method: resp.request().method(),
+      method: req.method(),
       status: resp.status(),
-      resourceType: resp.request().resourceType(),
+      resourceType: req.resourceType(),
+      contentType: respHeaders['content-type'],
+      sizeBytes: Number.isFinite(contentLength) ? contentLength : undefined,
+      durationMs: startedAt ? Date.now() - startedAt : undefined,
+      hasAuthHeader: Boolean(reqHeaders['authorization'] || reqHeaders['cookie']),
+      hasOriginHeader: Boolean(reqHeaders['origin']),
     })
   })
   page.on('pageerror', (err) => {

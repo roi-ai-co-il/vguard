@@ -42,6 +42,37 @@ interface WorkerNetworkRequest {
   method: string
   status: number
   resourceType: string
+  // Stage 2.3 — extended capture; older workers don't return these.
+  contentType?: string
+  sizeBytes?: number
+  durationMs?: number
+  hasAuthHeader?: boolean
+  hasOriginHeader?: boolean
+}
+
+/**
+ * Stage 2.3 — Live API map summary returned alongside findings. Lets the UI
+ * render a network table, and lets MCP/agents reason about API surface
+ * without re-doing detection. Bucketed into same-origin (first-party) vs
+ * third-party so audits can talk about supply chain and connect-src drift.
+ */
+interface ApiCallEntry {
+  url: string
+  method: string
+  status: number
+  contentType: string | null
+  sizeBytes: number | null
+  durationMs: number | null
+  hasAuth: boolean
+  origin: 'first-party' | 'third-party'
+}
+
+interface LiveApiMap {
+  totalRequests: number
+  apiCalls: ApiCallEntry[]
+  apiHosts: { host: string; count: number; origin: 'first-party' | 'third-party' }[]
+  /** First-party API endpoints that returned 200 with NO Authorization or Cookie. */
+  unauthApiCalls: ApiCallEntry[]
 }
 
 interface WorkerScanResult {
@@ -55,6 +86,90 @@ interface WorkerScanResult {
   localStorageKeys: string[]
   sessionStorageKeys: string[]
   durationMs: number
+}
+
+/**
+ * Decide whether a request looks like an API call: by resourceType
+ * (xhr/fetch) OR by content-type (application/*, text/event-stream) OR by
+ * path pattern (/api/, /v1/, /v2/, /graphql, /trpc/).
+ */
+function isApiCall(r: WorkerNetworkRequest): boolean {
+  if (r.resourceType === 'xhr' || r.resourceType === 'fetch') return true
+  const ct = (r.contentType || '').toLowerCase()
+  if (ct.startsWith('application/json')) return true
+  if (ct.startsWith('application/graphql')) return true
+  if (ct.startsWith('text/event-stream')) return true
+  if (/\/(api|v1|v2|graphql|trpc)\//i.test(r.url)) return true
+  return false
+}
+
+function buildLiveApiMap(data: WorkerScanResult): LiveApiMap {
+  const finalHost = (() => {
+    try {
+      return new URL(data.finalUrl).hostname
+    } catch {
+      return ''
+    }
+  })()
+
+  const apiCalls: ApiCallEntry[] = []
+  const hostCounts = new Map<string, { count: number; origin: 'first-party' | 'third-party' }>()
+
+  for (const r of data.networkRequests) {
+    if (!isApiCall(r)) continue
+    let host = ''
+    try {
+      host = new URL(r.url).hostname
+    } catch {
+      // skip un-parseable
+      continue
+    }
+    const origin: 'first-party' | 'third-party' =
+      host && finalHost && (host === finalHost || host.endsWith('.' + finalHost))
+        ? 'first-party'
+        : 'third-party'
+    const entry: ApiCallEntry = {
+      url: r.url,
+      method: r.method,
+      status: r.status,
+      contentType: r.contentType ?? null,
+      sizeBytes: typeof r.sizeBytes === 'number' ? r.sizeBytes : null,
+      durationMs: typeof r.durationMs === 'number' ? r.durationMs : null,
+      hasAuth: r.hasAuthHeader === true,
+      origin,
+    }
+    apiCalls.push(entry)
+    const slot = hostCounts.get(host) ?? { count: 0, origin }
+    slot.count += 1
+    hostCounts.set(host, slot)
+  }
+
+  // Cap apiCalls in the response so a chatty SPA doesn't bloat the JSON.
+  const cappedApiCalls = apiCalls.slice(0, 100)
+  const apiHosts = Array.from(hostCounts.entries())
+    .map(([host, v]) => ({ host, count: v.count, origin: v.origin }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 30)
+
+  // Privilege-leak signal: first-party API call returned 200 WITHOUT Authorization
+  // OR Cookie. This is what Stage 2.5 (privilege leak) will lean on, but the
+  // raw signal already shows here so the UI can flag it now.
+  const unauthApiCalls = apiCalls.filter(
+    (e) =>
+      e.origin === 'first-party' &&
+      e.status >= 200 &&
+      e.status < 300 &&
+      !e.hasAuth &&
+      // Skip GET on home / static-ish paths — only POST/PUT/PATCH/DELETE or /api/* are interesting unauth.
+      (e.method !== 'GET' || /\/(api|v1|v2|graphql|trpc)\//i.test(e.url)),
+  )
+
+  return {
+    totalRequests: data.networkRequests.length,
+    apiCalls: cappedApiCalls,
+    apiHosts,
+    unauthApiCalls: unauthApiCalls.slice(0, 20),
+  }
 }
 
 function analyzeBrowserScan(data: WorkerScanResult): Finding[] {
@@ -177,7 +292,44 @@ function analyzeBrowserScan(data: WorkerScanResult): Finding[] {
     }
   }
 
-  // 7. Console errors — informational signal of misconfiguration
+  // 7. Live API map — surface what the browser actually hit, and call out
+  //    first-party API calls that returned 2xx without Authorization OR Cookie.
+  const apiMap = buildLiveApiMap(data)
+  if (apiMap.unauthApiCalls.length > 0) {
+    findings.push({
+      id: 'stage2-unauth-api-calls',
+      severity: 'warn',
+      category: 'auth',
+      title: `${apiMap.unauthApiCalls.length} first-party API call${
+        apiMap.unauthApiCalls.length === 1 ? '' : 's'
+      } returned 2xx without auth`,
+      description: `During the scan, ${apiMap.unauthApiCalls.length} call${
+        apiMap.unauthApiCalls.length === 1 ? '' : 's'
+      } to your own API endpoints succeeded without an Authorization header AND without a Cookie. That means an unauthenticated visitor reached data or actions that may be intended for logged-in users only. Some of these are legitimate public endpoints (e.g. /api/health) — many are not. Audit each.`,
+      evidence: apiMap.unauthApiCalls
+        .slice(0, 8)
+        .map((c) => `${c.method} ${c.url} → ${c.status} (${c.contentType ?? 'no content-type'})`)
+        .join('\n'),
+      fixPrompt: `For each of the endpoints above: open the route handler and confirm whether it should require auth. If yes — add an auth gate (NextAuth getServerSession, Supabase getSession on the request, custom JWT middleware). If no — that's fine, but consider rate-limiting (Vercel WAF or middleware) so it can't be abused for scraping or DoS. Re-run Stage 2 after fixing to confirm only intentionally-public endpoints remain.`,
+    })
+  } else if (apiMap.totalRequests > 0) {
+    findings.push({
+      id: 'stage2-api-map-clean',
+      severity: 'ok',
+      category: 'auth',
+      title: `Live API map captured ${apiMap.apiCalls.length} call${
+        apiMap.apiCalls.length === 1 ? '' : 's'
+      } across ${apiMap.apiHosts.length} host${apiMap.apiHosts.length === 1 ? '' : 's'}`,
+      description: `Browser ran the page and recorded every fetch/XHR. None of the first-party API calls succeeded without auth — a sign your gates are wired correctly at the runtime level (not just declared in code).`,
+      evidence: apiMap.apiHosts
+        .slice(0, 6)
+        .map((h) => `${h.host} (${h.count} call${h.count === 1 ? '' : 's'}, ${h.origin})`)
+        .join('\n'),
+      fixPrompt: '',
+    })
+  }
+
+  // 8. Console errors — informational signal of misconfiguration
   if (data.consoleErrors.length >= 3) {
     findings.push({
       id: 'stage2-console-errors',
@@ -268,6 +420,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       finalUrl: workerData.finalUrl,
       detectedFramework: framework,
     })
+    const liveApiMap = buildLiveApiMap(workerData)
     return res.status(200).json({
       ok: true,
       stage: 2,
@@ -278,6 +431,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       networkRequestCount: workerData.networkRequests.length,
       cookieCount: workerData.cookies.length,
       findings: enriched,
+      liveApiMap,
     })
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'unknown error'
