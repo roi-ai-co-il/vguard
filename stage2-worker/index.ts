@@ -134,6 +134,22 @@ function redact(s: string, keepFront = 4, keepBack = 4): string {
   return s.slice(0, keepFront) + '…' + s.slice(-keepBack)
 }
 
+/**
+ * Israeli national ID (תעודת זהות) checksum: 9 digits, weights 1,2,1,2,...
+ * For products > 9, sum digits (12 → 3). Total mod 10 must be 0.
+ * Cuts false positives massively vs the bare 9-digit regex.
+ */
+function israeliIdValid(s: string): boolean {
+  if (!/^[0-9]{9}$/.test(s)) return false
+  let sum = 0
+  for (let i = 0; i < 9; i++) {
+    let n = parseInt(s[i], 10) * ((i % 2) + 1)
+    if (n > 9) n = Math.floor(n / 10) + (n % 10)
+    sum += n
+  }
+  return sum % 10 === 0
+}
+
 function luhnValid(num: string): boolean {
   const digits = num.replace(/\D/g, '')
   if (digits.length < 13 || digits.length > 19) return false
@@ -159,7 +175,7 @@ const SENSITIVE_PATTERNS: Array<{
   { type: 'email', re: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g },
   { type: 'phone-il', re: /\b(?:\+972[-\s]?|0)5\d[-\s]?\d{3}[-\s]?\d{4}\b/g },
   { type: 'phone-intl', re: /\b\+(?:[1-9]\d{0,2})[-\s]?\d{1,4}[-\s]?\d{1,4}[-\s]?\d{1,9}\b/g },
-  { type: 'israeli-id', re: /(?<![\d.])[\d]{9}(?![\d.])/g, validator: (m) => /^[0-9]{9}$/.test(m) },
+  { type: 'israeli-id', re: /(?<![\d.])[\d]{9}(?![\d.])/g, validator: israeliIdValid },
   { type: 'credit-card', re: /\b(?:\d[ -]?){13,19}\b/g, validator: luhnValid },
   { type: 'jwt-in-body', re: /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g },
   { type: 'aws-key', re: /\bAKIA[0-9A-Z]{16}\b/g },
@@ -173,16 +189,27 @@ const SENSITIVE_PATTERNS: Array<{
   { type: 'stack-trace-abs-path', re: /(?:^|[\s(])(?:[A-Za-z]:\\[A-Za-z0-9_\\.\- ]+|\/(?:home|var|usr|opt|root)\/[A-Za-z0-9_\/.\- ]+)(?::\d+(?::\d+)?)?(?:[\s)]|$)/gm },
 ]
 
+// Patterns that match PII (low value in compiled JS bundles, high false-positive
+// rate from random digit/email-like strings). Skipped for `application/javascript`
+// responses — secret patterns still run there.
+const PII_TYPES = new Set<SensitiveDataHit['type']>([
+  'email', 'phone-il', 'phone-intl', 'israeli-id', 'credit-card',
+])
+
 function analyzeBodyForSensitiveData(
   body: string,
   sourceUrl: string,
   budget: { remaining: number },
+  contentType: string,
 ): SensitiveDataHit[] {
   if (budget.remaining <= 0) return []
   const out: SensitiveDataHit[] = []
+  const isJs = contentType.toLowerCase().startsWith('application/javascript')
   // Cap body at 64KB for regex work — large JSON pages get truncated.
   const text = body.length > 64 * 1024 ? body.slice(0, 64 * 1024) : body
   for (const pat of SENSITIVE_PATTERNS) {
+    // Skip PII patterns on JS bundles (false-positive heavy, low signal).
+    if (isJs && PII_TYPES.has(pat.type)) continue
     if (budget.remaining <= 0) break
     pat.re.lastIndex = 0
     const matches = text.match(pat.re) || []
@@ -360,7 +387,7 @@ app.post('/scan', async (req, res) => {
     try {
       const body = await resp.text()
       const trimmed = body.length > MAX_BODY_BYTES ? body.slice(0, MAX_BODY_BYTES) : body
-      const hits = analyzeBodyForSensitiveData(trimmed, resp.url(), sensitiveBudget)
+      const hits = analyzeBodyForSensitiveData(trimmed, resp.url(), sensitiveBudget, ct)
       for (const h of hits) sensitiveDataFindings.push(h)
     } catch {
       // body read failed - skip
