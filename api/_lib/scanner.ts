@@ -9,6 +9,7 @@ import type { Finding, ScanResponse, Severity } from '../../src/lib/scanner-type
 import { enrichFindings } from './fix-prompt-composer.js'
 import { aggregateBand, applyRisk, classifyRouteContext, computeAggregateRisk } from './risk-scorer.js'
 import { buildAttackSurface, discoverSubdomainsFromCT } from './attack-surface.js'
+import { analyzeBundles as analyzeBundlesAst } from './js-ast.js'
 
 const FETCH_TIMEOUT_MS = 4000
 const PROBE_TIMEOUT_MS = 2500
@@ -1961,6 +1962,8 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
   const npmCveHits: { cve: NpmCve; sample: string }[] = []
   const localhostHits: string[] = []
   let bundleTextAll = ''
+  // S1+6 — keep individual bundle texts (capped) for AST parsing.
+  const bundleTexts: string[] = []
   let detectedAnonKey: string | null = null
   const firebaseIdsCollected = new Set<string>()
 
@@ -2046,6 +2049,10 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
     // Accumulate up to 1 MB of bundle text for cross-bundle pattern detection
     if (bundleTextAll.length < 1024 * 1024) {
       bundleTextAll += bundleText.slice(0, 1024 * 1024 - bundleTextAll.length)
+    }
+    // S1+6 — keep first 4 bundles up to 1 MB each for AST parse (cheap, scoped)
+    if (bundleTexts.length < 4) {
+      bundleTexts.push(bundleText.slice(0, 1024 * 1024))
     }
     // Extract Supabase IDs + S3 hosts from this bundle
     for (const m of bundleText.matchAll(/https:\/\/([a-z0-9]{20,})\.supabase\.co/gi)) {
@@ -2803,6 +2810,72 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
       evidence: aiEndpoints.slice(0, 6).join('\n'),
       fixPrompt: `For each AI endpoint, audit: (1) Is the system prompt set ONLY server-side? Reject any "system" or "messages[0].role==system" override from the request body. (2) Is there auth? Random visitors should not be able to spend tokens on your account. (3) Is there a per-IP / per-user rate limit? (4) Is the prompt template escaped to prevent indirect injection from user data? (5) Does the response stream go through a content filter for PII / unsafe completions? See OWASP LLM Top 10 for the full checklist.`,
     })
+  }
+
+  // === JS AST ANALYSIS (S1+6) ===
+  // Real parse over up to 4 bundles. Catches patterns regex misses:
+  // runtime code-gen, DOM-injection sinks, hardcoded creds in object
+  // literals, template-literal fetches.
+  let astResult: ReturnType<typeof analyzeBundlesAst> | null = null
+  if (bundleTexts.length > 0) {
+    try {
+      astResult = analyzeBundlesAst(bundleTexts)
+    } catch {
+      // parse went sideways — continue scan without AST findings
+    }
+  }
+  if (astResult) {
+    if (astResult.evalCalls > 0 || astResult.functionCtorCalls > 0) {
+      const total = astResult.evalCalls + astResult.functionCtorCalls
+      findings.push({
+        id: 'js-ast-runtime-codegen',
+        severity: 'warn',
+        category: 'html',
+        title: `${total} runtime code-generation call${total === 1 ? '' : 's'} in shipped JS`,
+        description: `Static AST parse of your bundles found ${astResult.evalCalls} direct invocations of the runtime code evaluator and ${astResult.functionCtorCalls} uses of the Function constructor. Both let strings turn into executable code at runtime — a textbook XSS amplifier when any of those strings come from user input or DOM content. They also defeat CSP's protections (you'd need 'unsafe-eval' to allow them).`,
+        evidence: `Direct evaluator calls: ${astResult.evalCalls}\nFunction-constructor uses: ${astResult.functionCtorCalls}\nParsed bundles: ${astResult.parsedBundles}, skipped: ${astResult.skippedBundles}`,
+        fixPrompt: `Audit every site of runtime code generation. The two patterns above are almost always replaceable: (1) for JSON parsing, use JSON.parse; (2) for dynamic property access, use bracket notation; (3) for templating, use a real template engine that escapes by default; (4) for plugin systems, use ES modules + dynamic import(). After removing them, drop 'unsafe-eval' from your CSP — that alone closes one of the largest XSS amplification surfaces you can have.`,
+      })
+    }
+    if (astResult.domSinkAssignments.length > 0) {
+      findings.push({
+        id: 'js-ast-dom-sink',
+        severity: 'warn',
+        category: 'html',
+        title: `${astResult.domSinkAssignments.length} DOM-injection sink${astResult.domSinkAssignments.length === 1 ? '' : 's'} in shipped JS`,
+        description: `AST parse found assignments to innerHTML / outerHTML, or calls to insertAdjacentHTML / write* on the document. These are DOM XSS sinks: any user-controlled string that ends up here renders as HTML, including <script> and event handlers. Safe only if the input is hard-coded or run through a sanitizer like DOMPurify before reaching the sink.`,
+        evidence: astResult.domSinkAssignments
+          .slice(0, 6)
+          .map((s) => `${s.sink}: ${s.sample}`)
+          .join('\n'),
+        fixPrompt: `For every site listed above, switch to safe DOM APIs: textContent (no HTML interpretation), createElement + appendChild (structured DOM), or run the input through DOMPurify.sanitize() if HTML is genuinely needed. React: avoid setting the explicit innerHTML escape-hatch prop; if forced, sanitize first. After fixing, redeploy and rerun this scan — the count should drop.`,
+      })
+    }
+    if (astResult.hardcodedCredentials.length > 0) {
+      findings.push({
+        id: 'js-ast-hardcoded-creds',
+        severity: 'critical',
+        category: 'secrets',
+        title: `${astResult.hardcodedCredentials.length} hardcoded credential${astResult.hardcodedCredentials.length === 1 ? '' : 's'} in object literals`,
+        description: `AST parse found object-literal patterns where a credential-shaped key (apiKey, secret, token, password, etc.) is bound to a credential-shaped string value in your shipped JS. Regex-based scanners miss these because the value alone may not match a known provider; the structure (key + secret-shaped value) is what gives them away. Whatever this token is, it's now public.`,
+        evidence: astResult.hardcodedCredentials
+          .slice(0, 6)
+          .map((c) => `{ ${c.keyName}: "${c.valueSample}" }`)
+          .join('\n'),
+        fixPrompt: `Treat each token above as fully compromised — rotate it on the issuing service immediately. Then move the credential out of client code: read from process.env on the server, expose only what the client needs through your own /api endpoints. For tokens that MUST live client-side (like Supabase anon keys), confirm they're truly meant to be public and that RLS / equivalent gates are enforced on the data they unlock.`,
+      })
+    }
+    if (astResult.templateUrlFetches > 0) {
+      findings.push({
+        id: 'js-ast-template-url-fetch',
+        severity: 'info',
+        category: 'meta',
+        title: `${astResult.templateUrlFetches} fetch/axios call${astResult.templateUrlFetches === 1 ? '' : 's'} use template-literal URLs`,
+        description: `Found ${astResult.templateUrlFetches} call site${astResult.templateUrlFetches === 1 ? '' : 's'} where the URL is built with template-string interpolation (\`fetch(\\\`/api/users/\${id}\\\`)\`). Most are fine, but template-literal URL builders are a common SSRF / open-redirect surface when the interpolated value is user-supplied without validation. Worth auditing each.`,
+        evidence: `${astResult.templateUrlFetches} call sites in ${astResult.parsedBundles} parsed bundle${astResult.parsedBundles === 1 ? '' : 's'}`,
+        fixPrompt: `For each fetch/axios call with a template URL: validate the interpolated values. (1) If the value is a user-controlled ID, parse it through Number / UUID validator first. (2) If it's a path segment, encodeURIComponent it. (3) If it's a full URL coming from props, allowlist the host. Block anything that resolves to private IPs (10.x, 172.16-31.x, 192.168.x, 169.254.x, localhost) before fetching to prevent SSRF.`,
+      })
+    }
   }
 
   // === API SURFACE PROBES (S1+4) ===
