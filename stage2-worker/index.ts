@@ -64,6 +64,92 @@ interface NetworkRequestEntry {
   hasOriginHeader?: boolean
 }
 
+/**
+ * JWT analysis — Stage 2.4.
+ *
+ * The worker scans cookie values + localStorage/sessionStorage values for
+ * the JWT pattern (eyJ...eyJ...sig), decodes header + payload locally, and
+ * sends back ONLY the analysis: algorithm, exp presence, claim names, etc.
+ * The actual JWT value never leaves the worker — privacy by design.
+ *
+ * Claim names are emitted (not values) so the proxy can flag overly-private
+ * data sitting in tokens any XSS payload could exfiltrate.
+ */
+interface JwtAnalysis {
+  source: 'cookie' | 'localStorage' | 'sessionStorage'
+  /** Cookie or storage key the JWT lived in (no value). */
+  keyName: string
+  alg: string | null
+  typ: string | null
+  hasExp: boolean
+  /** When `exp` is present, seconds until expiry (negative = already expired). */
+  expSecondsFromNow: number | null
+  hasIss: boolean
+  hasAud: boolean
+  /** Names of payload claims (NOT values) — lets the proxy flag PII at rest. */
+  claimNames: string[]
+}
+
+const JWT_RE = /^eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}$/
+
+function base64UrlDecode(s: string): string {
+  // base64url → base64
+  let b = s.replace(/-/g, '+').replace(/_/g, '/')
+  while (b.length % 4) b += '='
+  try {
+    return Buffer.from(b, 'base64').toString('utf-8')
+  } catch {
+    return ''
+  }
+}
+
+function analyzeJwt(source: JwtAnalysis['source'], keyName: string, value: string): JwtAnalysis | null {
+  if (typeof value !== 'string' || value.length < 30 || value.length > 4096) return null
+  if (!JWT_RE.test(value)) return null
+  const parts = value.split('.')
+  if (parts.length !== 3) return null
+  const headerJson = base64UrlDecode(parts[0])
+  const payloadJson = base64UrlDecode(parts[1])
+  let header: Record<string, unknown> = {}
+  let payload: Record<string, unknown> = {}
+  try {
+    header = JSON.parse(headerJson) as Record<string, unknown>
+    payload = JSON.parse(payloadJson) as Record<string, unknown>
+  } catch {
+    return null
+  }
+  const alg = typeof header['alg'] === 'string' ? (header['alg'] as string) : null
+  const typ = typeof header['typ'] === 'string' ? (header['typ'] as string) : null
+  const exp = typeof payload['exp'] === 'number' ? (payload['exp'] as number) : null
+  const expSecondsFromNow = exp === null ? null : exp - Math.floor(Date.now() / 1000)
+  return {
+    source,
+    keyName,
+    alg,
+    typ,
+    hasExp: exp !== null,
+    expSecondsFromNow,
+    hasIss: typeof payload['iss'] === 'string',
+    hasAud: typeof payload['aud'] === 'string' || Array.isArray(payload['aud']),
+    claimNames: Object.keys(payload).slice(0, 32),
+  }
+}
+
+interface CookieEntry {
+  name: string
+  httpOnly: boolean
+  secure: boolean
+  sameSite: string | undefined
+  domain: string
+  path?: string
+  /** Days until expiry (-1 = session cookie). */
+  expiresInDays?: number
+  /** Did Playwright report `partitioned` (CHIPS opt-in)? */
+  partitioned?: boolean
+  /** True when the cookie's value matches the JWT shape. */
+  isJwt?: boolean
+}
+
 interface ScanResult {
   ok: true
   url: string
@@ -71,9 +157,11 @@ interface ScanResult {
   networkRequests: NetworkRequestEntry[]
   consoleErrors: string[]
   windowGlobals: Record<string, boolean>
-  cookies: { name: string; httpOnly: boolean; secure: boolean; sameSite: string | undefined; domain: string }[]
+  cookies: CookieEntry[]
   localStorageKeys: string[]
   sessionStorageKeys: string[]
+  /** JWTs detected anywhere (cookie value or storage value). Values are never sent back — only analysis. */
+  jwtAnalysis: JwtAnalysis[]
   durationMs: number
 }
 
@@ -160,9 +248,23 @@ app.post('/scan', async (req, res) => {
     consoleErrors.push(`navigation: ${e instanceof Error ? e.message : 'failed'}`)
   }
 
+  // Stage 2.4 — JWT decoding requires VALUES (not just keys), so the page
+  // pulls keys + values for storage and we scan them locally on the worker.
+  // Values never leave the worker — only the privacy-safe analysis goes back.
   const collected = await page.evaluate(() => {
     type WindowSnapshot = Record<string, unknown>
     const w = window as unknown as WindowSnapshot
+    const collectStorage = (storage: Storage): { key: string; value: string }[] => {
+      const out: { key: string; value: string }[] = []
+      for (let i = 0; i < storage.length && i < 200; i++) {
+        const k = storage.key(i)
+        if (k === null) continue
+        const v = storage.getItem(k) ?? ''
+        // Cap individual value at 8KB so a giant blob doesn't OOM the worker.
+        out.push({ key: k, value: v.slice(0, 8192) })
+      }
+      return out
+    }
     return {
       windowGlobals: {
         hasSupabase: typeof w.supabase !== 'undefined',
@@ -172,19 +274,48 @@ app.post('/scan', async (req, res) => {
           typeof w.__APP_CONFIG !== 'undefined' || typeof w.__NEXT_DATA__ !== 'undefined',
         hasReactRoot: !!document.getElementById('root'),
       },
-      localStorageKeys: Object.keys(localStorage),
-      sessionStorageKeys: Object.keys(sessionStorage),
+      localStorageEntries: collectStorage(localStorage),
+      sessionStorageEntries: collectStorage(sessionStorage),
     }
   })
 
   const cookieSnapshot = await context.cookies()
-  const cookies = cookieSnapshot.map((c) => ({
-    name: c.name,
-    httpOnly: c.httpOnly,
-    secure: c.secure,
-    sameSite: c.sameSite,
-    domain: c.domain,
-  }))
+  const nowSec = Math.floor(Date.now() / 1000)
+  const cookies: CookieEntry[] = cookieSnapshot.map((c) => {
+    const expiresInDays = typeof c.expires === 'number' && c.expires > 0
+      ? Math.round((c.expires - nowSec) / 86400)
+      : -1
+    const partitioned = (c as unknown as { partitioned?: boolean }).partitioned ?? false
+    const isJwt = typeof c.value === 'string' && JWT_RE.test(c.value)
+    return {
+      name: c.name,
+      httpOnly: c.httpOnly,
+      secure: c.secure,
+      sameSite: c.sameSite,
+      domain: c.domain,
+      path: c.path,
+      expiresInDays,
+      partitioned,
+      isJwt,
+    }
+  })
+
+  // JWT analysis from cookie values + storage values — values stay local.
+  const jwtAnalysis: JwtAnalysis[] = []
+  for (const c of cookieSnapshot) {
+    const a = analyzeJwt('cookie', c.name, c.value)
+    if (a) jwtAnalysis.push(a)
+  }
+  for (const e of collected.localStorageEntries) {
+    const a = analyzeJwt('localStorage', e.key, e.value)
+    if (a) jwtAnalysis.push(a)
+  }
+  for (const e of collected.sessionStorageEntries) {
+    const a = analyzeJwt('sessionStorage', e.key, e.value)
+    if (a) jwtAnalysis.push(a)
+  }
+  const localStorageKeys = collected.localStorageEntries.map((e) => e.key)
+  const sessionStorageKeys = collected.sessionStorageEntries.map((e) => e.key)
 
   await page.close().catch(() => undefined)
   await context.close().catch(() => undefined)
@@ -197,8 +328,9 @@ app.post('/scan', async (req, res) => {
     consoleErrors,
     windowGlobals: collected.windowGlobals,
     cookies,
-    localStorageKeys: collected.localStorageKeys,
-    sessionStorageKeys: collected.sessionStorageKeys,
+    localStorageKeys,
+    sessionStorageKeys,
+    jwtAnalysis,
     durationMs: Date.now() - t0,
   }
   return res.json(result)

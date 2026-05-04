@@ -35,6 +35,29 @@ interface WorkerCookie {
   secure: boolean
   sameSite: string | undefined
   domain: string
+  // Stage 2.4 — extended cookie attributes; older workers don't return these.
+  path?: string
+  expiresInDays?: number
+  partitioned?: boolean
+  isJwt?: boolean
+}
+
+/**
+ * JWT decoding result from the worker. Values never leave the worker — only
+ * the analysis: alg/typ/exp window/claim names. Lets the proxy generate
+ * findings about token shape (alg=none, missing exp, sensitive claims) without
+ * ever seeing the credential itself.
+ */
+interface WorkerJwtAnalysis {
+  source: 'cookie' | 'localStorage' | 'sessionStorage'
+  keyName: string
+  alg: string | null
+  typ: string | null
+  hasExp: boolean
+  expSecondsFromNow: number | null
+  hasIss: boolean
+  hasAud: boolean
+  claimNames: string[]
 }
 
 interface WorkerNetworkRequest {
@@ -85,6 +108,8 @@ interface WorkerScanResult {
   cookies: WorkerCookie[]
   localStorageKeys: string[]
   sessionStorageKeys: string[]
+  /** Stage 2.4 — JWTs decoded by the worker (values never sent back). Optional for compat. */
+  jwtAnalysis?: WorkerJwtAnalysis[]
   durationMs: number
 }
 
@@ -194,6 +219,71 @@ function analyzeBrowserScan(data: WorkerScanResult): Finding[] {
     })
   }
 
+  // 2a. Cookies — SameSite=None without Secure (browser will reject anyway,
+  // but flagging surfaces the misconfig).
+  const sameSiteNoneInsecure = data.cookies.filter((c) => {
+    const ss = (c.sameSite ?? '').toLowerCase()
+    return ss === 'none' && !c.secure
+  })
+  if (sameSiteNoneInsecure.length > 0) {
+    findings.push({
+      id: 'stage2-cookie-samesite-none-insecure',
+      severity: 'critical',
+      category: 'cookies',
+      title: `${sameSiteNoneInsecure.length} cookie${sameSiteNoneInsecure.length === 1 ? '' : 's'} use SameSite=None WITHOUT Secure`,
+      description: `Browsers reject cookies with SameSite=None unless they also have Secure=true. The cookie will be silently dropped — auth flows that depend on it (cross-site OAuth callbacks, embedded iframes) WILL break in production. This is also a clear configuration bug.`,
+      evidence: sameSiteNoneInsecure.map((c) => `${c.name} domain=${c.domain}`).join('\n'),
+      fixPrompt: `Add Secure=true to every cookie that uses SameSite=None. Most frameworks set this with one option flag (e.g. \`{ sameSite: 'none', secure: true }\`). If you don't actually need cross-site (e.g. it's a same-origin SPA), switch to SameSite=Lax instead — that's the modern default and removes the need for Secure to even be discussed.`,
+    })
+  }
+
+  // 2b. Cookie name prefix violations (__Secure- / __Host-) — RFC 6265bis.
+  const prefixViolations = data.cookies.filter((c) => {
+    if (c.name.startsWith('__Secure-') && !c.secure) return true
+    if (c.name.startsWith('__Host-')) {
+      // __Host- requires: Secure=true, Path=/, no Domain attribute
+      if (!c.secure) return true
+      if (c.path && c.path !== '/') return true
+      // Domain attribute presence is signaled by leading-dot OR mismatch with origin host;
+      // worker reports the resolved domain so a leading '.' here means Domain= was set.
+      if (c.domain && c.domain.startsWith('.')) return true
+    }
+    return false
+  })
+  if (prefixViolations.length > 0) {
+    findings.push({
+      id: 'stage2-cookie-prefix-violations',
+      severity: 'warn',
+      category: 'cookies',
+      title: `${prefixViolations.length} cookie${prefixViolations.length === 1 ? '' : 's'} use a security prefix without honoring its rules`,
+      description: `RFC 6265bis defines two cookie-name prefixes that promise extra hardening: __Secure- guarantees Secure=true; __Host- additionally requires Path=/ and no Domain attribute. When the prefix is set but the rules aren't honored, the cookie isn't actually as locked-down as the name suggests — and worse, browsers may quietly reject it on newer engines.`,
+      evidence: prefixViolations
+        .map((c) => `${c.name} (secure=${c.secure}, path=${c.path ?? '?'}, domain=${c.domain})`)
+        .join('\n'),
+      fixPrompt: `Either rename the cookie to drop the prefix, OR fix the attributes. For __Host-: set Secure=true, Path=/, and DO NOT set a Domain attribute. For __Secure-: set Secure=true. If you don't need the strong guarantees (e.g. it's a CSRF token tied to a subpath), use a normal name like \`csrf_token\` instead.`,
+    })
+  }
+
+  // 2c. Long-lived sensitive cookies — auth/session cookies with Max-Age > 30 days
+  // are convenient but increase the blast radius if they leak.
+  const longLivedSensitive = data.cookies.filter((c) => {
+    const sensitive = /sess|auth|token|jwt|sid|csrf|access/i.test(c.name)
+    return sensitive && typeof c.expiresInDays === 'number' && c.expiresInDays > 30
+  })
+  if (longLivedSensitive.length > 0) {
+    findings.push({
+      id: 'stage2-cookie-long-lived',
+      severity: 'info',
+      category: 'cookies',
+      title: `${longLivedSensitive.length} sensitive cookie${longLivedSensitive.length === 1 ? '' : 's'} valid for >30 days`,
+      description: `Auth-shaped cookies that live past 30 days expand the window where a stolen token can be replayed. Best practice is short-lived access tokens (15-60 min) with refresh tokens that rotate. If these are session cookies in name only but actually long-lived API tokens, that's the case to revisit.`,
+      evidence: longLivedSensitive
+        .map((c) => `${c.name} (expires in ~${c.expiresInDays} days)`)
+        .join('\n'),
+      fixPrompt: `For each long-lived cookie above: review whether it really needs a >30 day lifetime. If the underlying use case is "stay signed in", split into a short-lived access cookie (~30 min) + a long-lived refresh cookie that the server rotates on each use. That way a stolen access cookie has minutes to be exploited; the refresh cookie carries enough server-side state to detect replay.`,
+    })
+  }
+
   // 2. Cookies — Secure missing on HTTPS origin
   const finalIsHttps = data.finalUrl.startsWith('https://')
   if (finalIsHttps) {
@@ -288,6 +378,79 @@ function analyzeBrowserScan(data: WorkerScanResult): Finding[] {
         description: `This is mixed content confirmed at runtime — Stage 1 may not see this if the request is triggered by JavaScript after page load. Modern browsers block most active mixed content, but cookies on the HTTP origin still leak.`,
         evidence: hosts.slice(0, 6).join('\n'),
         fixPrompt: `Find every fetch/XHR/img/script in your code that uses http:// and switch to https://. Run "git grep \\"http://\\"" to find them. If a third-party host doesn't support HTTPS, find an alternative. As a stop-gap, add "upgrade-insecure-requests" to your CSP so browsers auto-rewrite http to https.`,
+      })
+    }
+  }
+
+  // 6.5. Stage 2.4 — JWT analysis. Worker decoded JWTs locally; the analyses
+  //      are privacy-safe (alg + claim NAMES only, no values).
+  const jwts = data.jwtAnalysis ?? []
+  if (jwts.length > 0) {
+    const algNone = jwts.filter((j) => (j.alg ?? '').toLowerCase() === 'none')
+    if (algNone.length > 0) {
+      findings.push({
+        id: 'stage2-jwt-alg-none',
+        severity: 'critical',
+        category: 'auth',
+        title: `${algNone.length} JWT${algNone.length === 1 ? '' : 's'} use alg="none" (unsigned)`,
+        description: `Stage 2 found JWT-shaped tokens with alg="none" in your cookies/storage. Unsigned tokens are forgeable — anyone can craft a payload claiming any user/role. This is one of the oldest and most exploited JWT bugs.`,
+        evidence: algNone.map((j) => `${j.source}:${j.keyName} alg=none`).join('\n'),
+        fixPrompt: `Configure your JWT verifier to REJECT alg="none" — most libraries (jsonwebtoken, jose, etc.) require you to pass an explicit allowlist of algorithms. Pick HS256 (symmetric, good for monolith) or RS256 (asymmetric, good when verifiers don't share the signing key). Re-sign every issued token with the new algorithm and rotate the previous secret. Never trust the alg field from the token itself for verifier selection.`,
+      })
+    }
+    const noExp = jwts.filter((j) => !j.hasExp)
+    if (noExp.length > 0) {
+      findings.push({
+        id: 'stage2-jwt-no-exp',
+        severity: 'warn',
+        category: 'auth',
+        title: `${noExp.length} JWT${noExp.length === 1 ? '' : 's'} have no \`exp\` claim`,
+        description: `Tokens without an exp claim are valid forever — there's no way for the server to know when to stop accepting them, and revocation requires a denylist that most setups don't have. A leaked token from 6 months ago still authenticates today.`,
+        evidence: noExp.map((j) => `${j.source}:${j.keyName} (no exp)`).join('\n'),
+        fixPrompt: `Issue every JWT with a near-term \`exp\` (15-60 min for access tokens, 7-30 days for refresh tokens). Most libraries take \`expiresIn\` as an option; if you're hand-crafting payloads, add \`exp: Math.floor(Date.now() / 1000) + 60 * 60\`. Reject tokens missing \`exp\` server-side — a missing expiry should never be treated as "no expiry".`,
+      })
+    }
+    const farFutureExp = jwts.filter(
+      (j) => j.hasExp && typeof j.expSecondsFromNow === 'number' && j.expSecondsFromNow > 60 * 60 * 24 * 365,
+    )
+    if (farFutureExp.length > 0) {
+      findings.push({
+        id: 'stage2-jwt-very-long-exp',
+        severity: 'info',
+        category: 'auth',
+        title: `${farFutureExp.length} JWT${farFutureExp.length === 1 ? '' : 's'} expire more than 1 year from now`,
+        description: `JWTs with a year+ lifetime function as nearly-permanent credentials. If the token leaks, the attacker has a year to abuse it. Short access tokens + refresh tokens are the standard pattern.`,
+        evidence: farFutureExp
+          .map(
+            (j) =>
+              `${j.source}:${j.keyName} expires in ${Math.round((j.expSecondsFromNow ?? 0) / 86400)} days`,
+          )
+          .join('\n'),
+        fixPrompt: `Reduce \`exp\` to 15-60 minutes for access tokens. If you need long sessions, issue a separate refresh token (HttpOnly + Secure cookie) and rotate the access token on each refresh. The endpoints above are the ones currently issued long-lived; back through the issuer config and shorten.`,
+      })
+    }
+    const sensitiveClaims = jwts
+      .map((j) => ({
+        j,
+        sensitive: j.claimNames.filter((n) =>
+          /^(email|email_verified|phone|name|given_name|family_name|address|role|roles|permissions)$/i.test(n),
+        ),
+      }))
+      .filter((x) => x.sensitive.length > 0)
+    if (sensitiveClaims.length > 0) {
+      findings.push({
+        id: 'stage2-jwt-sensitive-claims',
+        severity: 'info',
+        category: 'auth',
+        title: `JWT payload exposes ${sensitiveClaims[0].sensitive.length} sensitive claim${
+          sensitiveClaims[0].sensitive.length === 1 ? '' : 's'
+        }`,
+        description: `JWT payloads are base64-encoded JSON, NOT encrypted. Anyone holding the token reads every claim. Tokens stored in localStorage or non-HttpOnly cookies are exfiltrated by any XSS payload — at which point the attacker also gets every claim inside (email, role, permissions, etc.). Best practice: keep JWTs minimal (sub + scope at most) and look up the rest server-side per request.`,
+        evidence: sensitiveClaims
+          .slice(0, 4)
+          .map((x) => `${x.j.source}:${x.j.keyName} → ${x.sensitive.join(', ')}`)
+          .join('\n'),
+        fixPrompt: `Audit your JWT issuance: which claims are inside? If \`role\`, \`permissions\`, \`email\`, or any PII is in the token, move them to a server-side session lookup keyed by the JWT's \`sub\` (user id). Re-issue tokens with only the minimum claims (\`sub\`, \`exp\`, \`iat\`, \`scope\` if needed). Any client code that read the claim from the JWT now needs an API call instead — that's the right tradeoff for security.`,
       })
     }
   }
