@@ -71,6 +71,8 @@ export interface ScanResult {
     detectedFramework: string | null
     bundlesFetched: number
     bundlesSizeBytes: number
+    /** S1+5 — Route context classification (sensitive / public / unknown). */
+    routeContext?: 'sensitive' | 'public' | 'unknown'
   }
   /**
    * Detection metadata from the scan, used by Stage 3 deep scan to drive

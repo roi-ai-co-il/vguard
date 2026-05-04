@@ -4,7 +4,7 @@ import { runScan } from './_lib/scanner.js'
 import { runDeepScan } from './_lib/deep-scanner.js'
 import { getCachedVerification, incrementScanCount } from './_lib/verification-store.js'
 import { enrichFindings } from './_lib/fix-prompt-composer.js'
-import { aggregateBand, applyRisk, computeAggregateRisk } from './_lib/risk-scorer.js'
+import { aggregateBand, applyRisk, classifyRouteContext, computeAggregateRisk } from './_lib/risk-scorer.js'
 import type { ScanResponse } from '../src/lib/scanner-types.js'
 
 export const config = {
@@ -145,8 +145,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       detectedFramework: stage1.meta.detectedFramework,
     })
     // Stage 1 findings already carry riskScore from runScan; score the deep
-    // additions and concat. Aggregate risk is recomputed over the union.
-    const scoredDeep = applyRisk(enrichedDeep)
+    // additions with the same route context and concat. Aggregate risk is
+    // recomputed over the union.
+    const stage1Context = (stage1.meta as { routeContext?: 'sensitive' | 'public' | 'unknown' })
+      .routeContext ?? classifyRouteContext(new URL(stage1.meta.finalUrl).pathname)
+    const scoredDeep = applyRisk(enrichedDeep, stage1Context)
     const allFindings = [...stage1.findings, ...scoredDeep]
     const totals = {
       critical: allFindings.filter((f) => f.severity === 'critical').length,

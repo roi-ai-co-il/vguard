@@ -7,7 +7,7 @@ import * as tls from 'node:tls'
 import { getDomain } from 'tldts'
 import type { Finding, ScanResponse, Severity } from '../../src/lib/scanner-types.js'
 import { enrichFindings } from './fix-prompt-composer.js'
-import { aggregateBand, applyRisk, computeAggregateRisk } from './risk-scorer.js'
+import { aggregateBand, applyRisk, classifyRouteContext, computeAggregateRisk } from './risk-scorer.js'
 import { buildAttackSurface } from './attack-surface.js'
 
 const FETCH_TIMEOUT_MS = 4000
@@ -2885,7 +2885,10 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
   findings.sort((a, b) => sevOrder[a.severity] - sevOrder[b.severity])
 
   const enriched = enrichFindings(findings, { finalUrl, detectedFramework })
-  const scored = applyRisk(enriched)
+  // S1+5 — content-aware risk: classify the route from the final URL path
+  // and let the scorer bump risk for sensitive contexts (admin/auth/checkout).
+  const routeContext = classifyRouteContext(new URL(finalUrl).pathname)
+  const scored = applyRisk(enriched, routeContext)
   const aggregateRisk = computeAggregateRisk(scored)
 
   const attackSurface = buildAttackSurface({
@@ -2922,6 +2925,7 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
       detectedFramework,
       bundlesFetched,
       bundlesSizeBytes,
+      routeContext,
     },
     detected: {
       supabaseProjectIds: Array.from(supabaseProjectIds),

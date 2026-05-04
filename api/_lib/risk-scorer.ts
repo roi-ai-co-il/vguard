@@ -14,6 +14,47 @@ import type { Category, Finding, Severity } from '../../src/lib/scanner-types.js
 
 type RiskBand = NonNullable<Finding['riskBand']>
 
+/**
+ * S1+5 — Content-aware context. Classifies the URL path the scan ran
+ * against. Sensitive contexts (admin/auth/checkout/settings) bump risk
+ * for finding categories that gain real exploit value when the page
+ * IS user-facing privileged surface (e.g. headers + cookies on /admin
+ * matter more than on /about).
+ */
+export type RouteContext = 'sensitive' | 'public' | 'unknown'
+
+export function classifyRouteContext(pathname: string): RouteContext {
+  const p = (pathname || '/').toLowerCase()
+  // Sensitive: admin / auth / payment / settings
+  if (
+    /\/(?:admin|adm|administrator|backoffice|control|console|cms|manage(?:ment)?|root|sysadmin|superuser|impersonate|tenant|wp-admin|dashboard|account|profile|settings|preferences|billing|payments?|checkout|cart|order|invoice|receipt|subscription|pay|wallet|bank|transfer|withdraw|deposit|kyc|verify|verification|onboarding|signup|register|login|signin|sign-in|sign-up|signout|logout|auth|oauth|sso|reset|forgot|password|2fa|mfa|otp|api\/auth|api\/admin|api\/internal)\b/i.test(
+      p,
+    )
+  ) {
+    return 'sensitive'
+  }
+  // Clearly public marketing surface
+  if (/^\/?(?:|index\.html?|home|about|blog|news|press|legal|terms|privacy|cookies|contact|help|faq|features|pricing|docs|documentation|api-docs|case-studies?|customers|stories|team|company|jobs|careers)(?:\/|$)/i.test(p)) {
+    return 'public'
+  }
+  return 'unknown'
+}
+
+/**
+ * Categories whose risk genuinely changes based on whether the URL is
+ * a privileged surface vs marketing. Missing X-Frame-Options on /admin
+ * is materially worse than on /about (clickjacking the admin = takeover;
+ * clickjacking marketing = confusion).
+ */
+const CONTEXT_AWARE_CATEGORIES: Set<Category> = new Set([
+  'headers',
+  'cookies',
+  'mixed-content',
+  'sourcemaps',
+  'auth',
+  'tls',
+])
+
 const BASE_BY_SEVERITY: Record<Severity, number> = {
   critical: 8.0,
   warn: 5.0,
@@ -95,24 +136,41 @@ function bandFor(score: number): RiskBand {
 }
 
 /** Pure: returns score 0.0–10.0 for a single Finding (rounded to 1 decimal). */
-export function computeRiskScore(finding: Finding): number {
+export function computeRiskScore(
+  finding: Finding,
+  context: RouteContext = 'unknown',
+): number {
   if (finding.severity === 'ok') return 0
   const override = lookupOverride(finding.id)
+  let raw: number
   if (override !== null) {
-    return Math.round(clamp(override, 0, 10) * 10) / 10
+    raw = override
+  } else {
+    const base = BASE_BY_SEVERITY[finding.severity]
+    const bump = CATEGORY_BUMP[finding.category] ?? 0
+    raw = base + bump
   }
-  const base = BASE_BY_SEVERITY[finding.severity]
-  const bump = CATEGORY_BUMP[finding.category] ?? 0
-  return Math.round(clamp(base + bump, 0, 10) * 10) / 10
+  // S1+5: context-aware bump. Sensitive surface adds 1.0; public surface
+  // shaves 0.5 (so a missing CSP on /about ranks lower than the same
+  // finding on /admin). Only applied for categories where context matters.
+  if (CONTEXT_AWARE_CATEGORIES.has(finding.category)) {
+    if (context === 'sensitive') raw += 1.0
+    else if (context === 'public') raw -= 0.5
+  }
+  return Math.round(clamp(raw, 0, 10) * 10) / 10
 }
 
 /**
  * Returns a fresh array of findings with `riskScore` and `riskBand` set.
- * Doesn't mutate the input.
+ * Doesn't mutate the input. `context` lets the scorer adjust scores based
+ * on the page's privilege level (S1+5 — content-aware severity).
  */
-export function applyRisk(findings: Finding[]): Finding[] {
+export function applyRisk(
+  findings: Finding[],
+  context: RouteContext = 'unknown',
+): Finding[] {
   return findings.map((f) => {
-    const riskScore = computeRiskScore(f)
+    const riskScore = computeRiskScore(f, context)
     return {
       ...f,
       riskScore,
