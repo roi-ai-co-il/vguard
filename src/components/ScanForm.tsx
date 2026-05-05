@@ -966,7 +966,7 @@ export function ScanForm() {
             role="region"
             aria-label="Scan results"
           >
-            <div className="px-6 py-6 sm:py-8 border-b border-(--color-border) bg-(--color-surface-elevated)">
+            <div className="px-4 sm:px-6 py-5 sm:py-8 border-b border-(--color-border) bg-(--color-surface-elevated)">
               <StageTracker
                 stage1Done={true}
                 stage1DurationMs={result.durationMs}
@@ -984,10 +984,10 @@ export function ScanForm() {
                     : ''}
                 </span>
               </div>
-              <div className="flex items-center justify-between gap-6 flex-wrap-reverse sm:flex-nowrap">
+              <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-5 sm:gap-6">
                 <div className="min-w-0 flex-1">
-                  <h3 className="text-lg sm:text-xl font-semibold">Vibe report</h3>
-                  <div className="mt-1 font-mono text-xs text-(--color-fg-dim) truncate max-w-full">
+                  <h3 className="text-xl sm:text-xl font-semibold leading-tight">Vibe report</h3>
+                  <div className="mt-1 font-mono text-[11px] sm:text-xs text-(--color-fg-dim) truncate max-w-full">
                     {result.meta.finalUrl}
                   </div>
                   <div className="mt-4 flex items-center gap-5 font-mono text-xs flex-wrap">
@@ -1067,8 +1067,11 @@ export function ScanForm() {
                     </div>
                   )}
                 </div>
-                <div className="flex-shrink-0">
-                  <VibeScoreGauge score={displayScore} size={200} />
+                <div className="flex-shrink-0 self-center sm:self-auto">
+                  <VibeScoreGauge
+                    score={displayScore}
+                    size={typeof window !== 'undefined' && window.innerWidth < 640 ? 160 : 200}
+                  />
                 </div>
               </div>
             </div>
