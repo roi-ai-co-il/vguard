@@ -188,7 +188,9 @@ export function analyzeBundles(bundleTexts: string[]): AstAnalysis {
             const args = (n as unknown as { arguments?: Node[] }).arguments ?? []
             if (args[0]?.type === 'TemplateLiteral') {
               const exprs = (args[0] as unknown as { expressions?: unknown[] }).expressions ?? []
-              if (exprs.length > 0) out.templateUrlFetches += 1
+              if (exprs.length > 0 && !exprs.every(isUrlSafeExpression)) {
+                out.templateUrlFetches += 1
+              }
             }
           }
           const propName = prop?.name
@@ -238,10 +240,11 @@ export function analyzeBundles(bundleTexts: string[]): AstAnalysis {
       }
       if (n.type === 'AssignmentExpression') {
         const left = (n as unknown as { left?: Node }).left
+        const right = (n as unknown as { right?: Node }).right
         if (left?.type === 'MemberExpression') {
           const m = left as unknown as { property?: { name?: string }; object?: { name?: string } }
           const propName = m.property?.name
-          if (propName && DOM_SINK_PROP_NAMES.has(propName)) {
+          if (propName && DOM_SINK_PROP_NAMES.has(propName) && !isStaticDomSinkRhs(right)) {
             if (out.domSinkAssignments.length < 10) {
               out.domSinkAssignments.push({
                 sink: propName,

@@ -162,6 +162,20 @@ function buildLiveApiMap(data: WorkerScanResult): LiveApiMap {
   const apiCalls: ApiCallEntry[] = []
   const hostCounts = new Map<string, { count: number; origin: 'first-party' | 'third-party' }>()
 
+  // Helper inlined here so it stays close to the unauth-filter that consumes it.
+  // Path patterns intended to be unauth-by-design across the ecosystem; flagging
+  // them as a privilege-leak produces noise the user can't act on.
+  // eslint-disable-next-line no-inner-declarations
+  function isWellKnownPublicEndpoint(rawUrl: string): boolean {
+    let path = rawUrl
+    try {
+      path = new URL(rawUrl).pathname
+    } catch {
+      // already a path
+    }
+    return WELL_KNOWN_PUBLIC_PATHS.some((re) => re.test(path))
+  }
+
   for (const r of data.networkRequests) {
     if (!isApiCall(r)) continue
     let host = ''
@@ -208,7 +222,12 @@ function buildLiveApiMap(data: WorkerScanResult): LiveApiMap {
       e.status < 300 &&
       !e.hasAuth &&
       // Skip GET on home / static-ish paths — only POST/PUT/PATCH/DELETE or /api/* are interesting unauth.
-      (e.method !== 'GET' || /\/(api|v1|v2|graphql|trpc)\//i.test(e.url)),
+      (e.method !== 'GET' || /\/(api|v1|v2|graphql|trpc)\//i.test(e.url)) &&
+      // Skip endpoints whose path matches conventional public-by-design names.
+      // Health, status, version, manifests, and explicitly-public listings are
+      // intended to be unauth — flagging them produces false positives the
+      // user can't act on without breaking the contract.
+      !isWellKnownPublicEndpoint(e.url),
   )
 
   return {
