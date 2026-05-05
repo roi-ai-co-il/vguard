@@ -282,7 +282,7 @@ export default function App() {
         </section>
 
         <section className="border-t border-(--color-border) relative">
-          <div className="max-w-6xl mx-auto px-4 sm:px-6 py-12 sm:py-20 grid lg:grid-cols-12 gap-8 sm:gap-10 items-center">
+          <div className="max-w-6xl mx-auto px-4 sm:px-6 py-12 sm:py-20 grid grid-cols-1 lg:grid-cols-12 gap-8 sm:gap-10 items-center">
             <motion.div
               initial={{ opacity: 0, y: 12 }}
               whileInView={{ opacity: 1, y: 0 }}
@@ -318,9 +318,9 @@ export default function App() {
                   return (
                     <li
                       key={`${f.hostname}-${i}`}
-                      className="font-mono text-xs flex items-center gap-3 text-(--color-fg-dim)"
+                      className="font-mono text-[11px] sm:text-xs flex items-center gap-2 sm:gap-3 text-(--color-fg-dim) min-w-0"
                     >
-                      <span className="tabular-nums text-(--color-accent) w-16 flex-shrink-0">
+                      <span className="tabular-nums text-(--color-accent) w-12 sm:w-16 flex-shrink-0">
                         {ago}
                       </span>
                       <span
@@ -328,8 +328,8 @@ export default function App() {
                         style={{ background: dotColor }}
                         aria-hidden="true"
                       />
-                      <span className="truncate text-(--color-fg-muted)">{f.finding}</span>
-                      <span className="ml-auto text-(--color-fg-dim) flex-shrink-0">
+                      <span className="truncate text-(--color-fg-muted) flex-1 min-w-0">{f.finding}</span>
+                      <span className="text-(--color-fg-dim) flex-shrink-0">
                         {f.country ?? f.hostname}
                       </span>
                     </li>
@@ -433,7 +433,7 @@ export default function App() {
               hidden: {},
               show: { transition: { staggerChildren: 0.12 } },
             }}
-            className="max-w-6xl mx-auto px-4 sm:px-6 py-12 sm:py-20 grid sm:grid-cols-3 gap-8 sm:gap-10"
+            className="max-w-6xl mx-auto px-4 sm:px-6 py-12 sm:py-20 grid grid-cols-1 sm:grid-cols-3 gap-8 sm:gap-10"
           >
             {STEPS.map((s) => (
               <motion.div
