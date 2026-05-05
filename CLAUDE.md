@@ -210,12 +210,21 @@ source ~/.claude/.env.global
 GIT_CEILING_DIRECTORIES="$(pwd)/.." npx vercel deploy --prod --yes
 ```
 
-**Stage 2 worker (Railway) — force-deploy IDs.** When the GitHub webhook fails to fire (see `feedback_railway_webhook_can_silently_break`), force a fresh build via the Railway API using these IDs:
+## Live infrastructure (post-rebrand 2026-05-05)
 
-- Project: `vibesecure-stage2` → `19b15ff4-3a22-4c39-944d-95c8db4c5604`
-- Service: `stage2-worker` → `a3022f8a-f1b4-4fa2-8622-f985fef8865b`
-- Environment (production): `f8ce2d1e-2d96-4a59-a496-34749f1eb159`
-- Source repo: `roi-ai-co-il/vibesecure-stage2-worker`, branch `main`
+The product is **Vguard** but several infra identifiers still carry the old `vibesecure` name where renaming would require coordinated DNS/alias work or has subtle compat costs. Both names live side by side; new docs use `Vguard`, infra labels stay as listed below until a deliberate cutover.
+
+| Asset | Identifier | Notes |
+|---|---|---|
+| Live URL (canonical) | `https://vibesecure-tau.vercel.app` | Original, stays. |
+| Live URL (new alias) | `https://vguard-tau.vercel.app` | Added 2026-05-05, also serves the latest deploy. |
+| Vercel project | `vguard` (renamed from `vibesecure`) — `prj_T7NIVw968V5i9QBQ54OkUhtMV1HD` in team `team_evbzoCbdWuVIB4ZDwEfZ0Oeg` | Project name is `vguard`; both domains bound to it. |
+| Railway project | `vguard-stage2` (renamed from `vibesecure-stage2`) — `19b15ff4-3a22-4c39-944d-95c8db4c5604` | Service URL unchanged. |
+| Railway service | `stage2-worker` — `a3022f8a-f1b4-4fa2-8622-f985fef8865b` (env `f8ce2d1e-2d96-4a59-a496-34749f1eb159`) | Healthcheck: `https://stage2-worker-production.up.railway.app/healthz`. |
+| GitHub repo (worker) | `roi-ai-co-il/vibesecure-stage2-worker` | **TODO**: rename to `vguard-stage2-worker` via GitHub UI (PAT can't do repo-rename). GitHub auto-redirects after rename. |
+| Local source folder | `ROI-AI/vibesecure/` | Folder name kept; path-rename would touch many imports/configs. |
+
+**Force-deploy command** when the GitHub webhook fails (see `feedback_railway_webhook_can_silently_break`):
 
 ```bash
 source ~/.claude/.env.global
