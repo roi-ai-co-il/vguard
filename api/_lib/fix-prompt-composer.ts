@@ -283,15 +283,194 @@ function verifyCommand(category: Category, finalUrl: string, evidence: string): 
 }
 
 /**
+ * Category-specific INVESTIGATE step. The agent runs these BEFORE editing.
+ * Tied to evidence so commands include the concrete file/header/path.
+ */
+function investigateStep(category: Category, evidence: string, finalUrl: string): string {
+  let host = ''
+  try {
+    host = new URL(finalUrl).hostname
+  } catch {
+    // ignore
+  }
+
+  if (category === 'headers') {
+    const m = evidence.match(/missing ([a-z0-9-]+)/i)
+    const header = m?.[1] ?? '<header-name>'
+    return [
+      `1. Confirm the header is missing on the live site:`,
+      `   \`\`\`bash`,
+      `   curl -sI "${finalUrl}" | grep -i "${header}"`,
+      `   \`\`\``,
+      `   Expected: empty output (header is missing — this is what we found).`,
+      `2. Find where the headers config lives in this project:`,
+      `   \`\`\`bash`,
+      `   ls vercel.json next.config.* nuxt.config.* astro.config.* netlify.toml _headers public/_headers 2>/dev/null`,
+      `   \`\`\``,
+      `   Read whichever file exists. That's the file you'll edit in step 2.`,
+    ].join('\n')
+  }
+  if (category === 'secrets') {
+    const m = evidence.match(/"([A-Za-z0-9_-]{6,12})/)
+    const sample = m?.[1] ?? '<first-8-chars-of-secret>'
+    return [
+      `1. Find every place the leaked secret is referenced:`,
+      `   \`\`\`bash`,
+      `   git grep -n "${sample}" -- ':!*.lock' ':!*-lock.json'`,
+      `   \`\`\``,
+      `   This is your hit list. Note each file:line you'll touch.`,
+      `2. Identify how the secret got into the bundle. Common paths:`,
+      `   - A \`VITE_*\` / \`NEXT_PUBLIC_*\` env var that should NOT be public.`,
+      `   - A direct \`fetch("https://api.openai.com/...", { headers: { Authorization: ... } })\` call from the client.`,
+      `   - A hardcoded literal in the source.`,
+      `3. Read those files first; do NOT edit yet.`,
+    ].join('\n')
+  }
+  if (category === 'sourcemaps') {
+    const m = evidence.match(/(https?:\/\/[^\s")]+\.map)/)
+    const target = m?.[1] ?? '<bundle-url>.map'
+    return [
+      `1. Confirm the sourcemap is publicly served:`,
+      `   \`\`\`bash`,
+      `   curl -sI "${target}" | head -1`,
+      `   \`\`\``,
+      `   Expected: HTTP/2 200 (this is the leak we found).`,
+      `2. Find the build config:`,
+      `   \`\`\`bash`,
+      `   ls vite.config.* next.config.* nuxt.config.* astro.config.* webpack.config.* 2>/dev/null`,
+      `   \`\`\``,
+      `   Read whichever exists. You'll set sourcemap=false there in step 2.`,
+    ].join('\n')
+  }
+  if (category === 'paths') {
+    const m = evidence.match(/(https?:\/\/[^\s")]+)/)
+    const target = m?.[1] ?? finalUrl
+    return [
+      `1. Confirm the path is exposed:`,
+      `   \`\`\`bash`,
+      `   curl -sI "${target}" | head -1`,
+      `   \`\`\``,
+      `   Expected: HTTP/2 200 (this is the exposure we found).`,
+      `2. Two questions to answer before editing:`,
+      `   - Is the file in the build output? Run \`find dist .next public -type f -name "<filename>"\` after a build.`,
+      `   - Is it in \`.gitignore\` and your build's ignore list?`,
+      `3. Read \`vercel.json\` / \`netlify.toml\` / \`_redirects\` if present — that's where you'll add the block in step 2.`,
+    ].join('\n')
+  }
+  if (category === 'auth') {
+    return [
+      `1. List your Supabase RLS policies (assumes \`supabase\` CLI is linked):`,
+      `   \`\`\`bash`,
+      `   npx supabase db diff --linked --schema public 2>&1 | head -100`,
+      `   \`\`\``,
+      `   Or in the dashboard: Project → Authentication → Policies.`,
+      `2. Identify the table flagged in the Evidence block. Read its current policy verbatim — note exactly what the USING clause says.`,
+      `3. Identify the ownership column (\`user_id\`, \`owner_id\`, \`tenant_id\`, etc.). Open one row in Supabase Studio to confirm the column name. You'll use it in step 2.`,
+    ].join('\n')
+  }
+  if (category === 'cookies') {
+    return [
+      `1. Show the live Set-Cookie headers:`,
+      `   \`\`\`bash`,
+      `   curl -sI "${finalUrl}" | grep -i "set-cookie"`,
+      `   \`\`\``,
+      `2. Find where each cookie is created:`,
+      `   \`\`\`bash`,
+      `   git grep -n "res.cookie\\|setCookie\\|cookies()\\.set\\|Set-Cookie"`,
+      `   \`\`\``,
+      `3. Read each call site. Note current flag values; you'll add Secure/HttpOnly/SameSite in step 2.`,
+    ].join('\n')
+  }
+  if (category === 'mixed-content') {
+    return [
+      `1. Find every \`http://\` (lowercase, http only) reference in code:`,
+      `   \`\`\`bash`,
+      `   git grep -n "http://" -- src/ public/ ':!*.md' ':!CHANGELOG*'`,
+      `   \`\`\``,
+      `2. Note any \`<form action="http://...">\` — those are critical (cleartext credential post).`,
+      `3. Also search CMS-stored content (Sanity / Contentful / Strapi) for hardcoded http URLs in payloads.`,
+    ].join('\n')
+  }
+  if (category === 'integrity') {
+    return [
+      `1. List every external \`<script>\` tag in your shipped HTML:`,
+      `   \`\`\`bash`,
+      `   git grep -nE '<script[^>]*src="https?://' -- '*.html' '*.tsx' '*.jsx' '*.vue' '*.svelte'`,
+      `   \`\`\``,
+      `2. For each external src, note whether it has \`integrity=\` and \`crossorigin=\`. The ones missing both are what you'll fix in step 2.`,
+    ].join('\n')
+  }
+  if (category === 'deps') {
+    return [
+      `1. Confirm the vulnerable version is what you ship:`,
+      `   \`\`\`bash`,
+      `   npm ls | grep -i "<package-name>"`,
+      `   npm outdated`,
+      `   \`\`\``,
+      `2. Read the CVE description (link in the Evidence block) — confirm the patched version your fix needs to land on.`,
+    ].join('\n')
+  }
+  if (category === 'dns' || category === 'email') {
+    const baseDomain = host.replace(/^www\./, '')
+    return [
+      `1. Confirm the record is missing on the live domain:`,
+      `   \`\`\`bash`,
+      `   dig +short TXT _dmarc.${baseDomain}`,
+      `   dig +short TXT ${baseDomain}`,
+      `   dig +short DNSKEY ${baseDomain}`,
+      `   dig +short CAA ${baseDomain}`,
+      `   \`\`\``,
+      `2. This is a DNS-side fix, NOT a code edit. Identify the DNS provider (Cloudflare / Route 53 / GoDaddy / Namecheap) before going to step 2.`,
+    ].join('\n')
+  }
+  if (category === 'ai') {
+    return [
+      `1. Find the AI endpoint(s) flagged in the Evidence block:`,
+      `   \`\`\`bash`,
+      `   git grep -nE 'app\\.(post|all)\\(.*chat|/api/(chat|ai|completion|llm)' -- src/ api/ pages/ app/`,
+      `   \`\`\``,
+      `2. For each endpoint, read it in full. Note: (a) is the system prompt server-side or accepted from the body, (b) is there auth, (c) is there a rate limit, (d) is there input validation.`,
+    ].join('\n')
+  }
+  if (category === 'methods') {
+    return [
+      `1. Confirm the method is enabled:`,
+      `   \`\`\`bash`,
+      `   curl -sX OPTIONS "${finalUrl}" -i | grep -i "allow:"`,
+      `   curl -sX TRACE "${finalUrl}" -o /dev/null -w "%{http_code}\\n"`,
+      `   \`\`\``,
+      `2. Identify whether the method is allowed at the framework level (Express/Next route handlers) or at the proxy (Vercel/Cloudflare/Nginx). The fix in step 2 lives at whichever layer is responding.`,
+    ].join('\n')
+  }
+  if (category === 'tls') {
+    return [
+      `1. Confirm the TLS issue on the live host:`,
+      `   \`\`\`bash`,
+      `   curl -sI -v "${finalUrl}" 2>&1 | grep -i "ssl\\|tls\\|cipher"`,
+      `   \`\`\``,
+      `2. TLS config lives at your CDN/proxy (Cloudflare / Vercel / Netlify / Fastly), NOT in app code. Identify what fronts the origin before step 2.`,
+    ].join('\n')
+  }
+  return [
+    `1. Re-read the Evidence block above carefully — it contains the exact location/value the scanner saw.`,
+    `2. Map that to a file or config in this repo. \`git grep\` for unique fragments from the evidence.`,
+    `3. Read those files BEFORE editing.`,
+  ].join('\n')
+}
+
+/**
  * The do-not-do block. Same for every finding; consistency matters here —
  * the agent should learn to expect these guardrails and never overstep.
  */
 const GUARDRAILS = [
-  '## ⚠️ Do not',
-  '- Don\'t disable the security check just to make the scan pass — fix the root cause.',
-  '- Don\'t commit any secret. If a secret was leaked, **rotate it BEFORE editing the code** so a window of compromise is closed first.',
-  '- Don\'t guess the file path from the title alone — use the **Evidence** block above to find the exact source line.',
-  '- Don\'t skip verification. Run the verify command and rescan; the scan is your acceptance test, not the diff.',
+  '## ⚠️ Hard rules',
+  '- **Investigate before editing.** If you skip step 1, you will edit the wrong file or miss references.',
+  '- **Do not disable the check.** Fix the root cause; do not suppress the finding so the scan passes.',
+  "- **If a secret leaked, ROTATE FIRST.** Open the provider dashboard, generate a new key, swap it in `.env`, redeploy. THEN edit code. Doing it in the other order leaves a window of compromise.",
+  '- **Do not commit any secret to git.** Use `process.env.<NAME>` server-side only.',
+  '- **Regression checks are mandatory.** Step 3 (typecheck + lint + tests + build) MUST pass clean before you deploy. Do not skip "because the change is small".',
+  '- **Verify is mandatory.** Step 4 is the acceptance test — do not declare done without running it and pasting the output.',
+  '- **Do not ask the user to investigate for you.** You have the workspace; the commands above produce the answers.',
 ].join('\n')
 
 export function composeFixPrompt(finding: Finding, ctx: ComposeContext): string {
@@ -301,40 +480,94 @@ export function composeFixPrompt(finding: Finding, ctx: ComposeContext): string 
   const fw = frameworkLabel(ctx.detectedFramework)
   const stack = stackHint(ctx.detectedFramework, finding.category)
   const verify = verifyCommand(finding.category, ctx.finalUrl, finding.evidence)
+  const investigate = investigateStep(finding.category, finding.evidence, ctx.finalUrl)
   const rescanLink = `${RESCAN_BASE}${encodeURIComponent(ctx.finalUrl)}`
 
   const blocks: string[] = [
-    `# 🛡️ Vguard fix prompt`,
+    `# 🛡️ Vguard auto-fix — ${finding.title}`,
     ``,
-    `**Finding:** ${finding.title}`,
-    `**Severity:** ${SEVERITY_LINE[finding.severity]}`,
-    `**Category:** ${finding.category}`,
-    `**Scanned URL:** ${ctx.finalUrl}`,
-    `**Detected stack:** ${fw}`,
+    `**You are an AI coding agent (Cursor / Claude Code / Lovable / Bolt). Execute this fix end-to-end in the user's workspace. Follow the four steps in order; do NOT ask the user questions you can answer yourself by reading the codebase.**`,
     ``,
-    `## What we found`,
-    finding.description,
+    `| | |`,
+    `|---|---|`,
+    `| **Severity** | ${SEVERITY_LINE[finding.severity]} |`,
+    `| **Category** | \`${finding.category}\` |`,
+    `| **Detected stack** | ${fw} |`,
+    `| **Scanned URL** | ${ctx.finalUrl} |`,
     ``,
-    `## Evidence (raw, from the scan)`,
-    '```',
-    finding.evidence,
-    '```',
+    `---`,
     ``,
-    `## Your task`,
+    `## Step 1 — Investigate (read-only, no code edits yet)`,
+    ``,
+    investigate,
+    ``,
+    `When step 1 is done you should know: (a) the exact file(s) you'll edit, (b) the exact value/setting that needs to change, (c) the current state of those files. If anything is still unclear, run another \`git grep\` or \`cat\` — never guess.`,
+    ``,
+    `## Step 2 — Fix the code`,
+    ``,
     finding.fixPrompt,
   ]
 
   if (stack) {
-    blocks.push(``, `## Where to edit (stack: ${fw})`, stack)
+    blocks.push(``, `### Stack-specific guidance for \`${finding.category}\` on ${fw}`, ``, stack)
   }
 
   blocks.push(
     ``,
-    `## Verify the fix worked`,
+    `## Step 3 — Prevent regression (mandatory before deploying)`,
+    ``,
+    `Run every applicable check below in the project root. If any fail, your fix has a regression — return to step 2 and resolve before continuing.`,
+    ``,
+    `\`\`\`bash`,
+    `# Type check — must pass with zero errors`,
+    `npx tsc --noEmit`,
+    ``,
+    `# Lint — fix any new warnings/errors you introduced`,
+    `npm run lint`,
+    ``,
+    `# Tests — run the full suite (or the targeted file if a full run is huge)`,
+    `npm test -- --run    # vitest`,
+    `npm run test:ci      # whatever the project uses`,
+    ``,
+    `# Build — must succeed (catches type errors that --noEmit hides + bundling issues)`,
+    `npm run build`,
+    `\`\`\``,
+    ``,
+    `Additionally:`,
+    `- **For UI changes:** start the dev server (\`npm run dev\`), open the affected page in the browser at **both** mobile (375–390px) and desktop (≥1024px) viewports, click through the user flow that touches the changed code, and visually confirm nothing else broke. Type checking does not catch CSS regressions.`,
+    `- **For backend / API changes:** run the affected endpoint with \`curl\` or your test runner against a local dev server before redeploying.`,
+    `- **For env-var / secret changes:** confirm the new value works in the local \`.env\` AND on the deploy target (Vercel / Railway / etc.). A passing local build with a missing prod env is a silent prod break.`,
+    ``,
+    `Only proceed past this step when **typecheck, lint, tests, build, and the manual smoke pass clean**. Do not deploy with red tests "to verify in prod" — that's how regressions ship.`,
+    ``,
+    `## Step 4 — Verify the fix actually shipped`,
+    ``,
+    `Redeploy first (or wait for CI), THEN run:`,
+    ``,
     verify,
     ``,
-    `Then redeploy and rescan: ${rescanLink}`,
-    `The "${finding.title}" finding should disappear from the report.`,
+    `**If the verification fails, your fix is incomplete — go back to step 2.**`,
+    ``,
+    `## Step 5 — Report back to the user`,
+    ``,
+    `In one short message tell the user:`,
+    `1. The file(s) you edited (path + line numbers).`,
+    `2. A one-sentence summary of the change.`,
+    `3. The result of the regression checks from step 3 (typecheck / lint / tests / build — all green, or which ones failed and how you resolved them).`,
+    `4. The exact output of the verify command from step 4 (paste it).`,
+    `5. The rescan link: ${rescanLink}`,
+    ``,
+    `---`,
+    ``,
+    `## Why this matters (context)`,
+    ``,
+    finding.description,
+    ``,
+    `## Raw evidence (from the scanner — your source of truth)`,
+    ``,
+    '```',
+    finding.evidence,
+    '```',
     ``,
     GUARDRAILS,
   )
