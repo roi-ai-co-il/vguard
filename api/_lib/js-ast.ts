@@ -68,6 +68,72 @@ function looksLikeCredentialValue(v: string): boolean {
 
 const DOM_SINK_PROP_NAMES = new Set(['innerHTML', 'outerHTML'])
 
+// Sanitizing wrappers / safe coercions on URL-template interpolations. A fetch
+// template-literal whose every expression is one of these calls is not an SSRF
+// or open-redirect surface — the value can't carry control characters or
+// host-injection. Listed by callee name (Identifier or MemberExpression leaf).
+const URL_SAFE_CALLEES = new Set([
+  'encodeURIComponent',
+  'encodeURI',
+  'Number',
+  'parseInt',
+  'parseFloat',
+  'String',
+  'btoa',
+])
+const URL_SAFE_MEMBER_CALLEES = new Set([
+  'JSON.stringify',
+  'String.raw',
+])
+
+function isUrlSafeExpression(expr: unknown): boolean {
+  if (!expr || typeof expr !== 'object') return false
+  const e = expr as { type?: string; callee?: unknown }
+  if (
+    e.type === 'NumericLiteral' ||
+    e.type === 'BooleanLiteral' ||
+    e.type === 'NullLiteral' ||
+    e.type === 'StringLiteral'
+  ) {
+    return true
+  }
+  if (e.type === 'CallExpression' && e.callee) {
+    const c = e.callee as { type?: string; name?: string; object?: { name?: string }; property?: { name?: string } }
+    if (c.type === 'Identifier' && c.name && URL_SAFE_CALLEES.has(c.name)) return true
+    if (
+      c.type === 'MemberExpression' &&
+      c.object?.name &&
+      c.property?.name &&
+      URL_SAFE_MEMBER_CALLEES.has(`${c.object.name}.${c.property.name}`)
+    ) {
+      return true
+    }
+  }
+  return false
+}
+
+// DOM-sink assignments where the right-hand side is a static literal (string,
+// number, null, or template literal with no interpolations) are not XSS
+// vectors — the rendered HTML is fully under the developer's control at write
+// time. Also covers the common library idiom of clearing children with an
+// empty string.
+function isStaticDomSinkRhs(rhs: unknown): boolean {
+  if (!rhs || typeof rhs !== 'object') return false
+  const r = rhs as { type?: string; expressions?: unknown[] }
+  if (
+    r.type === 'StringLiteral' ||
+    r.type === 'NumericLiteral' ||
+    r.type === 'NullLiteral' ||
+    r.type === 'BooleanLiteral'
+  ) {
+    return true
+  }
+  if (r.type === 'TemplateLiteral') {
+    return !Array.isArray(r.expressions) || r.expressions.length === 0
+  }
+  return false
+}
+
 export function analyzeBundles(bundleTexts: string[]): AstAnalysis {
   const out: AstAnalysis = {
     evalCalls: 0,
@@ -110,7 +176,9 @@ export function analyzeBundles(bundleTexts: string[]): AstAnalysis {
           const args = (n as unknown as { arguments?: Node[] }).arguments ?? []
           if (args[0]?.type === 'TemplateLiteral') {
             const exprs = (args[0] as unknown as { expressions?: unknown[] }).expressions ?? []
-            if (exprs.length > 0) out.templateUrlFetches += 1
+            if (exprs.length > 0 && !exprs.every(isUrlSafeExpression)) {
+              out.templateUrlFetches += 1
+            }
           }
         }
         if (callee && callee.type === 'MemberExpression') {

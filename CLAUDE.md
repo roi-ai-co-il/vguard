@@ -222,7 +222,7 @@ The product is **Vguard** but several infra identifiers still carry the old `vib
 | Railway project | `vguard-stage2` (renamed from `vibesecure-stage2`) — `19b15ff4-3a22-4c39-944d-95c8db4c5604` | Service URL unchanged. |
 | Railway service | `stage2-worker` — `a3022f8a-f1b4-4fa2-8622-f985fef8865b` (env `f8ce2d1e-2d96-4a59-a496-34749f1eb159`) | Healthcheck: `https://stage2-worker-production.up.railway.app/healthz`. |
 | GitHub repo (worker) | `roi-ai-co-il/vguard-stage2-worker` (renamed from `vibesecure-stage2-worker` 2026-05-05) | Railway service rewired to the new repo name via `serviceConnect` mutation; old URL still 301-redirects courtesy of GitHub. |
-| Local source folder | `ROI-AI/vibesecure/` | Folder name kept; path-rename would touch many imports/configs. |
+| Local source folder | `ROI-AI/vguard/` | Folder name kept; path-rename would touch many imports/configs. |
 
 **Force-deploy command** when the GitHub webhook fails (see `feedback_railway_webhook_can_silently_break`):
 
