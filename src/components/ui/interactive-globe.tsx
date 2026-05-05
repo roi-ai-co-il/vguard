@@ -1,4 +1,4 @@
-﻿import { useRef, useEffect, useCallback, type PointerEvent } from 'react'
+import { useRef, useEffect, useCallback, type PointerEvent } from 'react'
 import { cn } from '@/lib/utils'
 
 interface GlobeProps {

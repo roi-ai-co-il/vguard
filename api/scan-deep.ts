@@ -1,4 +1,4 @@
-﻿import type { VercelRequest, VercelResponse } from '@vercel/node'
+import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { promises as dns } from 'node:dns'
 import { runScan } from './_lib/scanner.js'
 import { runDeepScan } from './_lib/deep-scanner.js'

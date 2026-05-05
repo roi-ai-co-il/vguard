@@ -1,4 +1,4 @@
-﻿# Stage 3 — Vercel OAuth Setup (one-time, ~5 min)
+# Stage 3 — Vercel OAuth Setup (one-time, ~5 min)
 
 The OAuth verification method ("Verify with Vercel" button in the Stage 3 modal) requires a Vercel Integration that Anthropic's API can't create remotely. You do this once via the Vercel UI.
 

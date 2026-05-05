@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Vguard — Attack Surface Map.
  *
  * Builds a flat, machine-readable picture of what the site exposes:

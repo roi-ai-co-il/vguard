@@ -1,4 +1,4 @@
-﻿# Stage 2 Playwright Worker
+# Stage 2 Playwright Worker
 
 Server-side browser-assisted scanning for Vguard. Replaces (or complements) the bookmarklet approach when we want full Playwright introspection without asking the user to drag a bookmark.
 

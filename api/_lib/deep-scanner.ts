@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Stage 3 deep-scan probes — only run AFTER ownership verification.
  * Active probing that targets the user's own infrastructure.
  *

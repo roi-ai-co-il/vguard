@@ -1,4 +1,4 @@
-﻿# Vguard — security scanner for vibe-coded apps
+# Vguard — security scanner for vibe-coded apps
 
 > Co-founders: Royi + Oded (joined 2026-04-29). Idea note: [`Knowledge/09 רעיונות/Vguard.md`](../../Knowledge/09%20רעיונות/Vguard.md). Attack catalog: [`Knowledge/09 רעיונות/Vguard - Attack Catalog.md`](../../Knowledge/09%20רעיונות/Vguard%20-%20Attack%20Catalog.md).
 

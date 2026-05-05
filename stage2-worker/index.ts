@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Vguard Stage 2 Playwright worker. Deploy to Railway / Fly / your-own-host.
  * Does NOT run on Vercel — @sparticuz/chromium cold starts are too slow for an
  * interactive UX. Better to keep a small dedicated worker on Railway that the

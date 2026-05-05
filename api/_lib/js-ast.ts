@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Vguard - JS AST analysis (S1+6).
  *
  * Replaces regex on minified bundles with a real parse via @babel/parser.

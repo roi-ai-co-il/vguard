@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Vguard — Fix Prompt Composer.
  *
  * Wraps every Finding's raw fixPrompt instruction with structured context

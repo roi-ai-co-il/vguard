@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Vguard design tokens — single source of truth.
  *
  * Direction: "Terminal Trust" — dark-first, cyan-electric accent,

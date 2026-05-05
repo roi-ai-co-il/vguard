@@ -1,4 +1,4 @@
-﻿import { defineConfig, type Plugin, type Connect } from 'vite'
+import { defineConfig, type Plugin, type Connect } from 'vite'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import react from '@vitejs/plugin-react'

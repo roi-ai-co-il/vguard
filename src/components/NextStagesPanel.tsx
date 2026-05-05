@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Globe, ShieldCheck, Lock, Check, Copy, RefreshCw, X, ArrowRight, Loader2, Sparkles } from 'lucide-react'
 import type { ScanResult } from '@/lib/scanner-types'

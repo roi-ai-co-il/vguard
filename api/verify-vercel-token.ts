@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Stage 3 verification via paste-your-Vercel-token.
  *
  * Why this exists alongside /api/oauth/vercel/start:

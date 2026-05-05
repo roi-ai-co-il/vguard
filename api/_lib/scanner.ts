@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Vguard scanner core. Server-side only — uses Node fetch + Buffer + DNS + TLS.
  * Pure function: runScan(url) → ScanResponse. No HTTP/Express coupling.
  */
