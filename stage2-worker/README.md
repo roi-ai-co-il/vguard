@@ -1,6 +1,6 @@
-# Stage 2 Playwright Worker
+﻿# Stage 2 Playwright Worker
 
-Server-side browser-assisted scanning for VibeSecure. Replaces (or complements) the bookmarklet approach when we want full Playwright introspection without asking the user to drag a bookmark.
+Server-side browser-assisted scanning for Vguard. Replaces (or complements) the bookmarklet approach when we want full Playwright introspection without asking the user to drag a bookmark.
 
 ## Why this lives outside the main Vercel deployment
 
@@ -25,7 +25,7 @@ railway variables set STAGE2_WORKER_TOKEN="$(openssl rand -hex 32)"
 railway up
 ```
 
-Railway auto-detects the Dockerfile and builds. Note the public URL it returns — set it as `STAGE2_WORKER_URL` on the VibeSecure Vercel project, and the same `STAGE2_WORKER_TOKEN` value as `STAGE2_WORKER_TOKEN` env var on Vercel.
+Railway auto-detects the Dockerfile and builds. Note the public URL it returns — set it as `STAGE2_WORKER_URL` on the Vguard Vercel project, and the same `STAGE2_WORKER_TOKEN` value as `STAGE2_WORKER_TOKEN` env var on Vercel.
 
 ## Endpoint
 
@@ -49,7 +49,7 @@ Content-Type: application/json
 }
 ```
 
-## How VibeSecure consumes this
+## How Vguard consumes this
 
 The Vercel-side `api/scan-browser-assisted.ts` proxies to `STAGE2_WORKER_URL` and feeds the response into the same Stage 2 finding-analyzer used by the bookmarklet path.
 
@@ -74,7 +74,7 @@ curl -X POST http://localhost:8080/scan \
 
 ## Cost considerations
 
-Railway's free tier is small-but-real. If VibeSecure scales:
+Railway's free tier is small-but-real. If Vguard scales:
 - Move the worker to a small dedicated machine (Hetzner, DO Droplet) — cheaper at volume
 - Add LRU caching on `/scan` results keyed by URL hash (5-minute TTL) so repeat scans don't re-launch a context
 

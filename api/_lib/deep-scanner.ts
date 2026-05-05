@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Stage 3 deep-scan probes — only run AFTER ownership verification.
  * Active probing that targets the user's own infrastructure.
  *
@@ -230,7 +230,7 @@ export async function probeSupabaseStorageWrite(
     STORAGE_PROBE_BUCKETS.map(async (bucket) => {
       try {
         const r = await fetchWithTimeout(
-          `https://${projectId}.supabase.co/storage/v1/object/${bucket}/.vibesecure-write-probe`,
+          `https://${projectId}.supabase.co/storage/v1/object/${bucket}/.Vguard-write-probe`,
           {
             method: 'OPTIONS',
             headers: {

@@ -1,4 +1,4 @@
-import { defineConfig, type Plugin, type Connect } from 'vite'
+﻿import { defineConfig, type Plugin, type Connect } from 'vite'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import react from '@vitejs/plugin-react'
@@ -12,7 +12,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
  */
 function devApi(): Plugin {
   return {
-    name: 'vibesecure-dev-api',
+    name: 'Vguard-dev-api',
     apply: 'serve',
     configureServer(server) {
       const handler: Connect.NextHandleFunction = async (req, res, next) => {

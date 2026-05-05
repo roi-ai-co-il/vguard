@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, type FormEvent } from 'react'
+﻿import { useState, useEffect, useRef, type FormEvent } from 'react'
 import {
   motion,
   AnimatePresence,
@@ -383,7 +383,7 @@ function buildBulkFixPrompt(result: ScanResult): string {
   const rescanLink = `https://vibesecure-tau.vercel.app/?url=${encodeURIComponent(result.meta.finalUrl)}`
 
   const lines: string[] = [
-    `# 🛡️ VibeSecure — Bulk Fix Plan`,
+    `# 🛡️ Vguard — Bulk Fix Plan`,
     ``,
     `**Site:** ${result.meta.finalUrl}`,
     `**Detected stack:** ${fw}`,

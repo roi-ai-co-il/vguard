@@ -1,5 +1,5 @@
-/**
- * VibeSecure scanner core. Server-side only — uses Node fetch + Buffer + DNS + TLS.
+﻿/**
+ * Vguard scanner core. Server-side only — uses Node fetch + Buffer + DNS + TLS.
  * Pure function: runScan(url) → ScanResponse. No HTTP/Express coupling.
  */
 import { promises as dns } from 'node:dns'
@@ -1439,7 +1439,7 @@ async function discoverAndProbeAdminRoutes(
           {
             method: 'GET',
             headers: {
-              'User-Agent': 'VibeSecure-Scanner/0.1 (+https://vibesecure.dev)',
+              'User-Agent': 'Vguard-Scanner/0.1 (+https://vguard.dev)',
               Accept: 'text/html,application/json;q=0.9,*/*;q=0.8',
             },
             redirect: 'manual',
@@ -1655,7 +1655,7 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
     mainResp = await fetchWithTimeout(url.toString(), {
       method: 'GET',
       headers: {
-        'User-Agent': 'VibeSecure-Scanner/0.1 (+https://vibesecure.dev)',
+        'User-Agent': 'Vguard-Scanner/0.1 (+https://vguard.dev)',
         Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       },
     })

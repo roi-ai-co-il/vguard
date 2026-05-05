@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+﻿import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import {
   Sparkles,
@@ -64,7 +64,7 @@ const SCAN_CARDS: BentoCardProps[] = [
       'We crawl every chunk and source map for the patterns Cursor / Claude / Lovable accidentally inline. Each finding ships with a paste-ready prompt to move the call server-side.',
     graphic: (
       <div className="absolute inset-0 p-6 font-mono text-[11px] leading-relaxed">
-        <div className="text-(--color-fg-dim)">$ vibesecure scan https://app.vercel.app</div>
+        <div className="text-(--color-fg-dim)">$ vguard scan https://app.vercel.app</div>
         <div className="text-(--color-fg-dim)">{'> probing JS bundle...'}</div>
         <div className="mt-3 rounded-md bg-(--color-bg) border border-(--color-danger)/40 p-3 shadow-[0_0_24px_-8px_rgba(255,107,107,0.5)]">
           <div className="text-(--color-danger) font-semibold">! CRITICAL — secret found</div>
@@ -209,9 +209,9 @@ export default function App() {
         className="relative border-b border-(--color-border) backdrop-blur-sm bg-(--color-bg)/60 z-10"
       >
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-4 sm:py-5 flex items-center justify-between gap-3">
-          <a href="/" className="flex items-center gap-2 font-mono text-sm" aria-label="VibeSecure home">
+          <a href="/" className="flex items-center gap-2 font-mono text-sm" aria-label="Vguard home">
             <ShieldCheck size={18} className="text-(--color-accent)" strokeWidth={2.25} aria-hidden="true" />
-            <span className="font-semibold tracking-tight">vibesecure</span>
+            <span className="font-semibold tracking-tight">Vguard</span>
             <span className="text-(--color-fg-dim) animate-pulse">_</span>
           </a>
           <div className="font-mono text-[10px] sm:text-xs text-(--color-fg-dim) tracking-widest uppercase">
@@ -461,7 +461,7 @@ export default function App() {
 
       <footer className="relative border-t border-(--color-border) mt-auto z-10">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-5 sm:py-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-1 sm:gap-0 font-mono text-[11px] sm:text-xs text-(--color-fg-dim)">
-          <span>© 2026 VibeSecure</span>
+          <span>© 2026 Vguard</span>
           <span>built by ROI AI · in stealth</span>
         </div>
       </footer>

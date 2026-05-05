@@ -1,10 +1,10 @@
-/**
+﻿/**
  * Stage 3 verification via paste-your-Vercel-token.
  *
  * Why this exists alongside /api/oauth/vercel/start:
  * Vercel doesn't expose an API to create OAuth Integrations — those have to be
  * registered through their UI (vercel.com/dashboard/integrations/console).
- * For VibeSecure to provide Vercel-based ownership proof without that one-time
+ * For Vguard to provide Vercel-based ownership proof without that one-time
  * UI step, we accept a personal access token from the user, call the Vercel
  * API to list their projects + aliases, and verify the scanned domain is in
  * one of them. The token is never stored — we use it once and discard.

@@ -1,5 +1,5 @@
-/**
- * VibeSecure design tokens — single source of truth.
+﻿/**
+ * Vguard design tokens — single source of truth.
  *
  * Direction: "Terminal Trust" — dark-first, cyan-electric accent,
  * Inter + JetBrains Mono. Built for vibe coders (Cursor / Lovable / Bolt).

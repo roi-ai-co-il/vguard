@@ -1,4 +1,4 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node'
+﻿import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { randomBytes } from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
 
@@ -28,7 +28,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const clientId = process.env.VERCEL_OAUTH_CLIENT_ID
   const supabaseUrl = process.env.SUPABASE_URL
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-  const publicOrigin = process.env.VIBESECURE_PUBLIC_ORIGIN || 'https://vibesecure-tau.vercel.app'
+  const publicOrigin =
+    process.env.VGUARD_PUBLIC_ORIGIN ||
+    process.env.VIBESECURE_PUBLIC_ORIGIN ||
+    'https://vibesecure-tau.vercel.app'
 
   if (!clientId || !supabaseUrl || !serviceKey) {
     return res

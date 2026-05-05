@@ -1,5 +1,5 @@
-/**
- * VibeSecure - JS AST analysis (S1+6).
+﻿/**
+ * Vguard - JS AST analysis (S1+6).
  *
  * Replaces regex on minified bundles with a real parse via @babel/parser.
  * Catches things regex misses or false-positives on:

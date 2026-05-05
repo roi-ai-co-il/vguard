@@ -1,5 +1,5 @@
-/**
- * VibeSecure — Attack Surface Map.
+﻿/**
+ * Vguard — Attack Surface Map.
  *
  * Builds a flat, machine-readable picture of what the site exposes:
  *   - primary + base domain
@@ -77,7 +77,7 @@ export async function discoverSubdomainsFromCT(
       signal: controller.signal,
       headers: {
         Accept: 'application/json',
-        'User-Agent': 'VibeSecure-Scanner/0.1 (+https://vibesecure.dev)',
+        'User-Agent': 'Vguard-Scanner/0.1 (+https://vguard.dev)',
       },
     })
     if (!r.ok) return []

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+﻿import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Globe, ShieldCheck, Lock, Check, Copy, RefreshCw, X, ArrowRight, Loader2, Sparkles } from 'lucide-react'
 import type { ScanResult } from '@/lib/scanner-types'
@@ -238,8 +238,8 @@ function buildBookmarkletSource(uuid: string, collectorOrigin: string): string {
     `var g={hasSupabase:typeof w.supabase!=='undefined',hasFirebase:typeof w.firebase!=='undefined',hasFirebaseConfig:typeof w.firebaseConfig!=='undefined',hasAppConfig:typeof w.__APP_CONFIG!=='undefined'||typeof w.__NEXT_DATA__!=='undefined',hasReactRoot:!!document.getElementById('root')};`,
     `var p=performance.getEntriesByType('resource').map(function(e){return e.name}).slice(0,80);`,
     `var data={uuid:u,url:location.href,cookieKeys:ck,localStorageKeys:lk,sessionStorageKeys:sk,globals:g,performanceUrls:p,userAgent:navigator.userAgent};`,
-    `fetch('${collectorOrigin}/api/stage2-collect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}).then(function(r){return r.json()}).then(function(j){alert('VibeSecure Stage 2: data sent. Return to the scanner tab.')}).catch(function(e){alert('VibeSecure error: '+e.message)});`,
-    `}catch(e){alert('VibeSecure error: '+e.message)}`,
+    `fetch('${collectorOrigin}/api/stage2-collect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}).then(function(r){return r.json()}).then(function(j){alert('Vguard Stage 2: data sent. Return to the scanner tab.')}).catch(function(e){alert('Vguard error: '+e.message)});`,
+    `}catch(e){alert('Vguard error: '+e.message)}`,
     `})()`,
   ].join('')
 }
@@ -535,7 +535,7 @@ function Stage2Modal({ open, onClose }: { open: boolean; onClose: () => void }) 
                 title="Drag this to your bookmarks bar, then click it on your own site"
               >
                 <ShieldCheck size={13} strokeWidth={2.5} />
-                VibeSecure scan
+                Vguard scan
               </a>
               <button
                 type="button"
@@ -565,7 +565,7 @@ function Stage2Modal({ open, onClose }: { open: boolean; onClose: () => void }) 
               Step 2 — open your site, click the bookmark
             </div>
             <p className="text-sm text-(--color-fg-muted) leading-relaxed">
-              Visit your app in a new tab — log in if you usually do. Then click the VibeSecure bookmark. The snippet will collect runtime data and POST it back to us. You'll see an alert when it's done.
+              Visit your app in a new tab — log in if you usually do. Then click the Vguard bookmark. The snippet will collect runtime data and POST it back to us. You'll see an alert when it's done.
             </p>
           </div>
 
@@ -701,16 +701,16 @@ interface FreeTierProvider {
  */
 function buildFileVerifyAiPrompt(domain: string, uuid: string, providerName: string | null): string {
   return [
-    `# 🛡️ VibeSecure — Ownership verification task`,
+    `# 🛡️ Vguard — Ownership verification task`,
     ``,
-    `I'm using VibeSecure to run a security deep-scan on **${domain}**. To prove I own this site, I need you to drop a verification file at \`/.well-known/vibesecure-verify.txt\` and redeploy.`,
+    `I'm using Vguard to run a security deep-scan on **${domain}**. To prove I own this site, I need you to drop a verification file at \`/.well-known/Vguard-verify.txt\` and redeploy.`,
     ``,
     `## What to do`,
     ``,
     `1. **Create the file** at one of these paths (whichever matches this project's framework — check the existing folders):`,
-    `   - \`public/.well-known/vibesecure-verify.txt\` — Next.js, Vite, CRA, React`,
-    `   - \`static/.well-known/vibesecure-verify.txt\` — SvelteKit`,
-    `   - \`.well-known/vibesecure-verify.txt\` (project root) — Astro, plain HTML`,
+    `   - \`public/.well-known/Vguard-verify.txt\` — Next.js, Vite, CRA, React`,
+    `   - \`static/.well-known/Vguard-verify.txt\` — SvelteKit`,
+    `   - \`.well-known/Vguard-verify.txt\` (project root) — Astro, plain HTML`,
     ``,
     `2. **The file content must be EXACTLY this UUID** — plain text, no quotes, no JSON, no newline-padding, no headers:`,
     ``,
@@ -721,7 +721,7 @@ function buildFileVerifyAiPrompt(domain: string, uuid: string, providerName: str
     `3. **Commit and push** to the branch that auto-deploys to production:`,
     `   \`\`\``,
     `   git add <the-file-path>`,
-    `   git commit -m "Add VibeSecure ownership-verification token"`,
+    `   git commit -m "Add Vguard ownership-verification token"`,
     `   git push`,
     `   \`\`\``,
     ``,
@@ -729,26 +729,26 @@ function buildFileVerifyAiPrompt(domain: string, uuid: string, providerName: str
     ``,
     `5. **Confirm it's live** by curling — should print exactly the UUID, nothing else:`,
     `   \`\`\``,
-    `   curl -s https://${domain}/.well-known/vibesecure-verify.txt`,
+    `   curl -s https://${domain}/.well-known/Vguard-verify.txt`,
     `   \`\`\``,
     ``,
     `## Then`,
     ``,
-    `Tell me when the curl returns the UUID, and I'll click "Verify now" in VibeSecure to start the deep scan.`,
+    `Tell me when the curl returns the UUID, and I'll click "Verify now" in Vguard to start the deep scan.`,
     ``,
     `## After Stage 3 finishes (optional cleanup)`,
     ``,
     `The file is harmless to leave in production — it's a random UUID, contains no secrets. But if you want to clean up afterwards:`,
     `\`\`\``,
     `git rm <the-file-path>`,
-    `git commit -m "Remove VibeSecure verification token"`,
+    `git commit -m "Remove Vguard verification token"`,
     `git push`,
     `\`\`\``,
     ``,
     `## Constraints`,
     ``,
     `- Don't add any other content to the file (no JSON wrapping, no Markdown, no leading/trailing whitespace).`,
-    `- Don't create the file inside \`src/\` — it must end up at the URL path \`/.well-known/vibesecure-verify.txt\` after build.`,
+    `- Don't create the file inside \`src/\` — it must end up at the URL path \`/.well-known/Vguard-verify.txt\` after build.`,
     `- ${providerName ? `This project deploys to **${providerName}** — push the commit and the deploy is automatic.` : `If your hosting requires a manual deploy step, run that after pushing.`}`,
   ].join('\n')
 }
@@ -760,14 +760,14 @@ function buildFileVerifyAiPrompt(domain: string, uuid: string, providerName: str
  */
 function buildDnsVerifyAiPrompt(baseDomain: string, uuid: string): string {
   return [
-    `# 🛡️ VibeSecure — DNS ownership verification task`,
+    `# 🛡️ Vguard — DNS ownership verification task`,
     ``,
-    `I'm using VibeSecure to run a security deep-scan on **${baseDomain}**. To prove I own this domain, I need a DNS TXT record added.`,
+    `I'm using Vguard to run a security deep-scan on **${baseDomain}**. To prove I own this domain, I need a DNS TXT record added.`,
     ``,
     `## The record`,
     `\`\`\``,
     `Type:  TXT`,
-    `Name:  _vibesecure-verify.${baseDomain}`,
+    `Name:  _Vguard-verify.${baseDomain}`,
     `Value: ${uuid}`,
     `TTL:   300 (or your provider's default)`,
     `\`\`\``,
@@ -781,13 +781,13 @@ function buildDnsVerifyAiPrompt(baseDomain: string, uuid: string): string {
     `curl -X POST "https://api.cloudflare.com/client/v4/zones/<ZONE_ID>/dns_records" \\`,
     `  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \\`,
     `  -H "Content-Type: application/json" \\`,
-    `  -d '{"type":"TXT","name":"_vibesecure-verify.${baseDomain}","content":"${uuid}","ttl":300}'`,
+    `  -d '{"type":"TXT","name":"_Vguard-verify.${baseDomain}","content":"${uuid}","ttl":300}'`,
     ``,
     `# Vercel (if Vercel manages this domain's DNS, needs VERCEL_TOKEN)`,
     `curl -X POST "https://api.vercel.com/v2/domains/${baseDomain}/records" \\`,
     `  -H "Authorization: Bearer $VERCEL_TOKEN" \\`,
     `  -H "Content-Type: application/json" \\`,
-    `  -d '{"type":"TXT","name":"_vibesecure-verify","value":"${uuid}","ttl":300}'`,
+    `  -d '{"type":"TXT","name":"_Vguard-verify","value":"${uuid}","ttl":300}'`,
     `\`\`\``,
     ``,
     `**If you don't have DNS API access in this project,** stop and tell me — I'll add it manually at my DNS provider's dashboard (Cloudflare, Namecheap, GoDaddy, Vercel DNS, etc.).`,
@@ -796,11 +796,11 @@ function buildDnsVerifyAiPrompt(baseDomain: string, uuid: string): string {
     ``,
     `Verify propagation:`,
     `\`\`\``,
-    `dig +short TXT _vibesecure-verify.${baseDomain}`,
+    `dig +short TXT _Vguard-verify.${baseDomain}`,
     `\`\`\``,
     `Should return: \`"${uuid}"\` (with quotes — that's normal for TXT records).`,
     ``,
-    `Propagation can take 30 seconds to 5 minutes. Tell me when dig returns the value, and I'll click "Verify now" in VibeSecure.`,
+    `Propagation can take 30 seconds to 5 minutes. Tell me when dig returns the value, and I'll click "Verify now" in Vguard.`,
   ].join('\n')
 }
 
@@ -835,21 +835,21 @@ function detectFreeTierProvider(domain: string): FreeTierProvider | null {
   if (/\.lovable\.(app|dev)$/.test(d)) {
     return {
       name: 'Lovable',
-      fileHint: 'In Lovable: open the file tree → public/ → add a new file named .well-known/vibesecure-verify.txt with the UUID inside → click Publish.',
+      fileHint: 'In Lovable: open the file tree → public/ → add a new file named .well-known/Vguard-verify.txt with the UUID inside → click Publish.',
       vercelTokenWorks: false,
     }
   }
   if (/\.bolt\.(host|new)$/.test(d)) {
     return {
       name: 'Bolt',
-      fileHint: 'In Bolt: ask the AI to "create a static file at public/.well-known/vibesecure-verify.txt with content: <UUID>" then redeploy.',
+      fileHint: 'In Bolt: ask the AI to "create a static file at public/.well-known/Vguard-verify.txt with content: <UUID>" then redeploy.',
       vercelTokenWorks: false,
     }
   }
   if (/\.replit\.(app|dev)$/.test(d)) {
     return {
       name: 'Replit',
-      fileHint: 'In Replit: create the file at public/.well-known/vibesecure-verify.txt with the UUID inside, then redeploy.',
+      fileHint: 'In Replit: create the file at public/.well-known/Vguard-verify.txt with the UUID inside, then redeploy.',
       vercelTokenWorks: false,
     }
   }
@@ -863,7 +863,7 @@ function detectFreeTierProvider(domain: string): FreeTierProvider | null {
   if (/\.(ngrok-free\.app|ngrok\.app|ngrok\.io|loca\.lt|trycloudflare\.com)$/.test(d)) {
     return {
       name: 'tunnel',
-      fileHint: 'You\'re scanning through a tunnel. Drop .well-known/vibesecure-verify.txt into your local public/ folder — the tunnel forwards to it automatically.',
+      fileHint: 'You\'re scanning through a tunnel. Drop .well-known/Vguard-verify.txt into your local public/ folder — the tunnel forwards to it automatically.',
       vercelTokenWorks: false,
     }
   }
@@ -1023,8 +1023,8 @@ function Stage3Modal({
 
   const fileCmd =
     method === 'file'
-      ? `echo "${uuid}" > .well-known/vibesecure-verify.txt`
-      : `_vibesecure-verify.${domain}  TXT  "${uuid}"`
+      ? `echo "${uuid}" > .well-known/Vguard-verify.txt`
+      : `_Vguard-verify.${domain}  TXT  "${uuid}"`
 
   const baseDomain = domain.replace(/^www\./, '')
   return (
@@ -1093,7 +1093,7 @@ function Stage3Modal({
                   <span className="font-mono text-[10px] text-(--color-fg-dim)">{freeTier ? '~ 2 min' : '~ 5 min'}</span>
                 </div>
                 <p className="text-xs text-(--color-fg-muted) leading-relaxed">
-                  Add a file at <span className="font-mono text-(--color-fg-muted)">/.well-known/vibesecure-verify.txt</span>. {freeTier ? `Works on ${freeTier.name}: ${freeTier.fileHint}` : 'Easiest if you can edit and redeploy your code (Vercel / Netlify / Lovable / Bolt / Replit users — push the file and you\'re done).'}
+                  Add a file at <span className="font-mono text-(--color-fg-muted)">/.well-known/Vguard-verify.txt</span>. {freeTier ? `Works on ${freeTier.name}: ${freeTier.fileHint}` : 'Easiest if you can edit and redeploy your code (Vercel / Netlify / Lovable / Bolt / Replit users — push the file and you\'re done).'}
                 </p>
               </div>
             </div>
@@ -1227,10 +1227,10 @@ function Stage3Modal({
               </div>
               <div className="grid grid-cols-[60px_1fr_auto] gap-2 items-center">
                 <span className="font-mono text-[10px] uppercase text-(--color-fg-dim) text-right">Name</span>
-                <code className="font-mono text-xs text-(--color-fg) bg-(--color-surface-elevated) border border-(--color-border) rounded-md px-3 py-2 overflow-x-auto whitespace-nowrap">_vibesecure-verify.{baseDomain}</code>
+                <code className="font-mono text-xs text-(--color-fg) bg-(--color-surface-elevated) border border-(--color-border) rounded-md px-3 py-2 overflow-x-auto whitespace-nowrap">_Vguard-verify.{baseDomain}</code>
                 <button
                   type="button"
-                  onClick={() => copyToClipboard(`_vibesecure-verify.${baseDomain}`, 'cmd')}
+                  onClick={() => copyToClipboard(`_Vguard-verify.${baseDomain}`, 'cmd')}
                   className="inline-flex items-center gap-1 px-3 py-2 rounded-md bg-(--color-surface-elevated) hover:bg-(--color-bg) border border-(--color-border) hover:border-(--color-accent-border) text-(--color-fg) font-mono text-xs transition-colors cursor-pointer min-h-[36px]"
                   aria-label="Copy DNS record name"
                 >
@@ -1291,10 +1291,10 @@ function Stage3Modal({
             <div className="space-y-2.5">
               <div className="grid grid-cols-[60px_1fr_auto] gap-2 items-center">
                 <span className="font-mono text-[10px] uppercase text-(--color-fg-dim) text-right">Path</span>
-                <code className="font-mono text-xs text-(--color-fg) bg-(--color-surface-elevated) border border-(--color-border) rounded-md px-3 py-2 overflow-x-auto whitespace-nowrap">/.well-known/vibesecure-verify.txt</code>
+                <code className="font-mono text-xs text-(--color-fg) bg-(--color-surface-elevated) border border-(--color-border) rounded-md px-3 py-2 overflow-x-auto whitespace-nowrap">/.well-known/Vguard-verify.txt</code>
                 <button
                   type="button"
-                  onClick={() => copyToClipboard('.well-known/vibesecure-verify.txt', 'cmd')}
+                  onClick={() => copyToClipboard('.well-known/Vguard-verify.txt', 'cmd')}
                   className="inline-flex items-center gap-1 px-3 py-2 rounded-md bg-(--color-surface-elevated) hover:bg-(--color-bg) border border-(--color-border) hover:border-(--color-accent-border) text-(--color-fg) font-mono text-xs transition-colors cursor-pointer min-h-[36px]"
                   aria-label="Copy file path"
                 >
@@ -1325,7 +1325,7 @@ function Stage3Modal({
                 </div>
               )}
               <div>
-                <span className="font-semibold text-(--color-fg)">Quick check:</span> open <span className="font-mono break-all">https://{domain}/.well-known/vibesecure-verify.txt</span> in a new tab — you should see just the UUID.
+                <span className="font-semibold text-(--color-fg)">Quick check:</span> open <span className="font-mono break-all">https://{domain}/.well-known/Vguard-verify.txt</span> in a new tab — you should see just the UUID.
               </div>
               <div>
                 <span className="font-semibold text-(--color-fg)">Shell shortcut</span> (if you have terminal access):

@@ -1,4 +1,4 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node'
+﻿import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { promises as dns } from 'node:dns'
 import { recordVerification } from './_lib/verification-store.js'
 
@@ -32,7 +32,7 @@ async function fetchWithTimeout(url: string, timeoutMs = 5000): Promise<Response
 }
 
 async function verifyFileChallenge(domain: string, uuid: string): Promise<VerifyResponse> {
-  const challengeUrl = `https://${domain}/.well-known/vibesecure-verify.txt`
+  const challengeUrl = `https://${domain}/.well-known/Vguard-verify.txt`
   try {
     const r = await fetchWithTimeout(challengeUrl, 5000)
     if (!r.ok) {
@@ -65,7 +65,7 @@ async function verifyFileChallenge(domain: string, uuid: string): Promise<Verify
 }
 
 async function verifyDnsChallenge(domain: string, uuid: string): Promise<VerifyResponse> {
-  const txtHost = `_vibesecure-verify.${domain}`
+  const txtHost = `_Vguard-verify.${domain}`
   try {
     const records = await dns.resolveTxt(txtHost).catch(() => [] as string[][])
     const flat = records.map((parts) => parts.join(''))

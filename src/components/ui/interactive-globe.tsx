@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, type PointerEvent } from 'react'
+﻿import { useRef, useEffect, useCallback, type PointerEvent } from 'react'
 import { cn } from '@/lib/utils'
 
 interface GlobeProps {
@@ -287,7 +287,7 @@ export function InteractiveGlobe({
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      aria-label="Interactive globe of recent VibeSecure scans"
+      aria-label="Interactive globe of recent Vguard scans"
       role="img"
     />
   )

@@ -1,5 +1,5 @@
-/**
- * VibeSecure — Fix Prompt Composer.
+﻿/**
+ * Vguard — Fix Prompt Composer.
  *
  * Wraps every Finding's raw fixPrompt instruction with structured context
  * an AI agent (Cursor / Claude / Lovable) needs to actually execute the fix:
@@ -238,14 +238,14 @@ function stackHint(framework: string | null, category: Category): string {
 
 /**
  * Concrete verification command an AI agent / human can run after the fix
- * to confirm it actually worked. Falls back to "rescan with VibeSecure".
+ * to confirm it actually worked. Falls back to "rescan with Vguard".
  */
 function verifyCommand(category: Category, finalUrl: string, evidence: string): string {
   let parsed: URL
   try {
     parsed = new URL(finalUrl)
   } catch {
-    return `Re-run the scan via VibeSecure and confirm the finding is gone.`
+    return `Re-run the scan via Vguard and confirm the finding is gone.`
   }
   const host = parsed.hostname
   const baseDomain = host.replace(/^www\./, '')
@@ -262,7 +262,7 @@ function verifyCommand(category: Category, finalUrl: string, evidence: string): 
     return `\`curl -sI "${cleanTarget}" | head -1\` — should return \`HTTP/2 404\` (was 200 before).`
   }
   if (category === 'tls' || category === 'mixed-content') {
-    return `Re-test with https://www.ssllabs.com/ssltest/analyze.html?d=${host} — aim for grade A or A+. Or rescan with VibeSecure.`
+    return `Re-test with https://www.ssllabs.com/ssltest/analyze.html?d=${host} — aim for grade A or A+. Or rescan with Vguard.`
   }
   if (category === 'dns') {
     return `\`dig +short DNSKEY ${baseDomain}\` (DNSSEC) or \`dig +short CAA ${baseDomain}\` (CAA) — should return your records.`
@@ -277,9 +277,9 @@ function verifyCommand(category: Category, finalUrl: string, evidence: string): 
     return `\`curl -sX OPTIONS "${finalUrl}" -i | grep -i "allow:"\` — should NOT list TRACE; only the methods you intentionally support.`
   }
   if (category === 'secrets' || category === 'deps' || category === 'integrity' || category === 'html' || category === 'ai' || category === 'auth') {
-    return `Rescan with VibeSecure. The finding should disappear. (For secrets: also confirm the leaked key is rotated at the provider — \`curl\` with the old key should return 401.)`
+    return `Rescan with Vguard. The finding should disappear. (For secrets: also confirm the leaked key is rotated at the provider — \`curl\` with the old key should return 401.)`
   }
-  return `Re-scan with VibeSecure at ${RESCAN_BASE}${encodeURIComponent(finalUrl)} and confirm the finding no longer appears.`
+  return `Re-scan with Vguard at ${RESCAN_BASE}${encodeURIComponent(finalUrl)} and confirm the finding no longer appears.`
 }
 
 /**
@@ -304,7 +304,7 @@ export function composeFixPrompt(finding: Finding, ctx: ComposeContext): string 
   const rescanLink = `${RESCAN_BASE}${encodeURIComponent(ctx.finalUrl)}`
 
   const blocks: string[] = [
-    `# 🛡️ VibeSecure fix prompt`,
+    `# 🛡️ Vguard fix prompt`,
     ``,
     `**Finding:** ${finding.title}`,
     `**Severity:** ${SEVERITY_LINE[finding.severity]}`,

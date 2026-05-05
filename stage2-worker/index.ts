@@ -1,5 +1,5 @@
-/**
- * VibeSecure Stage 2 Playwright worker. Deploy to Railway / Fly / your-own-host.
+﻿/**
+ * Vguard Stage 2 Playwright worker. Deploy to Railway / Fly / your-own-host.
  * Does NOT run on Vercel — @sparticuz/chromium cold starts are too slow for an
  * interactive UX. Better to keep a small dedicated worker on Railway that the
  * Vercel proxy endpoint hits.
@@ -11,7 +11,7 @@
  *
  * Auth: requires `Authorization: Bearer <STAGE2_WORKER_TOKEN>` header.
  * Set STAGE2_WORKER_TOKEN to a long random string (and add the same value
- * to the VibeSecure Vercel env vars).
+ * to the Vguard Vercel env vars).
  */
 import express from 'express'
 import { chromium, type Browser, type Request as PWRequest } from 'playwright-chromium'
@@ -321,7 +321,7 @@ app.post('/scan', async (req, res) => {
 
   const browser = await getBrowser()
   const context = await browser.newContext({
-    userAgent: 'VibeSecure-Stage2/0.1',
+    userAgent: 'Vguard-Stage2/0.1',
     viewport: { width: 1280, height: 800 },
   })
   const page = await context.newPage()
@@ -509,5 +509,5 @@ app.get('/healthz', (_req, res) => {
 
 app.listen(PORT, () => {
   // eslint-disable-next-line no-console
-  console.log(`vibesecure stage2 worker listening on :${PORT}`)
+  console.log(`Vguard stage2 worker listening on :${PORT}`)
 })

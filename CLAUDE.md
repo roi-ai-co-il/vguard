@@ -1,6 +1,6 @@
-# VibeSecure — security scanner for vibe-coded apps
+﻿# Vguard — security scanner for vibe-coded apps
 
-> Co-founders: Royi + Oded (joined 2026-04-29). Idea note: [`Knowledge/09 רעיונות/VibeSecure.md`](../../Knowledge/09%20רעיונות/VibeSecure.md). Attack catalog: [`Knowledge/09 רעיונות/VibeSecure - Attack Catalog.md`](../../Knowledge/09%20רעיונות/VibeSecure%20-%20Attack%20Catalog.md).
+> Co-founders: Royi + Oded (joined 2026-04-29). Idea note: [`Knowledge/09 רעיונות/Vguard.md`](../../Knowledge/09%20רעיונות/Vguard.md). Attack catalog: [`Knowledge/09 רעיונות/Vguard - Attack Catalog.md`](../../Knowledge/09%20רעיונות/Vguard%20-%20Attack%20Catalog.md).
 
 ## What it is
 
@@ -37,7 +37,7 @@ External-only checks, nothing that looks like an attack. The user pastes a URL a
 - Forms + endpoints discovery (CSRF tokens, AI endpoints, auth signup probes)
 - Active probing: Open Redirect canary, reflected XSS canary, SQLi error-based
 
-**~75 detectors, ~99% of URL-only spec coverage.** See [`Knowledge/09 רעיונות/VibeSecure - Attack Catalog.md`](../../Knowledge/09%20רעיונות/VibeSecure%20-%20Attack%20Catalog.md) for the live list.
+**~75 detectors, ~99% of URL-only spec coverage.** See [`Knowledge/09 רעיונות/Vguard - Attack Catalog.md`](../../Knowledge/09%20רעיונות/Vguard%20-%20Attack%20Catalog.md) for the live list.
 
 The current `api/scan.ts` is Stage 1. Stages 2 and 3 are separate endpoints + UI flows.
 
@@ -63,7 +63,7 @@ Detail + detection methods in the Catalog `🔵 Planned Stage 1 enhancements` se
 The Stage 2 modal exposes both. Server-side is presented as the default ("Quick path"), bookmarklet as the fallback.
 
 
-For sites that block external scanning, hide behind login walls, or have client-set state we want to inspect. Implemented as a **bookmarklet** — the user drags a button to their bookmarks bar, opens their site, clicks the bookmarklet; the embedded JS collects client-side data and POSTs to `/api/stage2-collect`. The VibeSecure UI polls `/api/stage2-results?uuid=...` until findings arrive.
+For sites that block external scanning, hide behind login walls, or have client-set state we want to inspect. Implemented as a **bookmarklet** — the user drags a button to their bookmarks bar, opens their site, clicks the bookmarklet; the embedded JS collects client-side data and POSTs to `/api/stage2-collect`. The Vguard UI polls `/api/stage2-results?uuid=...` until findings arrive.
 
 **Why bookmarklet, not Playwright:** server-side Playwright (Vercel `@sparticuz/chromium` or a Railway worker) is the more powerful approach but requires hosting infrastructure. Bookmarklet is achievable today, runs ON the user's actual site origin (sees their real session), and the JS source is human-readable so users can audit what we collect.
 
@@ -85,7 +85,7 @@ For sites that block external scanning, hide behind login walls, or have client-
 
 **Files:**
 - `api/stage2-collect.ts` — POST endpoint, CORS open (bookmarklet runs on user origin)
-- `api/stage2-results.ts` — GET endpoint, polled by VibeSecure UI
+- `api/stage2-results.ts` — GET endpoint, polled by Vguard UI
 - `src/components/NextStagesPanel.tsx#Stage2Modal` — bookmarklet generator + drag-handle + polling UI
 
 **Future upgrade path to Playwright:**
@@ -107,8 +107,8 @@ Aggressive probing that's only legal/ethical when the user proves they own the t
 
 **Three verification methods (any one suffices):**
 
-1. **File challenge** — VibeSecure issues a UUID. User uploads `https://<domain>/.well-known/vibesecure-verify.txt` containing the UUID. We GET the file, match — verified.
-2. **DNS TXT** — User adds `_vibesecure-verify.<domain> TXT "<uuid>"`. We `dns.resolveTxt`. Slower but works for sites that can't easily upload files.
+1. **File challenge** — Vguard issues a UUID. User uploads `https://<domain>/.well-known/Vguard-verify.txt` containing the UUID. We GET the file, match — verified.
+2. **DNS TXT** — User adds `_Vguard-verify.<domain> TXT "<uuid>"`. We `dns.resolveTxt`. Slower but works for sites that can't easily upload files.
 3. **Vercel personal access token (live 2026-05-02)** — user pastes a token from vercel.com/account/tokens. `/api/verify-vercel-token` calls Vercel API to list the user's projects + team projects, checks domain alias match, marks verified, discards token. **Why not OAuth?** Vercel doesn't expose an API to create OAuth Integrations; the OAuth Integration registration is UI-only at vercel.com/dashboard/integrations/console. The paste-token path achieves the same proof (the user must hold a token from the Vercel account that owns the domain) without that one-time UI step. The OAuth flow code (`api/oauth/vercel/start.ts` + `callback.ts`) remains dormant in the repo for the day Royi sets up the Integration.
 
 **What Stage 3 unlocks:**
@@ -122,7 +122,7 @@ Aggressive probing that's only legal/ethical when the user proves they own the t
 
 **Storage of verification proof:** Supabase `vs_verified_domains` table (domain, method, verified_at, expires_at, scan_token). Verification expires after 30 days; user can re-verify.
 
-**Legal / TOS:** every Stage 3 scan starts with a confirmation modal — "I confirm I own ${domain} and authorize VibeSecure to send active probes". Logged for audit.
+**Legal / TOS:** every Stage 3 scan starts with a confirmation modal — "I confirm I own ${domain} and authorize Vguard to send active probes". Logged for audit.
 
 ### Where each stage lives in code
 
@@ -185,7 +185,7 @@ src/
       vibe-score-gauge.tsx   # 270° radial gauge, severity gradient
   App.tsx
   index.css           # Tailwind 4 @theme block + shadcn semantic-token compat layer
-vite.config.ts        # plugin "vibesecure-dev-api" exposes /api/scan during `npm run dev`
+vite.config.ts        # plugin "Vguard-dev-api" exposes /api/scan during `npm run dev`
 vercel.json           # function maxDuration: 30, hardening headers on the marketing site
 tsconfig.api.json     # separate project ref for api/, paths alias only
 tsconfig.app.json     # frontend, paths alias for @/*
@@ -201,16 +201,32 @@ tsconfig.app.json     # frontend, paths alias for @/*
 
 ## Deploy
 
-Linked to Vercel project `vibesecure` in team `team_evbzoCbdWuVIB4ZDwEfZ0Oeg`.
+Linked to Vercel project `Vguard` in team `team_evbzoCbdWuVIB4ZDwEfZ0Oeg`.
 
-**Production deploy command** (from `vibesecure/`):
+**Production deploy command** (from `Vguard/`):
 
 ```bash
 source ~/.claude/.env.global
 GIT_CEILING_DIRECTORIES="$(pwd)/.." npx vercel deploy --prod --yes
 ```
 
-`GIT_CEILING_DIRECTORIES` is required because `vibesecure/` lives inside the `my mind/` Obsidian vault, which has its own `.git` with author `royi@roiai.co.il`. Without the ceiling, Vercel CLI climbs up and the deploy fails with the team-author guard. Same root cause as the booking-app `mv .git` lesson in [`ROI-AI/CLAUDE.md`](../CLAUDE.md), but `GIT_CEILING_DIRECTORIES` is the cleaner fix and works for any nested project.
+**Stage 2 worker (Railway) — force-deploy IDs.** When the GitHub webhook fails to fire (see `feedback_railway_webhook_can_silently_break`), force a fresh build via the Railway API using these IDs:
+
+- Project: `vibesecure-stage2` → `19b15ff4-3a22-4c39-944d-95c8db4c5604`
+- Service: `stage2-worker` → `a3022f8a-f1b4-4fa2-8622-f985fef8865b`
+- Environment (production): `f8ce2d1e-2d96-4a59-a496-34749f1eb159`
+- Source repo: `roi-ai-co-il/vibesecure-stage2-worker`, branch `main`
+
+```bash
+source ~/.claude/.env.global
+SHA=$(git -C stage2-worker rev-parse HEAD)  # or pass any commit sha
+curl -s -X POST https://backboard.railway.app/graphql/v2 \
+  -H "Authorization: Bearer $RAILWAY_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"query\":\"mutation { serviceInstanceDeployV2(serviceId: \\\"a3022f8a-f1b4-4fa2-8622-f985fef8865b\\\", environmentId: \\\"f8ce2d1e-2d96-4a59-a496-34749f1eb159\\\", commitSha: \\\"$SHA\\\") }\"}"
+```
+
+`GIT_CEILING_DIRECTORIES` is required because `Vguard/` lives inside the `my mind/` Obsidian vault, which has its own `.git` with author `royi@roiai.co.il`. Without the ceiling, Vercel CLI climbs up and the deploy fails with the team-author guard. Same root cause as the booking-app `mv .git` lesson in [`ROI-AI/CLAUDE.md`](../CLAUDE.md), but `GIT_CEILING_DIRECTORIES` is the cleaner fix and works for any nested project.
 
 **After deploy:** verify the public URL alias separately — Vercel's "promote to prod" can leave the public alias stuck on an older deployment (see `feedback_vercel_alias_vs_production_target` in MEMORY.md). Use `chrome-devtools` MCP to navigate the production URL and confirm a real scan succeeds end-to-end.
 
@@ -231,7 +247,7 @@ The deploy itself also got hardening headers (CSP / COOP / COEP=credentialless /
 - No Auth, no rate limiting, no DB persistence. The scanner is fully stateless. This is a public free-tier risk — when usage picks up, gate it.
 - No authenticated test mode. Tier "Team" in pricing advertises this, but the wiring isn't there.
 - No Supabase RLS deep probes (the actual wedge from the idea note). Needs anon-key intake from the user + careful legal copy ("I own this domain").
-- No prompt-injection canaries against `/api/chat`-style endpoints. Catalog ready in [`VibeSecure - Attack Catalog`](../../Knowledge/09%20רעיונות/VibeSecure%20-%20Attack%20Catalog.md), no execution yet.
+- No prompt-injection canaries against `/api/chat`-style endpoints. Catalog ready in [`Vguard - Attack Catalog`](../../Knowledge/09%20רעיונות/Vguard%20-%20Attack%20Catalog.md), no execution yet.
 - The "Live · scanning the world" section uses 4 hardcoded findings + a decorative globe. When `vs_scans` table exists with ≥50 real scans, wire this to a tail of recent findings.
 
 ## Adding a new detector

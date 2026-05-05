@@ -1,4 +1,4 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node'
+﻿import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { promises as dns } from 'node:dns'
 import { runScan } from './_lib/scanner.js'
 import { runDeepScan } from './_lib/deep-scanner.js'
@@ -40,7 +40,7 @@ async function verifyOwnership(
   if (method === 'oauth') return false
   if (method === 'file') {
     try {
-      const r = await fetchWithTimeout(`https://${domain}/.well-known/vibesecure-verify.txt`, 5000)
+      const r = await fetchWithTimeout(`https://${domain}/.well-known/Vguard-verify.txt`, 5000)
       if (!r.ok) return false
       const body = (await r.text()).trim()
       return body === uuid || body.includes(uuid)
@@ -50,7 +50,7 @@ async function verifyOwnership(
   }
   // DNS
   try {
-    const records = await dns.resolveTxt(`_vibesecure-verify.${domain}`).catch(() => [] as string[][])
+    const records = await dns.resolveTxt(`_Vguard-verify.${domain}`).catch(() => [] as string[][])
     return records.map((parts) => parts.join('')).some((rec) => rec.includes(uuid))
   } catch {
     return false

@@ -1,5 +1,5 @@
-/**
- * VibeSecure — Risk scorer.
+﻿/**
+ * Vguard — Risk scorer.
  *
  * Maps each Finding to a CVSS-style 0.0–10.0 score so the UI can rank
  * "fix-first" within the same severity bucket. Severity alone is too coarse:

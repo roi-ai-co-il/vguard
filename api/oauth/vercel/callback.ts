@@ -1,4 +1,4 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node'
+﻿import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { createClient } from '@supabase/supabase-js'
 import { recordVerification } from '../../_lib/verification-store.js'
 
@@ -26,7 +26,10 @@ interface VercelProject {
 async function fetchTokenFromVercel(code: string): Promise<VercelTokenResponse> {
   const clientId = process.env.VERCEL_OAUTH_CLIENT_ID
   const clientSecret = process.env.VERCEL_OAUTH_CLIENT_SECRET
-  const publicOrigin = process.env.VIBESECURE_PUBLIC_ORIGIN || 'https://vibesecure-tau.vercel.app'
+  const publicOrigin =
+    process.env.VGUARD_PUBLIC_ORIGIN ||
+    process.env.VIBESECURE_PUBLIC_ORIGIN ||
+    'https://vibesecure-tau.vercel.app'
   const params = new URLSearchParams({
     client_id: clientId ?? '',
     client_secret: clientSecret ?? '',
@@ -93,7 +96,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .send(
         htmlPage(
           'Vercel OAuth declined',
-          `<p>${error}</p><p><a href="/">Return to VibeSecure</a></p>`,
+          `<p>${error}</p><p><a href="/">Return to Vguard</a></p>`,
           false,
         ),
       )
@@ -170,7 +173,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .send(
         htmlPage(
           'Ownership not confirmed',
-          `<p>The Vercel account you authorized with does not own a project that aliases <b>${domain}</b>. Try DNS or file verification, or sign in with the correct Vercel account.</p><p><a href="/">Back to VibeSecure</a></p>`,
+          `<p>The Vercel account you authorized with does not own a project that aliases <b>${domain}</b>. Try DNS or file verification, or sign in with the correct Vercel account.</p><p><a href="/">Back to Vguard</a></p>`,
           false,
         ),
       )
@@ -186,7 +189,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     .send(
       htmlPage(
         'Verified',
-        `<p>Confirmed via Vercel OAuth that you own <b>${domain}</b>.</p><p>Return to the VibeSecure tab and click <b>Verify now</b> — the cached proof will unlock Stage 3 instantly.</p><p><a href="/">Open VibeSecure</a></p>`,
+        `<p>Confirmed via Vercel OAuth that you own <b>${domain}</b>.</p><p>Return to the Vguard tab and click <b>Verify now</b> — the cached proof will unlock Stage 3 instantly.</p><p><a href="/">Open Vguard</a></p>`,
         true,
       ),
     )

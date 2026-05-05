@@ -1,4 +1,4 @@
-# Stage 3 — Vercel OAuth Setup (one-time, ~5 min)
+﻿# Stage 3 — Vercel OAuth Setup (one-time, ~5 min)
 
 The OAuth verification method ("Verify with Vercel" button in the Stage 3 modal) requires a Vercel Integration that Anthropic's API can't create remotely. You do this once via the Vercel UI.
 
@@ -7,11 +7,11 @@ The OAuth verification method ("Verify with Vercel" button in the Stage 3 modal)
 1. Open https://vercel.com/dashboard/integrations/console
 2. Click **Create Integration** (top right)
 3. Fill in:
-   - **Name:** `VibeSecure`
-   - **Slug:** `vibesecure` (any unique slug — doesn't need to match anything)
+   - **Name:** `Vguard`
+   - **Slug:** `Vguard` (any unique slug — doesn't need to match anything)
    - **Logo:** optional, can skip
    - **Categories:** Security
-   - **Description:** `Verify domain ownership for VibeSecure deep scans.`
+   - **Description:** `Verify domain ownership for Vguard deep scans.`
    - **Redirect URLs:** `https://vibesecure-tau.vercel.app/api/oauth/vercel/callback`
    - **Configurable URLs:** leave empty
    - **Permissions / Scopes:** check **`read:project`** (lets us list the user's projects + aliases to confirm ownership)
@@ -23,10 +23,10 @@ The OAuth verification method ("Verify with Vercel" button in the Stage 3 modal)
 From PowerShell on your machine (since the cowork network blocks Vercel CLI sync from my side):
 
 ```powershell
-cd "c:\Users\royia\01_Business\my mind\ROI-AI\vibesecure"
+cd "c:\Users\royia\01_Business\my mind\ROI-AI\Vguard"
 echo "<CLIENT_ID>" | npx vercel env add VERCEL_OAUTH_CLIENT_ID production
 echo "<CLIENT_SECRET>" | npx vercel env add VERCEL_OAUTH_CLIENT_SECRET production
-echo "https://vibesecure-tau.vercel.app" | npx vercel env add VIBESECURE_PUBLIC_ORIGIN production
+echo "https://vibesecure-tau.vercel.app" | npx vercel env add VGUARD_PUBLIC_ORIGIN production
 $env:GIT_CEILING_DIRECTORIES="c:\Users\royia\01_Business\my mind\ROI-AI"
 npx vercel deploy --prod --yes
 ```
