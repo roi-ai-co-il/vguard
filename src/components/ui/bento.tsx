@@ -24,18 +24,18 @@ export function BentoCard({ className, eyebrow, title, description, graphic }: B
         className,
       )}
     >
-      <div className="relative h-[14rem] sm:h-[16rem] shrink-0 overflow-hidden">
+      <div className="relative h-[12rem] sm:h-[16rem] shrink-0 overflow-hidden">
         {graphic}
         <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-(--color-surface) via-(--color-surface)/80 to-transparent pointer-events-none" />
       </div>
-      <div className="relative px-6 pt-2 pb-6 z-10">
+      <div className="relative px-5 sm:px-6 pt-2 pb-5 sm:pb-6 z-10">
         <div className="font-mono text-[10px] tracking-widest uppercase text-(--color-accent)">
           {eyebrow}
         </div>
-        <h3 className="mt-1.5 text-lg sm:text-xl font-semibold tracking-tight text-(--color-fg) leading-snug">
+        <h3 className="mt-1.5 text-[17px] sm:text-xl font-semibold tracking-tight text-(--color-fg) leading-snug">
           {title}
         </h3>
-        <p className="mt-2 text-sm text-(--color-fg-muted) leading-relaxed">{description}</p>
+        <p className="mt-2 text-[13.5px] sm:text-sm text-(--color-fg-muted) leading-relaxed">{description}</p>
       </div>
     </motion.div>
   )

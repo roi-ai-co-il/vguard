@@ -208,20 +208,20 @@ export default function App() {
         transition={{ duration: 0.4 }}
         className="relative border-b border-(--color-border) backdrop-blur-sm bg-(--color-bg)/60 z-10"
       >
-        <div className="max-w-6xl mx-auto px-6 py-5 flex items-center justify-between">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-4 sm:py-5 flex items-center justify-between gap-3">
           <a href="/" className="flex items-center gap-2 font-mono text-sm" aria-label="VibeSecure home">
             <ShieldCheck size={18} className="text-(--color-accent)" strokeWidth={2.25} aria-hidden="true" />
             <span className="font-semibold tracking-tight">vibesecure</span>
             <span className="text-(--color-fg-dim) animate-pulse">_</span>
           </a>
-          <div className="font-mono text-xs text-(--color-fg-dim) hidden sm:block">
-            beta · invitation only
+          <div className="font-mono text-[10px] sm:text-xs text-(--color-fg-dim) tracking-widest uppercase">
+            beta · invite-only
           </div>
         </div>
       </motion.header>
 
       <main className="relative flex-1 z-10">
-        <section className="max-w-6xl mx-auto px-6 pt-20 sm:pt-32 pb-20 sm:pb-28">
+        <section className="max-w-6xl mx-auto px-4 sm:px-6 pt-12 sm:pt-32 pb-14 sm:pb-28">
           <motion.div
             initial="hidden"
             animate="show"
@@ -233,7 +233,7 @@ export default function App() {
             <motion.div
               variants={fadeUp}
               transition={{ duration: 0.5 }}
-              className="inline-flex items-center gap-2 font-mono text-xs text-(--color-accent) mb-6 tracking-widest uppercase px-3 py-1.5 rounded-full bg-(--color-accent-muted) border border-(--color-accent-border)"
+              className="inline-flex items-center gap-2 font-mono text-[10px] sm:text-xs text-(--color-accent) mb-5 sm:mb-6 tracking-widest uppercase px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full bg-(--color-accent-muted) border border-(--color-accent-border)"
             >
               <span className="inline-block w-1.5 h-1.5 rounded-full bg-(--color-accent) animate-pulse" aria-hidden="true" />
               Security · for vibe-coded apps
@@ -241,14 +241,14 @@ export default function App() {
             <motion.h1
               variants={fadeUp}
               transition={{ duration: 0.6 }}
-              className="text-[2.75rem] sm:text-6xl lg:text-7xl font-bold tracking-tight leading-[1.05] max-w-4xl"
+              className="text-[2rem] sm:text-6xl lg:text-7xl font-bold tracking-tight leading-[1.1] sm:leading-[1.05] max-w-4xl text-balance"
             >
               45% of AI-generated code <span className="text-(--color-fg-muted)">fails</span> security tests.
             </motion.h1>
             <motion.p
               variants={fadeUp}
               transition={{ duration: 0.6 }}
-              className="mt-6 text-base sm:text-lg lg:text-xl text-(--color-fg-muted) max-w-2xl leading-relaxed"
+              className="mt-5 sm:mt-6 text-[15px] sm:text-lg lg:text-xl text-(--color-fg-muted) max-w-2xl leading-relaxed"
             >
               Scan your{' '}
               <TypingEffect
@@ -263,17 +263,17 @@ export default function App() {
             <motion.p
               variants={fadeUp}
               transition={{ duration: 0.6 }}
-              className="mt-3 text-sm text-(--color-fg-dim) max-w-2xl leading-relaxed"
+              className="mt-3 text-[13px] sm:text-sm text-(--color-fg-dim) max-w-2xl leading-relaxed"
             >
               <span className="text-(--color-accent)">▸</span> No source code. No enterprise plan. Just a URL.
             </motion.p>
-            <motion.div variants={fadeUp} transition={{ duration: 0.6 }} className="mt-10">
+            <motion.div variants={fadeUp} transition={{ duration: 0.6 }} className="mt-7 sm:mt-10">
               <ScanForm />
             </motion.div>
             <motion.div
               variants={fadeUp}
               transition={{ duration: 0.6 }}
-              className="mt-4 font-mono text-xs text-(--color-fg-dim) flex items-center gap-1.5"
+              className="mt-4 font-mono text-[11px] sm:text-xs text-(--color-fg-dim) flex items-center gap-1.5"
             >
               <ArrowRight size={11} className="text-(--color-accent)" aria-hidden="true" />
               First scan free. No card. No bullshit.
@@ -282,22 +282,22 @@ export default function App() {
         </section>
 
         <section className="border-t border-(--color-border) relative">
-          <div className="max-w-6xl mx-auto px-6 py-16 sm:py-20 grid lg:grid-cols-12 gap-10 items-center">
+          <div className="max-w-6xl mx-auto px-4 sm:px-6 py-12 sm:py-20 grid lg:grid-cols-12 gap-8 sm:gap-10 items-center">
             <motion.div
               initial={{ opacity: 0, y: 12 }}
               whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true, amount: 0.3 }}
+              viewport={{ once: true, amount: 'some' }}
               transition={{ duration: 0.5 }}
-              className="lg:col-span-5 order-2 lg:order-1"
+              className="lg:col-span-5"
             >
-              <div className="inline-flex items-center gap-2 font-mono text-xs text-(--color-accent) mb-4 tracking-widest uppercase px-3 py-1.5 rounded-full bg-(--color-accent-muted) border border-(--color-accent-border)">
+              <div className="inline-flex items-center gap-2 font-mono text-[10px] sm:text-xs text-(--color-accent) mb-4 tracking-widest uppercase px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full bg-(--color-accent-muted) border border-(--color-accent-border)">
                 <Activity size={12} aria-hidden="true" />
                 Live · scanning the world
               </div>
-              <h2 className="text-2xl sm:text-3xl font-semibold tracking-tight">
+              <h2 className="text-[1.5rem] sm:text-3xl font-semibold tracking-tight leading-[1.15] text-balance">
                 Right now, somewhere on the planet, a vibe-coded app just leaked a secret.
               </h2>
-              <p className="mt-3 text-(--color-fg-muted) text-sm sm:text-base leading-relaxed">
+              <p className="mt-3 text-(--color-fg-muted) text-[14px] sm:text-base leading-relaxed">
                 Drag the globe. Each pulse is a region where developers ship Cursor / Lovable / Bolt apps without a security review. We help them find the leaks before attackers do.
               </p>
 
@@ -371,31 +371,33 @@ export default function App() {
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               whileInView={{ opacity: 1, scale: 1 }}
-              viewport={{ once: true, amount: 0.2 }}
+              viewport={{ once: true, amount: 'some' }}
               transition={{ duration: 0.6 }}
-              className="lg:col-span-7 order-1 lg:order-2 flex items-center justify-center min-h-[420px]"
+              className="lg:col-span-7 flex items-center justify-center"
             >
-              <InteractiveGlobe size={520} />
+              <div className="w-full max-w-[320px] sm:max-w-[520px] aspect-square">
+                <InteractiveGlobe size={520} className="!w-full !h-full" />
+              </div>
             </motion.div>
           </div>
         </section>
 
         <section className="border-t border-(--color-border) relative">
-          <div className="max-w-6xl mx-auto px-6 py-16 sm:py-20">
+          <div className="max-w-6xl mx-auto px-4 sm:px-6 py-12 sm:py-20">
             <motion.div
               initial={{ opacity: 0, y: 12 }}
               whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true, amount: 0.5 }}
+              viewport={{ once: true, amount: 'some' }}
               transition={{ duration: 0.5 }}
-              className="mb-10 max-w-2xl"
+              className="mb-8 sm:mb-10 max-w-2xl"
             >
-              <div className="font-mono text-xs text-(--color-fg-dim) tracking-widest uppercase mb-3">
+              <div className="font-mono text-[10px] sm:text-xs text-(--color-fg-dim) tracking-widest uppercase mb-3">
                 What we scan
               </div>
-              <h2 className="text-2xl sm:text-3xl font-semibold tracking-tight">
+              <h2 className="text-[1.75rem] sm:text-3xl font-semibold tracking-tight leading-[1.15] text-balance">
                 Built for the way you actually ship.
               </h2>
-              <p className="mt-3 text-(--color-fg-muted) text-sm sm:text-base">
+              <p className="mt-3 text-(--color-fg-muted) text-[14px] sm:text-base leading-relaxed">
                 Whether you ship plain HTML or a full React app, we map the surfaces AI tools tend to leak through.
               </p>
             </motion.div>
@@ -403,7 +405,7 @@ export default function App() {
             <motion.div
               initial={{ opacity: 0, y: 16 }}
               whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true, amount: 0.1 }}
+              viewport={{ once: true, amount: 'some' }}
               transition={{ duration: 0.5 }}
             >
               <BentoGrid cards={SCAN_CARDS} />
@@ -414,10 +416,10 @@ export default function App() {
               whileInView={{ opacity: 1 }}
               viewport={{ once: true }}
               transition={{ duration: 0.5, delay: 0.3 }}
-              className="mt-6 font-mono text-xs text-(--color-fg-dim) flex items-center gap-2"
+              className="mt-6 font-mono text-[11px] sm:text-xs text-(--color-fg-dim) flex items-start sm:items-center gap-2"
             >
-              <Sparkles size={12} className="text-(--color-accent)" aria-hidden="true" />
-              + 70 more checks across OWASP 2021, AI-native vulns, Firebase &amp; static HTML hygiene.
+              <Sparkles size={12} className="text-(--color-accent) mt-0.5 sm:mt-0 flex-shrink-0" aria-hidden="true" />
+              <span className="leading-relaxed">+ 70 more checks across OWASP 2021, AI-native vulns, Firebase &amp; static HTML hygiene.</span>
             </motion.p>
           </div>
         </section>
@@ -426,12 +428,12 @@ export default function App() {
           <motion.div
             initial="hidden"
             whileInView="show"
-            viewport={{ once: true, amount: 0.2 }}
+            viewport={{ once: true, amount: 'some' }}
             variants={{
               hidden: {},
               show: { transition: { staggerChildren: 0.12 } },
             }}
-            className="max-w-6xl mx-auto px-6 py-16 sm:py-20 grid sm:grid-cols-3 gap-8 sm:gap-10"
+            className="max-w-6xl mx-auto px-4 sm:px-6 py-12 sm:py-20 grid sm:grid-cols-3 gap-8 sm:gap-10"
           >
             {STEPS.map((s) => (
               <motion.div
@@ -442,15 +444,15 @@ export default function App() {
                 }}
                 transition={{ duration: 0.4 }}
               >
-                <div className="flex items-center gap-3 mb-4">
+                <div className="flex items-center gap-3 mb-3 sm:mb-4">
                   <span className="flex items-center justify-center w-10 h-10 rounded-lg bg-(--color-accent-muted) text-(--color-accent) border border-(--color-accent-border)">
                     <s.Icon size={18} strokeWidth={2} aria-hidden="true" />
                   </span>
-                  <div className="font-mono text-xs text-(--color-accent) tracking-widest uppercase">
+                  <div className="font-mono text-[11px] sm:text-xs text-(--color-accent) tracking-widest uppercase">
                     {s.n} · {s.title}
                   </div>
                 </div>
-                <p className="text-sm sm:text-base text-(--color-fg-muted) leading-relaxed">{s.body}</p>
+                <p className="text-[14px] sm:text-base text-(--color-fg-muted) leading-relaxed">{s.body}</p>
               </motion.div>
             ))}
           </motion.div>
@@ -458,7 +460,7 @@ export default function App() {
       </main>
 
       <footer className="relative border-t border-(--color-border) mt-auto z-10">
-        <div className="max-w-6xl mx-auto px-6 py-6 flex items-center justify-between font-mono text-xs text-(--color-fg-dim)">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-5 sm:py-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-1 sm:gap-0 font-mono text-[11px] sm:text-xs text-(--color-fg-dim)">
           <span>© 2026 VibeSecure</span>
           <span>built by ROI AI · in stealth</span>
         </div>
