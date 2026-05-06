@@ -165,6 +165,25 @@ function buildLiveApiMap(data: WorkerScanResult): LiveApiMap {
   // Helper inlined here so it stays close to the unauth-filter that consumes it.
   // Path patterns intended to be unauth-by-design across the ecosystem; flagging
   // them as a privilege-leak produces noise the user can't act on.
+  const WELL_KNOWN_PUBLIC_PATHS: RegExp[] = [
+    /^\/(api\/)?health(z)?$/i,
+    /^\/(api\/)?status$/i,
+    /^\/(api\/)?ping$/i,
+    /^\/(api\/)?version$/i,
+    /^\/api\/auth\/(signin|signup|login|register|callback|providers|csrf|session)/i,
+    /^\/_next\//i,
+    /^\/static\//i,
+    /^\/assets\//i,
+    /^\/favicon\.ico$/i,
+    /^\/robots\.txt$/i,
+    /^\/sitemap(\.xml|.*\.xml)?$/i,
+    /^\/manifest\.json$/i,
+    /^\/\.well-known\//i,
+    /^\/openapi(\.json|\.yaml)?$/i,
+    /^\/swagger(\.json|\.yaml)?$/i,
+    /^\/api-docs/i,
+    /^\/graphql\/?$/i,
+  ]
   // eslint-disable-next-line no-inner-declarations
   function isWellKnownPublicEndpoint(rawUrl: string): boolean {
     let path = rawUrl
