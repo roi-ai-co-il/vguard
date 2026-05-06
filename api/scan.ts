@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { createClient } from '@supabase/supabase-js'
 import { runScan } from './_lib/scanner.js'
+import { logAuditEvent, fireAndForget } from './_lib/audit-log.js'
 import type { Finding, ScanResult } from '../src/lib/scanner-types.js'
 
 async function logScan(
@@ -75,6 +76,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .json({ ok: false, error: { code: 'invalid_url', message: 'Missing "url" in request body.' } })
   }
 
+  fireAndForget(
+    logAuditEvent(req, { event_type: 'scan_started', scanned_url: targetUrl }),
+  )
+
   try {
     const result = await runScan(targetUrl)
     if (result.ok) {
@@ -83,10 +88,41 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       logScan(result, country).catch(() => {
         // ignore
       })
+      fireAndForget(
+        logAuditEvent(req, {
+          event_type: 'scan_completed',
+          scanned_url: targetUrl,
+          scan_outcome: 'success',
+          vibe_score: result.vibeScore,
+          metadata: {
+            critical: result.totals.critical,
+            warn: result.totals.warn,
+            info: result.totals.info,
+            framework: result.meta.detectedFramework ?? undefined,
+            duration_ms: result.durationMs,
+          },
+        }),
+      )
+    } else {
+      fireAndForget(
+        logAuditEvent(req, {
+          event_type: 'scan_failed',
+          scanned_url: targetUrl,
+          scan_outcome: result.error.code,
+        }),
+      )
     }
     return res.status(200).json(result)
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : 'unknown error'
+    fireAndForget(
+      logAuditEvent(req, {
+        event_type: 'scan_failed',
+        scanned_url: targetUrl,
+        scan_outcome: 'internal_error',
+        metadata: { error: msg.slice(0, 200) },
+      }),
+    )
     return res
       .status(500)
       .json({ ok: false, error: { code: 'internal', message: msg } })

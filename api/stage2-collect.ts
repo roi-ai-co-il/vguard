@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { createClient } from '@supabase/supabase-js'
+import { logAuditEvent, fireAndForget } from './_lib/audit-log.js'
 
 export const config = {
   runtime: 'nodejs',
@@ -89,6 +90,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         user_agent: ua,
       },
       { onConflict: 'uuid' },
+    )
+    fireAndForget(
+      logAuditEvent(req, {
+        event_type: 'stage2_completed',
+        scanned_url: url.slice(0, 1000),
+        session_id: uuid,
+        metadata: {
+          cookie_count: safeData.cookieKeys.length,
+          local_storage_count: safeData.localStorageKeys.length,
+          session_storage_count: safeData.sessionStorageKeys.length,
+          performance_url_count: safeData.performanceUrls.length,
+        },
+      }),
     )
     return res.status(200).json({ ok: true })
   } catch (e) {

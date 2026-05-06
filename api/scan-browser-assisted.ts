@@ -15,6 +15,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import type { Finding } from '../src/lib/scanner-types.js'
 import { enrichFindings } from './_lib/fix-prompt-composer.js'
 import { applyRisk, classifyRouteContext } from './_lib/risk-scorer.js'
+import { logAuditEvent, fireAndForget } from './_lib/audit-log.js'
 
 export const config = {
   runtime: 'nodejs',
@@ -165,6 +166,13 @@ function buildLiveApiMap(data: WorkerScanResult): LiveApiMap {
   // Helper inlined here so it stays close to the unauth-filter that consumes it.
   // Path patterns intended to be unauth-by-design across the ecosystem; flagging
   // them as a privilege-leak produces noise the user can't act on.
+  const WELL_KNOWN_PUBLIC_PATHS: RegExp[] = [
+    /^\/(health|healthz|status|version|ping|ready|live)\/?$/i,
+    /^\/api\/(health|healthz|status|version|ping|ready|live)\/?$/i,
+    /^\/(manifest\.json|robots\.txt|sitemap\.xml|favicon\.ico)$/i,
+    /^\/\.well-known\//i,
+    /^\/(api\/)?(public|open)\//i,
+  ]
   // eslint-disable-next-line no-inner-declarations
   function isWellKnownPublicEndpoint(rawUrl: string): boolean {
     let path = rawUrl
@@ -173,7 +181,7 @@ function buildLiveApiMap(data: WorkerScanResult): LiveApiMap {
     } catch {
       // already a path
     }
-    return WELL_KNOWN_PUBLIC_PATHS.some((re) => re.test(path))
+    return WELL_KNOWN_PUBLIC_PATHS.some((re: RegExp) => re.test(path))
   }
 
   for (const r of data.networkRequests) {
@@ -667,6 +675,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ ok: false, error: { code: 'invalid_url', message: 'Missing url.' } })
   }
 
+  fireAndForget(
+    logAuditEvent(req, { event_type: 'stage2_started', scanned_url: url.slice(0, 1000) }),
+  )
+
   const t0 = Date.now()
   try {
     const controller = new AbortController()
@@ -711,6 +723,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     const scored = applyRisk(enriched, routeContext)
     const liveApiMap = buildLiveApiMap(workerData)
+    fireAndForget(
+      logAuditEvent(req, {
+        event_type: 'stage2_completed',
+        scanned_url: url.slice(0, 1000),
+        scan_outcome: 'success',
+        metadata: {
+          finding_count: scored.length,
+          network_request_count: workerData.networkRequests.length,
+          cookie_count: workerData.cookies.length,
+          duration_ms: Date.now() - t0,
+        },
+      }),
+    )
     return res.status(200).json({
       ok: true,
       stage: 2,
