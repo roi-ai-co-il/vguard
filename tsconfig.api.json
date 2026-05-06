@@ -15,5 +15,6 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["api/**/*.ts", "src/lib/scanner-types.ts"]
+  "include": ["api/**/*.ts", "src/lib/scanner-types.ts"],
+  "exclude": ["api/__tests__/**"]
 }
