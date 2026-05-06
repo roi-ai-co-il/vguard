@@ -13,6 +13,7 @@ import { ScanForm } from './components/ScanForm'
 import { TypingEffect } from '@/components/ui/typing-effect'
 import { InteractiveGlobe } from '@/components/ui/interactive-globe'
 import { BentoGrid, type BentoCardProps } from '@/components/ui/bento'
+import { CpuArchitecture } from '@/components/ui/cpu-architecture'
 
 interface RecentFinding {
   hostname: string
@@ -422,6 +423,37 @@ export default function App() {
               <span className="leading-relaxed">+ 70 more checks across OWASP 2021, AI-native vulns, Firebase &amp; static HTML hygiene.</span>
             </motion.p>
           </div>
+        </section>
+
+        {/* Architecture visual — 8 colored signal streams converge into a
+            central CPU. Maps directly to Vguard's mental model: many detector
+            categories → one Vibe Score. Bridges the bento ("what we scan")
+            and the 3-step process ("how it lands").
+            Mobile: SVG container is `max-w-md` so it never gets too big on
+            phones, and aspect-[2/1] preserves the 200×100 viewBox. */}
+        <section className="border-t border-(--color-border)">
+          <motion.div
+            initial={{ opacity: 0, y: 16 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true, amount: 'some' }}
+            transition={{ duration: 0.5 }}
+            className="max-w-6xl mx-auto px-4 sm:px-6 py-10 sm:py-16 flex flex-col items-center text-center"
+          >
+            <div className="font-mono text-[10px] sm:text-xs text-(--color-fg-dim) tracking-widest uppercase mb-3">
+              The scoring engine
+            </div>
+            <h2 className="text-[1.4rem] sm:text-2xl lg:text-3xl font-semibold tracking-tight leading-[1.2] max-w-2xl text-balance">
+              Eight signal streams. <span className="text-(--color-fg-muted)">One verdict.</span>
+            </h2>
+            <p className="mt-3 text-(--color-fg-muted) text-[13.5px] sm:text-base leading-relaxed max-w-xl">
+              Every probe — secrets, RLS, headers, paths, AI surfaces, source
+              maps, cookies, DNS — converges into a single Vibe Score you can
+              act on.
+            </p>
+            <div className="mt-5 sm:mt-8 w-full max-w-[320px] sm:max-w-md aspect-[2/1] text-(--color-fg-dim)">
+              <CpuArchitecture text="secure" />
+            </div>
+          </motion.div>
         </section>
 
         <section className="border-t border-(--color-border)">

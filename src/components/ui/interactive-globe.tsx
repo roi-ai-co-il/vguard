@@ -176,6 +176,12 @@ export function InteractiveGlobe({
       ctx.fill()
     }
 
+    // Occlusion threshold matches the markers below (z > radius * 0.1) so an
+    // arc only renders when BOTH endpoints will have a visible marker dot.
+    // The previous `z > 0.3 && z > 0.3` (AND) drew a line whenever even ONE
+    // endpoint was visible, leaving the other end floating in mid-air where
+    // the hidden marker would have been — visually broken.
+    const OCCLUDE_Z = radius * 0.1
     for (const conn of connections) {
       const [lat1, lng1] = conn.from
       const [lat2, lng2] = conn.to
@@ -188,7 +194,9 @@ export function InteractiveGlobe({
       ;[x2, y2, z2] = rotateX(x2, y2, z2, rx)
       ;[x2, y2, z2] = rotateY(x2, y2, z2, ry)
 
-      if (z1 > radius * 0.3 && z2 > radius * 0.3) continue
+      // Either endpoint hidden → drop the arc entirely. We accept a few
+      // missing connections rather than show "lines into nothing".
+      if (z1 > OCCLUDE_Z || z2 > OCCLUDE_Z) continue
 
       const [sx1, sy1] = project(x1, y1, z1, cx, cy, fov)
       const [sx2, sy2] = project(x2, y2, z2, cx, cy, fov)
@@ -203,16 +211,43 @@ export function InteractiveGlobe({
       const elevZ = (midZ / midLen) * arcHeight
       const [scx, scy] = project(elevX, elevY, elevZ, cx, cy, fov)
 
+      // Depth-based alpha: arcs near the front are crisp, arcs that lean
+      // toward the visible horizon fade — gives the globe more "depth" feel.
+      const meanZ = (z1 + z2) / 2
+      const depthT = Math.max(0, Math.min(1, (radius - meanZ) / (2 * radius)))
+      const arcAlpha = 0.25 + 0.55 * depthT
+
       ctx.beginPath()
       ctx.moveTo(sx1, sy1)
       ctx.quadraticCurveTo(scx, scy, sx2, sy2)
-      ctx.strokeStyle = arcColor
+      ctx.strokeStyle = arcColor.replace(/[\d.]+\)$/, `${arcAlpha.toFixed(2)})`)
       ctx.lineWidth = 1.2
+      ctx.lineCap = 'round'
       ctx.stroke()
 
+      // Anchor "studs" at both endpoints so each arc visibly terminates IN a
+      // dot — fixes the perception that lines are floating.
+      ctx.beginPath()
+      ctx.arc(sx1, sy1, 1.3, 0, Math.PI * 2)
+      ctx.fillStyle = arcColor.replace(/[\d.]+\)$/, '0.85)')
+      ctx.fill()
+      ctx.beginPath()
+      ctx.arc(sx2, sy2, 1.3, 0, Math.PI * 2)
+      ctx.fill()
+
+      // Travelling pulse along the arc.
       const t = (Math.sin(time * 1.2 + lat1 * 0.1) + 1) / 2
       const tx = (1 - t) * (1 - t) * sx1 + 2 * (1 - t) * t * scx + t * t * sx2
       const ty = (1 - t) * (1 - t) * sy1 + 2 * (1 - t) * t * scy + t * t * sy2
+
+      // Glow halo around the moving pulse.
+      const glow = ctx.createRadialGradient(tx, ty, 0, tx, ty, 6)
+      glow.addColorStop(0, markerColor)
+      glow.addColorStop(1, markerColor.replace('1)', '0)'))
+      ctx.beginPath()
+      ctx.arc(tx, ty, 6, 0, Math.PI * 2)
+      ctx.fillStyle = glow
+      ctx.fill()
 
       ctx.beginPath()
       ctx.arc(tx, ty, 2, 0, Math.PI * 2)
