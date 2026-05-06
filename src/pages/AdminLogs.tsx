@@ -56,7 +56,7 @@ function shortUa(ua: string | null): string {
 }
 
 export default function AdminLogs() {
-  const [secret, setSecret] = useState<string>(() => sessionStorage.getItem('vg_admin_secret') ?? '')
+  const [secret, setSecret] = useState<string>(() => (sessionStorage.getItem('vg_admin_secret') ?? '').trim())
   const [submittedSecret, setSubmittedSecret] = useState<string>('')
   const [eventType, setEventType] = useState<string>('')
   const [domain, setDomain] = useState<string>('')
@@ -90,6 +90,8 @@ export default function AdminLogs() {
       if (r.status === 404) {
         setAuthError('Access denied.')
         setData(null)
+        sessionStorage.removeItem('vg_admin_secret')
+        setSubmittedSecret('')
         return
       }
       if (r.status === 429) {
@@ -107,9 +109,11 @@ export default function AdminLogs() {
 
   function login(e: React.FormEvent) {
     e.preventDefault()
-    sessionStorage.setItem('vg_admin_secret', secret)
-    setSubmittedSecret(secret)
-    fetchLogs(secret)
+    const clean = secret.trim()
+    setSecret(clean)
+    sessionStorage.setItem('vg_admin_secret', clean)
+    setSubmittedSecret(clean)
+    fetchLogs(clean)
   }
 
   useEffect(() => {
@@ -133,9 +137,15 @@ export default function AdminLogs() {
           <input
             type="password"
             value={secret}
-            onChange={(e) => setSecret(e.target.value)}
+            onChange={(e) => setSecret(e.target.value.replace(/\s+/g, ''))}
             placeholder="ADMIN_SECRET"
             autoFocus
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            inputMode="text"
+            name="vg-admin-token"
             className="w-full bg-zinc-950 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-500"
           />
           {authError && <p className="text-sm text-red-400">{authError}</p>}
