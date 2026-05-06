@@ -460,8 +460,17 @@ export default function App() {
       </main>
 
       <footer className="relative border-t border-(--color-border) mt-auto z-10">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-5 sm:py-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-1 sm:gap-0 font-mono text-[11px] sm:text-xs text-(--color-fg-dim)">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-5 sm:py-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-0 font-mono text-[11px] sm:text-xs text-(--color-fg-dim)">
           <span>© 2026 Vguard</span>
+          <span>
+            contact us ·{' '}
+            <a
+              href="mailto:infovguards@gmail.com"
+              className="underline underline-offset-2 hover:text-(--color-fg) transition-colors"
+            >
+              infovguards@gmail.com
+            </a>
+          </span>
           <span>built by ROI AI · in stealth</span>
         </div>
       </footer>
