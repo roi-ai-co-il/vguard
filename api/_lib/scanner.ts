@@ -774,6 +774,12 @@ const DKIM_COMMON_SELECTORS = [
   'zoho',           // Zoho Mail
 ]
 
+// A valid DKIM TXT record must contain a public key (p=...). The version tag
+// (v=DKIM1) is RECOMMENDED but OPTIONAL per RFC 6376 §3.6.1 — major providers
+// like Resend and AWS SES publish records WITHOUT the v= tag (just p=<base64>).
+// Filtering on `v=DKIM1` alone false-fails those records. Match either pattern.
+const DKIM_RECORD_RE = /(?:\bv=DKIM1\b)|(?:\bp=[A-Za-z0-9+/=]{40,})/i
+
 async function probeDkim(baseDomain: string): Promise<{ selector: string; record: string } | null> {
   const probes = await Promise.all(
     DKIM_COMMON_SELECTORS.map(async (selector) => {
@@ -782,7 +788,7 @@ async function probeDkim(baseDomain: string): Promise<{ selector: string; record
         700,
         [] as string[][],
       )
-      const flat = records.map((parts) => parts.join('')).find((rec) => /\bv=DKIM1\b/i.test(rec))
+      const flat = records.map((parts) => parts.join('')).find((rec) => DKIM_RECORD_RE.test(rec))
       return flat ? { selector, record: flat } : null
     }),
   )
@@ -2898,9 +2904,40 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
       severity: 'info',
       category: 'email',
       title: `No DKIM record found for ${dnsSnap.baseDomain} (common selectors)`,
-      description: `Tried common DKIM selectors (default, google, selector1/2, s1/s2, dkim, mail, k1/k2, mandrill, pm-bounces, mta) — none returned a DKIM record. SPF/DMARC are present, suggesting the domain does send mail; DKIM signing should be set up alongside.`,
-      evidence: `Tried ${DKIM_COMMON_SELECTORS.length} selectors at <selector>._domainkey.${dnsSnap.baseDomain} — no matches.`,
-      fixPrompt: `Set up DKIM signing for every service that sends mail as you. Each provider has its own selector — Google Workspace = "google._domainkey", Resend = unique per domain, Mailgun = "k1._domainkey", Postmark = "pm-bounces._domainkey". Get the public key TXT record from each provider's dashboard and add it at the right selector. Once published, DMARC's "dkim alignment" check will pass and your deliverability improves.`,
+      description: `Probed ${DKIM_COMMON_SELECTORS.length} common DKIM selectors (incl. provider-specific: resend, amazonses, postmark, sg/SendGrid, sm/SparkPost, mailgun, fm1-3/Fastmail, protonmail, zoho, google) — none returned a TXT record matching DKIM key shape. SPF and/or DMARC are present, which means the domain *is* set up to send mail; DKIM should be signed alongside or DMARC alignment will fail.`,
+      evidence: `Probed: ${DKIM_COMMON_SELECTORS.map((s) => `${s}._domainkey.${dnsSnap.baseDomain}`).slice(0, 6).join(', ')}, +${DKIM_COMMON_SELECTORS.length - 6} more — none matched /v=DKIM1/i or /p=<base64>/i.`,
+      fixPrompt: [
+        `STEP 1 — IDENTIFY YOUR MAIL PROVIDERS.`,
+        `Inventory every service that sends mail FROM @${dnsSnap.baseDomain}: transactional ESP (Resend / Postmark / Mailgun / SendGrid / SES / Mandrill / SparkPost), marketing platform (Mailchimp / ConvertKit), CRM auto-replies (HubSpot / Salesforce), Google Workspace if you use it, your app's own SMTP if any. Each ONE needs its own DKIM key published.`,
+        ``,
+        `STEP 2 — FETCH THE EXACT DNS RECORDS PER PROVIDER.`,
+        `Each provider's dashboard has a "Verify domain" or "DKIM" section that shows the EXACT records to publish. They'll typically show:`,
+        `  • TXT  resend._domainkey      → "p=MIGfMA0GCSqGSIb3DQEBAQUAA..."`,
+        `  • TXT  google._domainkey      → "v=DKIM1; k=rsa; p=MIGfMA0..."`,
+        `  • TXT  mail._domainkey        → "v=DKIM1; k=rsa; p=MIGfMA0..."`,
+        `  • TXT  sg._domainkey          → "k=rsa; t=s; p=MIGfMA0..."`,
+        `Note the selector NAME the provider tells you to use — it is FIXED per provider, you do not invent it.`,
+        ``,
+        `STEP 3 — PUBLISH AT YOUR DNS PROVIDER.`,
+        `If GoDaddy: dcc.godaddy.com/control/dnsmanagement?domainName=${dnsSnap.baseDomain} → Add Record → TXT → Name = "<selector>._domainkey" (just the prefix, GoDaddy auto-appends domain) → Value = the exact string from your provider → TTL 600. Repeat for each provider.`,
+        `If Cloudflare: API call \`POST /zones/<zone>/dns_records {"type":"TXT","name":"<selector>._domainkey","content":"<exact value>"}\`. CLI: \`flarectl dns create --zone ${dnsSnap.baseDomain} --type TXT --name <selector>._domainkey --content '<value>'\`.`,
+        `If Route 53: \`aws route53 change-resource-record-sets --hosted-zone-id <id> --change-batch '{"Changes":[{"Action":"CREATE","ResourceRecordSet":{"Name":"<selector>._domainkey.${dnsSnap.baseDomain}","Type":"TXT","TTL":600,"ResourceRecords":[{"Value":"\\\"<value>\\\""}]}}]}'\`.`,
+        ``,
+        `STEP 4 — VERIFY EACH SELECTOR PROPAGATED.`,
+        `For every selector you added: \`dig +short TXT <selector>._domainkey.${dnsSnap.baseDomain}\` should return the public-key string within 5-30 minutes. If it returns empty after 30 min, the record didn't save — check the registrar dashboard.`,
+        ``,
+        `STEP 5 — VALIDATE END-TO-END WITH A REAL SEND.`,
+        `Send one test email from each provider TO mail-tester.com (free, no signup) and view the report. The DKIM section MUST show "DKIM signature: passed" with the correct selector AND domain alignment with ${dnsSnap.baseDomain}. If "neutral" or "fail" — the public key in DNS doesn't match the private key the provider is signing with (typically a copy-paste error in step 3).`,
+        ``,
+        `WHY DMARC ALIGNMENT MATTERS:`,
+        `Your DMARC record (\`_dmarc.${dnsSnap.baseDomain}\`) tells receivers what to do when SPF or DKIM fail. With p=quarantine or p=reject, an UNALIGNED message lands in spam (or bounces). With DKIM published correctly per provider, "dkim=pass + aligned" satisfies DMARC even if the message routes through a forwarder that breaks SPF — which is why DKIM is the more durable of the two.`,
+        ``,
+        `COMMON MISTAKES TO AVOID:`,
+        `• Pasting the value WITHOUT the surrounding quotes when the registrar UI shows quotes in their example. Most registrars want the bare value.`,
+        `• Pasting the value WITH the leading/trailing whitespace from the provider's copy button.`,
+        `• Adding "v=DKIM1; k=rsa;" prefix yourself — Resend / SES intentionally omit \`v=\` and just publish \`p=...\`. RFC 6376 §3.6.1 makes \`v=\` OPTIONAL. Use exactly what the provider shows.`,
+        `• Truncating long records — DKIM TXT records often exceed the 255-char single-string limit and are split into chunks. Most registrars handle this automatically; if yours doesn't, manually chunk and put each in quotes.`,
+      ].join('\n'),
     })
   }
 

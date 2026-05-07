@@ -873,6 +873,16 @@ export function ScanForm() {
     apiDoneRef.current = false
     setState('scanning')
 
+    // Scroll back to the scan form so the user sees the scanning loader
+    // instead of the (now-stale) result panel they were looking at.
+    if (typeof window !== 'undefined') {
+      const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+      const target =
+        document.querySelector<HTMLElement>('form[aria-label="Scan your app for security issues"]') ??
+        document.body
+      target.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' })
+    }
+
     abortRef.current?.abort()
     const controller = new AbortController()
     abortRef.current = controller
