@@ -12,7 +12,7 @@
  * No dependencies — uses native fetch + node:tty for color detection.
  */
 
-const API_BASE = process.env.VGUARD_API ?? 'https://vguard-tau.vercel.app'
+const API_BASE = process.env.VGUARD_API ?? 'https://vguards.com'
 
 type Severity = 'critical' | 'warn' | 'info' | 'ok'
 
@@ -188,11 +188,11 @@ ${c.bold}Examples:${c.reset}
   npx vguard scan https://app.example.com --exit-code   ${c.dim}# CI gate${c.reset}
 
 ${c.bold}Environment:${c.reset}
-  VGUARD_API=<url>   Override API base (default: https://vguard-tau.vercel.app)
+  VGUARD_API=<url>   Override API base (default: https://vguards.com)
   NO_COLOR=1         Disable ANSI color output
 
-${c.bold}Web UI:${c.reset}  https://vguard-tau.vercel.app
-${c.bold}Docs:${c.reset}    https://vguard-tau.vercel.app
+${c.bold}Web UI:${c.reset}  https://vguards.com
+${c.bold}Docs:${c.reset}    https://vguards.com
 `)
 }
 

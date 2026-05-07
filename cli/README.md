@@ -64,12 +64,12 @@ Stage 1 (this CLI):
 - Forms + endpoints discovery
 - Active probes: Open Redirect canary, reflected XSS canary, SQLi error-based
 
-Stage 2 (browser-assisted) and Stage 3 (verified deep scan) live on the web UI: <https://vguard-tau.vercel.app>.
+Stage 2 (browser-assisted) and Stage 3 (verified deep scan) live on the web UI: <https://vguards.com>.
 
 ## Environment
 
 ```
-VGUARD_API=<url>   Override API base (default: https://vguard-tau.vercel.app)
+VGUARD_API=<url>   Override API base (default: https://vguards.com)
 NO_COLOR=1         Disable ANSI color output
 ```
 

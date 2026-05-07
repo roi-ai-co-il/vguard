@@ -24,7 +24,7 @@ inputs:
   api-url:
     description: 'Override the Vguard API base (defaults to the public instance).'
     required: false
-    default: 'https://vguard-tau.vercel.app'
+    default: 'https://vguards.com'
 
 outputs:
   vibe-score:

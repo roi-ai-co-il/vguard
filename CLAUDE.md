@@ -217,9 +217,12 @@ The product is **Vguard** but several infra identifiers still carry the old `vib
 
 | Asset | Identifier | Notes |
 |---|---|---|
-| Live URL (canonical) | `https://vibesecure-tau.vercel.app` | Original, stays. |
-| Live URL (new alias) | `https://vguard-tau.vercel.app` | Added 2026-05-05, also serves the latest deploy. |
-| Vercel project | `vguard` (renamed from `vibesecure`) — `prj_T7NIVw968V5i9QBQ54OkUhtMV1HD` in team `team_evbzoCbdWuVIB4ZDwEfZ0Oeg` | Project name is `vguard`; both domains bound to it. |
+| Live URL (canonical, 2026-05-07) | `https://vguards.com` | Custom domain bought + bound to project; DNS update needed at registrar. |
+| Live URL (www) | `https://www.vguards.com` | 308 redirect to apex. |
+| Live URL (legacy) | `https://vibesecure-tau.vercel.app` | Original, still resolves. |
+| Live URL (legacy alias) | `https://vguard-tau.vercel.app` | Added 2026-05-05, still resolves. |
+| Vercel project | `vguard` (renamed from `vibesecure`) — `prj_T7NIVw968V5i9QBQ54OkUhtMV1HD` in team `team_evbzoCbdWuVIB4ZDwEfZ0Oeg` | Project name is `vguard`; all four domains bound to it. |
+| GitHub repo (frontend) | `roi-ai-co-il/vguard` (private, created 2026-05-07) | `git push origin main`; tokens in `~/.claude/.env.global`. |
 | Railway project | `vguard-stage2` (renamed from `vibesecure-stage2`) — `19b15ff4-3a22-4c39-944d-95c8db4c5604` | Service URL unchanged. |
 | Railway service | `stage2-worker` — `a3022f8a-f1b4-4fa2-8622-f985fef8865b` (env `f8ce2d1e-2d96-4a59-a496-34749f1eb159`) | Healthcheck: `https://stage2-worker-production.up.railway.app/healthz`. |
 | GitHub repo (worker) | `roi-ai-co-il/vguard-stage2-worker` (renamed from `vibesecure-stage2-worker` 2026-05-05) | Railway service rewired to the new repo name via `serviceConnect` mutation; old URL still 301-redirects courtesy of GitHub. |

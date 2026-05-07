@@ -457,7 +457,7 @@ function buildBulkFixPrompt(result: ScanResult): string {
   }
 
   const fw = result.meta.detectedFramework ?? 'unknown — confirm via package.json'
-  const rescanLink = `https://vibesecure-tau.vercel.app/?url=${encodeURIComponent(result.meta.finalUrl)}`
+  const rescanLink = `https://vguards.com/?url=${encodeURIComponent(result.meta.finalUrl)}`
 
   const lines: string[] = [
     `# 🛡️ Vguard — Bulk Fix Plan`,

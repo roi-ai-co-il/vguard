@@ -7,7 +7,7 @@ import { createClient } from '@supabase/supabase-js'
  * Returns an SVG badge ("shields.io"-style) showing the latest Vguard score
  * for the given hostname. Designed to be embedded in README files:
  *
- *   ![Vguard score](https://vguard-tau.vercel.app/api/badge?url=example.com)
+ *   ![Vguard score](https://vguards.com/api/badge?url=example.com)
  *
  * Lookup strategy:
  *  1. Normalize the input to a bare hostname (strip scheme, www, path).
@@ -127,7 +127,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     if (!row) {
       // No scan yet — neutral badge that invites a scan.
       res.status(200).send(
-        badgeSvg('not scanned', '#6b7280', `No Vguard scan yet for ${host}. Run one at https://vguard-tau.vercel.app`),
+        badgeSvg('not scanned', '#6b7280', `No Vguard scan yet for ${host}. Run one at https://vguards.com`),
       )
       return
     }
