@@ -210,9 +210,9 @@ export default function App() {
         className="relative border-b border-(--color-border) backdrop-blur-sm bg-(--color-bg)/60 z-10"
       >
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-4 sm:py-5 flex items-center justify-between gap-3">
-          <a href="/" className="flex items-center gap-2 font-mono text-sm" aria-label="Vguard home">
+          <a href="/" className="flex items-center gap-2 font-mono text-sm" aria-label="V-Guards home">
             <ShieldCheck size={18} className="text-(--color-accent)" strokeWidth={2.25} aria-hidden="true" />
-            <span className="font-semibold tracking-tight">Vguard</span>
+            <span className="font-semibold tracking-tight">V-Guards</span>
             <span className="text-(--color-fg-dim) animate-pulse">_</span>
           </a>
           <div className="font-mono text-[10px] sm:text-xs text-(--color-fg-dim) tracking-widest uppercase">
@@ -494,7 +494,7 @@ export default function App() {
       <footer className="relative border-t border-(--color-border) mt-auto z-10">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-5 sm:py-6 flex flex-col gap-2 font-mono text-[11px] sm:text-xs text-(--color-fg-dim)">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-1 sm:gap-0">
-            <span>© 2026 Vguard</span>
+            <span>© 2026 V-Guards</span>
             <span>built by ROI AI · in stealth</span>
           </div>
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-1 sm:gap-0">

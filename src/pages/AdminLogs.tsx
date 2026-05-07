@@ -233,7 +233,7 @@ export default function AdminLogs() {
     return (
       <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center p-6">
         <form onSubmit={login} className="w-full max-w-sm space-y-4 border border-zinc-800 rounded-lg p-6 bg-zinc-900/50">
-          <h1 className="text-xl font-semibold">Vguard · Admin</h1>
+          <h1 className="text-xl font-semibold">V-Guards · Admin</h1>
           <p className="text-sm text-zinc-400">Enter the admin secret to view audit logs.</p>
           <input
             type="password"
@@ -270,7 +270,7 @@ export default function AdminLogs() {
     <div className="min-h-screen bg-zinc-950 text-zinc-100 p-6">
       <div className="max-w-7xl mx-auto space-y-4">
         <div className="flex items-baseline justify-between">
-          <h1 className="text-2xl font-semibold">Vguard · Audit Logs</h1>
+          <h1 className="text-2xl font-semibold">V-Guards · Audit Logs</h1>
           <button
             onClick={() => {
               sessionStorage.removeItem('vg_admin_secret')

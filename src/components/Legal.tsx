@@ -276,7 +276,7 @@ function LegalDocumentView({ doc }: { doc: LegalDocument }) {
             className="inline-flex items-center gap-2 font-mono text-[11px] sm:text-xs text-(--color-fg-dim) hover:text-(--color-fg) transition-colors"
           >
             <ArrowLeft size={14} aria-hidden="true" />
-            <span>Vguard</span>
+            <span>V-Guards</span>
           </a>
           <span className="font-mono text-[10px] sm:text-[11px] text-(--color-fg-dim) tracking-widest uppercase">
             Legal

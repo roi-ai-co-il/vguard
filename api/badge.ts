@@ -127,15 +127,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     if (!row) {
       // No scan yet — neutral badge that invites a scan.
       res.status(200).send(
-        badgeSvg('not scanned', '#6b7280', `No Vguard scan yet for ${host}. Run one at https://v-guards.com`),
+        badgeSvg('not scanned', '#6b7280', `No V-Guards scan yet for ${host}. Run one at https://v-guards.com`),
       )
       return
     }
     const score = Math.round(row.vibe_score as number)
     const c = colorForScore(score)
-    const tooltip = `Vguard score for ${host}: ${score}/100 (grade ${c.label}). Last scanned ${new Date(row.scanned_at as string).toUTCString()}.`
+    const tooltip = `V-Guards score for ${host}: ${score}/100 (grade ${c.label}). Last scanned ${new Date(row.scanned_at as string).toUTCString()}.`
     res.status(200).send(badgeSvg(`${score}/100`, c.bg, tooltip))
   } catch {
-    res.status(200).send(badgeSvg('error', '#6b7280', 'Vguard badge lookup failed'))
+    res.status(200).send(badgeSvg('error', '#6b7280', 'V-Guards badge lookup failed'))
   }
 }
