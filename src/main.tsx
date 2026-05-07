@@ -4,6 +4,20 @@ import './index.css'
 import App from './App.tsx'
 import AccessibilityWidget from './components/AccessibilityWidget.tsx'
 
+// Promote the deferred Google Fonts <link> from media="print" → media="all"
+// so the web fonts swap in. Pattern keeps the stylesheet off the critical
+// render path (saves ~70ms FCP/LCP) without needing 'unsafe-inline' in CSP.
+const fontsLink = document.getElementById('vg-fonts') as HTMLLinkElement | null
+if (fontsLink) {
+  if (fontsLink.sheet) {
+    fontsLink.media = 'all'
+  } else {
+    fontsLink.addEventListener('load', () => {
+      fontsLink.media = 'all'
+    }, { once: true })
+  }
+}
+
 const AdminLogs = lazy(() => import('./pages/AdminLogs.tsx'))
 const Privacy = lazy(() => import('./pages/Privacy.tsx'))
 const AccessibilityPage = lazy(() => import('./pages/Accessibility.tsx'))

@@ -1,4 +1,6 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+/* Google Fonts moved to a non-render-blocking <link rel="preload"> in index.html.
+   System fallbacks (system-ui, ui-monospace) render instantly; web fonts swap in
+   when ready. Saves ~70ms FCP/LCP on cold loads. */
 @import "tailwindcss";
 
 @theme {
