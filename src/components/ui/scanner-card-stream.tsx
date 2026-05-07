@@ -85,8 +85,8 @@ export function ScannerCardStream({
     cards.forEach((c) => originalAscii.current.set(c.id, c.ascii))
 
     const dimensions = () => ({
-      width: container.clientWidth || window.innerWidth,
-      height,
+      width: Math.max(container.clientWidth || window.innerWidth || 320, 320),
+      height: Math.max(height, 1),
     })
     const initial = dimensions()
     let canvasW = initial.width
@@ -263,6 +263,7 @@ export function ScannerCardStream({
     // === Resize observer ===
     const resizeObserver = new ResizeObserver(() => {
       const next = dimensions()
+      if (!Number.isFinite(next.width) || !Number.isFinite(next.height) || next.width < 1) return
       canvasW = next.width
       canvasH = next.height
       camera.left = -canvasW / 2
