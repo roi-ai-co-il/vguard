@@ -112,16 +112,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     `Time:    ${new Date().toISOString()}\n\n` +
     `Message:\n${message}\n`
   const htmlBody = `
-<div style="font-family:system-ui,sans-serif;color:#111;max-width:600px">
-  <h2 style="margin:0 0 16px;font-size:18px">New V-Guards contact form submission</h2>
-  <table style="border-collapse:collapse;font-size:14px">
-    <tr><td style="padding:4px 12px 4px 0;color:#666">Name</td><td><strong>${escapeHtml(name)}</strong></td></tr>
-    <tr><td style="padding:4px 12px 4px 0;color:#666">Email</td><td><a href="mailto:${escapeHtml(email)}">${escapeHtml(email)}</a></td></tr>
-    <tr><td style="padding:4px 12px 4px 0;color:#666">IP</td><td>${escapeHtml(ip)}</td></tr>
-    <tr><td style="padding:4px 12px 4px 0;color:#666">Time</td><td>${new Date().toISOString()}</td></tr>
-  </table>
-  <hr style="border:none;border-top:1px solid #eee;margin:16px 0">
-  <div style="white-space:pre-wrap;font-size:14px;line-height:1.5">${escapeHtml(message)}</div>
+<div style="font-family:system-ui,sans-serif;color:#111;max-width:600px;line-height:1.5">
+  <div style="background:#09090b;color:#22d3ee;padding:14px 20px;border-radius:8px 8px 0 0;font-family:ui-monospace,SF Mono,Consolas,monospace">
+    <img src="https://v-guards.com/logo-200.png" alt="V-Guards" width="24" height="24" style="display:inline-block;vertical-align:middle;margin-right:8px;border-radius:5px" />
+    <strong style="vertical-align:middle">V-Guards</strong>
+    <span style="vertical-align:middle;color:#888"> · contact form submission</span>
+  </div>
+  <div style="border:1px solid #eee;border-top:none;padding:24px;border-radius:0 0 8px 8px">
+    <table style="border-collapse:collapse;font-size:14px;margin-bottom:16px">
+      <tr><td style="padding:4px 12px 4px 0;color:#666">Name</td><td><strong>${escapeHtml(name)}</strong></td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:#666">Email</td><td><a href="mailto:${escapeHtml(email)}" style="color:#06b6d4">${escapeHtml(email)}</a></td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:#666">IP</td><td>${escapeHtml(ip)}</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:#666">Time</td><td>${new Date().toISOString()}</td></tr>
+    </table>
+    <hr style="border:none;border-top:1px solid #eee;margin:16px 0">
+    <div style="white-space:pre-wrap;font-size:14px;line-height:1.5">${escapeHtml(message)}</div>
+  </div>
 </div>`.trim()
 
   try {

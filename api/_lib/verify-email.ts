@@ -59,8 +59,10 @@ export async function sendVerificationConfirmation(
 
   const html = `
 <div style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#111;max-width:600px;line-height:1.5">
-  <div style="background:#09090b;color:#22d3ee;padding:18px 24px;border-radius:8px 8px 0 0;font-family:ui-monospace,SF Mono,Consolas,monospace">
-    <strong>V-Guards</strong> · ownership verified ✓
+  <div style="background:#09090b;color:#22d3ee;padding:18px 24px;border-radius:8px 8px 0 0;font-family:ui-monospace,SF Mono,Consolas,monospace;display:flex;align-items:center;gap:10px">
+    <img src="https://v-guards.com/logo-200.png" alt="V-Guards" width="28" height="28" style="display:inline-block;vertical-align:middle;margin-right:8px;border-radius:6px" />
+    <strong style="vertical-align:middle">V-Guards</strong>
+    <span style="vertical-align:middle"> · ownership verified ✓</span>
   </div>
   <div style="border:1px solid #eee;border-top:none;padding:24px;border-radius:0 0 8px 8px">
     <p style="margin:0 0 16px;font-size:16px"><strong>${escapeHtml(domain)}</strong> is now verified.</p>
