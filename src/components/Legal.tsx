@@ -15,7 +15,10 @@ interface LegalDocument {
 
 const TERMS: LegalDocument = {
   title: 'Terms of Service',
-  intro: [],
+  intro: [
+    '⚠️ AI can make mistakes. V-Guards uses automated and AI-assisted detection — findings may be incomplete, inaccurate, or include false positives. Verify every finding independently before acting on it. Do not rely on V-Guards as your sole security audit, especially before a production deploy or audit-grade engagement.',
+    'By using V-Guards you accept the terms below, including the No Warranty (§3), AI Disclaimer (§4), and Limitation of Liability (§5) clauses. All usage is at your own risk.',
+  ],
   sections: [
     {
       level: 2,
