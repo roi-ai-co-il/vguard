@@ -189,33 +189,25 @@ export function ScannerCardStream({
 
     const updateCardEffects = () => {
       const containerRect = container.getBoundingClientRect()
-      const scannerX = containerRect.left + containerRect.width / 2
-      const scannerWidth = 8
-      const scannerLeft = scannerX - scannerWidth / 2
-      const scannerRight = scannerX + scannerWidth / 2
+      const scannerCenter = containerRect.left + containerRect.width / 2
+      const scannerHalf = 4 // half-width of the visible scanner line
       let anyScanning = false
       cardLine.querySelectorAll<HTMLElement>('.card-wrapper').forEach((wrapper, index) => {
         const rect = wrapper.getBoundingClientRect()
-        const normalCard = wrapper.querySelector<HTMLElement>('.card-normal')!
-        const asciiCard = wrapper.querySelector<HTMLElement>('.card-ascii')!
-        const asciiContent = asciiCard.querySelector<HTMLElement>('pre')!
-        if (rect.left < scannerRight && rect.right > scannerLeft) {
+        const asciiContent = wrapper.querySelector<HTMLElement>('.card-ascii pre')!
+        // For cards moving right-to-left (default), the RIGHT edge crosses the scanner first.
+        // scannedPct = how much of the card has been crossed by the scanner, 0–100.
+        // 0 = card hasn't touched scanner yet. 100 = scanner has fully passed the card.
+        const raw = ((rect.right - scannerCenter) / rect.width) * 100
+        const scannedPct = Math.max(0, Math.min(100, raw))
+        wrapper.style.setProperty('--scanned', `${scannedPct}%`)
+        const isTouching = rect.left < scannerCenter + scannerHalf && rect.right > scannerCenter - scannerHalf
+        if (isTouching) {
           anyScanning = true
           if (wrapper.dataset.scanned !== 'true') runScrambleEffect(asciiContent, index)
           wrapper.dataset.scanned = 'true'
-          const intersectLeft = Math.max(scannerLeft - rect.left, 0)
-          const intersectRight = Math.min(scannerRight - rect.left, rect.width)
-          normalCard.style.setProperty('--clip-right', `${(intersectLeft / rect.width) * 100}%`)
-          asciiCard.style.setProperty('--clip-left', `${(intersectRight / rect.width) * 100}%`)
         } else {
           delete wrapper.dataset.scanned
-          if (rect.right < scannerLeft) {
-            normalCard.style.setProperty('--clip-right', '100%')
-            asciiCard.style.setProperty('--clip-left', '100%')
-          } else {
-            normalCard.style.setProperty('--clip-right', '0%')
-            asciiCard.style.setProperty('--clip-left', '0%')
-          }
         }
       })
       setIsScanning(anyScanning)
@@ -393,7 +385,7 @@ export function ScannerCardStream({
             <div key={card.id} className="card-wrapper relative w-[400px] h-[250px] shrink-0">
               <div
                 className="card-normal absolute inset-0 rounded-[15px] overflow-hidden bg-transparent shadow-[0_15px_40px_rgba(0,0,0,0.4)] z-[2]"
-                style={{ clipPath: 'inset(0 var(--clip-right, 0%) 0 0)' }}
+                style={{ clipPath: 'inset(0 var(--scanned, 0%) 0 0)' }}
               >
                 <img
                   src={card.image}
@@ -406,7 +398,7 @@ export function ScannerCardStream({
               </div>
               <div
                 className="card-ascii absolute inset-0 rounded-[15px] overflow-hidden bg-transparent z-[1]"
-                style={{ clipPath: 'inset(0 calc(100% - var(--clip-left, 0%)) 0 0)' }}
+                style={{ clipPath: 'inset(0 0 0 calc(100% - var(--scanned, 0%)))' }}
               >
                 <pre
                   className="absolute inset-0 text-[rgba(180,235,250,0.55)] font-mono text-[11px] leading-[13px] overflow-hidden whitespace-pre m-0 p-0 text-left"
