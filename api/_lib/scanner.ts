@@ -756,6 +756,22 @@ const DKIM_COMMON_SELECTORS = [
   'mandrill',
   'pm-bounces',
   'mta',
+  // Vendor-specific selectors observed in the wild (2026-05). Each provider
+  // uses its own fixed selector — without these in the probe set, sites that
+  // *do* have DKIM via Resend/SES/Postmark/etc. would falsely fail the check.
+  'resend',         // Resend (resend._domainkey)
+  'amazonses',      // AWS SES standalone
+  'postmark',       // Postmark legacy
+  'sg',             // SendGrid (sg._domainkey)
+  'sm',             // SparkPost / Mailtrap
+  'mailgun',        // Mailgun (mailgun._domainkey)
+  'fm1',            // Fastmail (fm1._domainkey)
+  'fm2',
+  'fm3',
+  'protonmail',     // ProtonMail
+  'protonmail2',
+  'protonmail3',
+  'zoho',           // Zoho Mail
 ]
 
 async function probeDkim(baseDomain: string): Promise<{ selector: string; record: string } | null> {

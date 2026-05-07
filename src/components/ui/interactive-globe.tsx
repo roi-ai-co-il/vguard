@@ -117,8 +117,11 @@ export function InteractiveGlobe({
     if (!ctx) return
 
     const dpr = window.devicePixelRatio || 1
-    const w = canvas.clientWidth
-    const h = canvas.clientHeight
+    // Guard against pre-layout zero dimensions — drawing with w=0 yields NaN
+    // in subsequent radius/cosine math and pollutes the console.
+    const w = canvas.clientWidth || size
+    const h = canvas.clientHeight || size
+    if (w < 1 || h < 1) return
     if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
       canvas.width = w * dpr
       canvas.height = h * dpr

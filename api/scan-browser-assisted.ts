@@ -653,6 +653,13 @@ function analyzeBrowserScan(data: WorkerScanResult): Finding[] {
     /\bxr-spatial-tracking\b/i,            // browser default policy denial
     /\bidentity-credentials-get\b/i,        // FedCM default policy denial
     /Content Security Policy.*report-only/i, // report-only is intentionally noisy
+    /TrustedHTML.*assignment/i,            // browser-only Issues panel noise on iframes
+    /TrustedScript.*assignment/i,          // ditto
+    /requires.*'TrustedHTML'/i,
+    /requires.*'TrustedScript'/i,
+    /font-size:0;color:transparent.*NaN/i, // 3rd-party styled console.log debug calls (Cloudflare Turnstile uses this pattern)
+    /^https:\/\/challenges\.cloudflare\.com/i, // Turnstile iframe internals
+    /chrome-extension:\/\//i,               // user's installed extensions, not the site
   ]
   const meaningfulConsoleErrors = data.consoleErrors.filter(
     (e) => !HARMLESS_CONSOLE_NOISE.some((re) => re.test(e)),
