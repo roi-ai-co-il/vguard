@@ -256,7 +256,7 @@ export function Stage2Modal({ open, onClose }: { open: boolean; onClose: () => v
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const collectorOrigin =
-    typeof window !== 'undefined' ? window.location.origin : 'https://vguards.com'
+    typeof window !== 'undefined' ? window.location.origin : 'https://vguardus.com'
   const bookmarkletSrc = buildBookmarkletSource(uuid, collectorOrigin)
   const bookmarkletHref = `javascript:${encodeURIComponent(bookmarkletSrc)}`
 

@@ -31,7 +31,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const publicOrigin =
     process.env.VGUARD_PUBLIC_ORIGIN ||
     process.env.VIBESECURE_PUBLIC_ORIGIN ||
-    'https://vguards.com'
+    'https://vguardus.com'
 
   if (!clientId || !supabaseUrl || !serviceKey) {
     return res

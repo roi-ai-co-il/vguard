@@ -237,7 +237,7 @@ export async function probeSupabaseStorageWrite(
               apikey: anonKey,
               'Access-Control-Request-Method': 'POST',
               'Access-Control-Request-Headers': 'authorization,apikey,content-type',
-              Origin: 'https://vguards.com',
+              Origin: 'https://vguardus.com',
             },
           },
           2500,

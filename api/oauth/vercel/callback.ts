@@ -29,7 +29,7 @@ async function fetchTokenFromVercel(code: string): Promise<VercelTokenResponse> 
   const publicOrigin =
     process.env.VGUARD_PUBLIC_ORIGIN ||
     process.env.VIBESECURE_PUBLIC_ORIGIN ||
-    'https://vguards.com'
+    'https://vguardus.com'
   const params = new URLSearchParams({
     client_id: clientId ?? '',
     client_secret: clientSecret ?? '',

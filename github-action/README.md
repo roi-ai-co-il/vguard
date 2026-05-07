@@ -37,7 +37,7 @@ jobs:
 | `fail-on` | no | `warn` | Severity floor that fails the action: `critical` / `warn` / `info` / `never`. |
 | `comment-on-pr` | no | `true` | Post (and update) a comment on the PR with the findings table. |
 | `comment-tag` | no | `vguard` | Hidden marker the action uses to find its existing comment. Change it if you run multiple scans on one PR (e.g. one for staging, one for production). |
-| `api-url` | no | `https://vguards.com` | Override the API base — useful for self-hosted Vguard instances. |
+| `api-url` | no | `https://vguardus.com` | Override the API base — useful for self-hosted Vguard instances. |
 
 ## Outputs
 

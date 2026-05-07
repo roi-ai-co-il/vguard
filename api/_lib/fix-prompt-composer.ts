@@ -24,7 +24,7 @@ export interface ComposeContext {
   detectedFramework: string | null
 }
 
-const RESCAN_BASE = 'https://vguards.com/?url='
+const RESCAN_BASE = 'https://vguardus.com/?url='
 
 const SEVERITY_LINE: Record<Severity, string> = {
   critical: 'CRITICAL — fix before next deploy. Active risk.',

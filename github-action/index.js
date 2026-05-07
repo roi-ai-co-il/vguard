@@ -166,7 +166,7 @@ function buildCommentBody(scanned, response, tag) {
       '</details>',
   )
   lines.push('')
-  lines.push(`[View the full report on Vguard →](${process.env.INPUT_API_URL || 'https://vguards.com'}/?url=${encodeURIComponent(r.meta.finalUrl)})`)
+  lines.push(`[View the full report on Vguard →](${process.env.INPUT_API_URL || 'https://vguardus.com'}/?url=${encodeURIComponent(r.meta.finalUrl)})`)
   return lines.join('\n')
 }
 
@@ -242,7 +242,7 @@ async function main() {
   const failOn = getInput('fail-on', 'warn').toLowerCase()
   const commentOnPr = getInput('comment-on-pr', 'true').toLowerCase() !== 'false'
   const tag = getInput('comment-tag', 'vguard')
-  const apiBase = getInput('api-url', 'https://vguards.com')
+  const apiBase = getInput('api-url', 'https://vguardus.com')
 
   process.stdout.write(`Scanning ${url}\n`)
 

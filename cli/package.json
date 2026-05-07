@@ -29,9 +29,9 @@
     "node": ">=18"
   },
   "license": "MIT",
-  "homepage": "https://vguards.com",
+  "homepage": "https://vguardus.com",
   "bugs": {
-    "url": "https://vguards.com"
+    "url": "https://vguardus.com"
   },
   "author": "ROI AI (Royi Argaman, Oded Safdie)",
   "devDependencies": {
