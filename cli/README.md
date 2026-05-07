@@ -64,12 +64,12 @@ Stage 1 (this CLI):
 - Forms + endpoints discovery
 - Active probes: Open Redirect canary, reflected XSS canary, SQLi error-based
 
-Stage 2 (browser-assisted) and Stage 3 (verified deep scan) live on the web UI: <https://vguardus.com>.
+Stage 2 (browser-assisted) and Stage 3 (verified deep scan) live on the web UI: <https://v-guards.com>.
 
 ## Environment
 
 ```
-VGUARD_API=<url>   Override API base (default: https://vguardus.com)
+VGUARD_API=<url>   Override API base (default: https://v-guards.com)
 NO_COLOR=1         Disable ANSI color output
 ```
 

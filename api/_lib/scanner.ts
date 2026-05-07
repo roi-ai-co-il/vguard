@@ -22,7 +22,7 @@ const MAX_BUNDLES = 4
 // real Chrome UA. We append a `Vguard/1.0` token so site owners reading their
 // access logs can still attribute the traffic.
 const SCANNER_UA =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Vguard/1.0 (+https://vguardus.com)'
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Vguard/1.0 (+https://v-guards.com)'
 // "Stealthier" UA used as a one-shot retry when the first request 4xx'd. No
 // Vguard token, full Sec-Ch-Ua headers — looks indistinguishable from a real
 // Chrome browser. Only used after an explicit block; not the default to keep
@@ -2965,7 +2965,7 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
         title: `${wildcardCors.length} Supabase Edge Function${wildcardCors.length === 1 ? '' : 's'} respond with wildcard CORS`,
         description: `Functions ${wildcardCors.map((f) => f.name).join(', ')} respond to OPTIONS with Access-Control-Allow-Origin: *. Combined with cookie-based auth, this can let any other site call your function on behalf of a logged-in user.`,
         evidence: wildcardCors.map((f) => `${projectId}.supabase.co/functions/v1/${f.name} → CORS: *`).join('\n'),
-        fixPrompt: `In each Edge Function (supabase/functions/<name>/index.ts), replace the "Access-Control-Allow-Origin: *" pattern with a strict allowlist. Read the Origin header from the request, check it against your known frontends (https://vguardus.com, https://yourapp.com), and only echo it back if matched — otherwise omit the header entirely. The standard pattern: "const origin = req.headers.get('origin'); const ALLOW = ['https://yourapp.com']; const allow = ALLOW.includes(origin) ? origin : ALLOW[0];".`,
+        fixPrompt: `In each Edge Function (supabase/functions/<name>/index.ts), replace the "Access-Control-Allow-Origin: *" pattern with a strict allowlist. Read the Origin header from the request, check it against your known frontends (https://v-guards.com, https://yourapp.com), and only echo it back if matched — otherwise omit the header entirely. The standard pattern: "const origin = req.headers.get('origin'); const ALLOW = ['https://yourapp.com']; const allow = ALLOW.includes(origin) ? origin : ALLOW[0];".`,
       })
     } else if (edgeFns.length > 0) {
       findings.push({

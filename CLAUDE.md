@@ -217,8 +217,8 @@ The product is **Vguard** but several infra identifiers still carry the old `vib
 
 | Asset | Identifier | Notes |
 |---|---|---|
-| Live URL (canonical, 2026-05-07) | `https://vguardus.com` | Custom domain bought + bound to project; DNS update needed at registrar. |
-| Live URL (www) | `https://www.vguardus.com` | 308 redirect to apex. |
+| Live URL (canonical, 2026-05-07) | `https://v-guards.com` | Custom domain bought + bound to project; DNS update needed at registrar. |
+| Live URL (www) | `https://www.v-guards.com` | 308 redirect to apex. |
 | Live URL (legacy) | `https://vibesecure-tau.vercel.app` | Original, still resolves. |
 | Live URL (legacy alias) | `https://vguard-tau.vercel.app` | Added 2026-05-05, still resolves. |
 | Vercel project | `vguard` (renamed from `vibesecure`) — `prj_T7NIVw968V5i9QBQ54OkUhtMV1HD` in team `team_evbzoCbdWuVIB4ZDwEfZ0Oeg` | Project name is `vguard`; all four domains bound to it. |

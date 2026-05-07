@@ -24,7 +24,7 @@ inputs:
   api-url:
     description: 'Override the Vguard API base (defaults to the public instance).'
     required: false
-    default: 'https://vguardus.com'
+    default: 'https://v-guards.com'
 
 outputs:
   vibe-score:
