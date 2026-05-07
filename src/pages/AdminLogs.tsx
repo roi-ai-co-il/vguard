@@ -1,4 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Turnstile, type TurnstileInstance } from '@marsidev/react-turnstile'
+
+const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY as string | undefined
 
 interface AuditRow {
   id: number
@@ -67,6 +70,8 @@ export default function AdminLogs() {
   const [data, setData] = useState<ApiResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [authError, setAuthError] = useState<string>('')
+  const [turnstileToken, setTurnstileToken] = useState<string>('')
+  const turnstileRef = useRef<TurnstileInstance | null>(null)
 
   const queryString = useMemo(() => {
     const p = new URLSearchParams()
@@ -80,18 +85,22 @@ export default function AdminLogs() {
     return p.toString()
   }, [eventType, domain, scanOutcome, wafVendor, since, until])
 
-  async function fetchLogs(s: string) {
+  async function fetchLogs(s: string, ts?: string) {
     setLoading(true)
     setAuthError('')
     try {
-      const r = await fetch(`/api/admin/logs?${queryString}`, {
-        headers: { 'x-admin-secret': s },
-      })
+      const headers: Record<string, string> = { 'x-admin-secret': s }
+      const tokenForRequest = ts ?? turnstileToken
+      if (tokenForRequest) headers['x-turnstile-token'] = tokenForRequest
+      const r = await fetch(`/api/admin/logs?${queryString}`, { headers })
       if (r.status === 404) {
         setAuthError('Access denied.')
         setData(null)
         sessionStorage.removeItem('vg_admin_secret')
         setSubmittedSecret('')
+        // Turnstile tokens are single-use; reset so the user can retry.
+        setTurnstileToken('')
+        turnstileRef.current?.reset()
         return
       }
       if (r.status === 429) {
@@ -109,20 +118,26 @@ export default function AdminLogs() {
 
   function login(e: React.FormEvent) {
     e.preventDefault()
+    if (TURNSTILE_SITE_KEY && !turnstileToken) {
+      setAuthError('Please complete the verification challenge.')
+      return
+    }
     const clean = secret.trim()
     setSecret(clean)
     sessionStorage.setItem('vg_admin_secret', clean)
     setSubmittedSecret(clean)
-    fetchLogs(clean)
+    fetchLogs(clean, turnstileToken)
   }
 
   useEffect(() => {
     if (submittedSecret) fetchLogs(submittedSecret)
   }, [queryString, submittedSecret]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-attempt with stored secret on first mount.
+  // Auto-attempt with stored secret on first mount, but only if Turnstile
+  // is disabled OR a session cookie from a prior visit is still alive.
+  // Otherwise the user must complete the challenge before we replay.
   useEffect(() => {
-    if (secret && !submittedSecret) {
+    if (secret && !submittedSecret && !TURNSTILE_SITE_KEY) {
       setSubmittedSecret(secret)
       fetchLogs(secret)
     }
@@ -148,6 +163,21 @@ export default function AdminLogs() {
             name="vg-admin-token"
             className="w-full bg-zinc-950 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-500"
           />
+          {TURNSTILE_SITE_KEY && (
+            <div className="flex justify-center">
+              <Turnstile
+                ref={turnstileRef}
+                siteKey={TURNSTILE_SITE_KEY}
+                onSuccess={(token) => {
+                  setTurnstileToken(token)
+                  setAuthError('')
+                }}
+                onExpire={() => setTurnstileToken('')}
+                onError={() => setTurnstileToken('')}
+                options={{ theme: 'dark', size: 'flexible' }}
+              />
+            </div>
+          )}
           {authError && <p className="text-sm text-red-400">{authError}</p>}
           <button
             type="submit"

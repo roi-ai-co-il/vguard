@@ -42,6 +42,55 @@ function constantTimeEqual(a: string, b: string): boolean {
   return crypto.timingSafeEqual(ab, bb)
 }
 
+const SESSION_TTL_MS = 15 * 60 * 1000
+const SESSION_COOKIE = 'vg_admin_session'
+
+function signSession(expiresAt: number, adminSecret: string): string {
+  const hmac = crypto.createHmac('sha256', adminSecret).update(String(expiresAt)).digest('hex')
+  return `${expiresAt}.${hmac}`
+}
+
+function verifySession(cookieValue: string | undefined, adminSecret: string): boolean {
+  if (!cookieValue) return false
+  const idx = cookieValue.indexOf('.')
+  if (idx < 0) return false
+  const expiresAt = parseInt(cookieValue.slice(0, idx), 10)
+  const hmac = cookieValue.slice(idx + 1)
+  if (!Number.isFinite(expiresAt) || expiresAt < Date.now()) return false
+  const expected = crypto.createHmac('sha256', adminSecret).update(String(expiresAt)).digest('hex')
+  if (hmac.length !== expected.length) return false
+  return crypto.timingSafeEqual(Buffer.from(hmac), Buffer.from(expected))
+}
+
+function readCookie(req: VercelRequest, name: string): string | undefined {
+  const raw = req.headers.cookie
+  if (typeof raw !== 'string') return undefined
+  for (const part of raw.split(';')) {
+    const [k, ...rest] = part.trim().split('=')
+    if (k === name) return rest.join('=')
+  }
+  return undefined
+}
+
+async function verifyTurnstile(token: string, ip: string | null): Promise<boolean> {
+  const secret = process.env.TURNSTILE_SECRET_KEY
+  if (!secret) return true // Turnstile disabled — skip
+  if (!token) return false
+  const body = new URLSearchParams({ secret, response: token })
+  if (ip && ip !== 'unknown') body.set('remoteip', ip)
+  try {
+    const r = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+    })
+    const j = (await r.json()) as { success?: boolean }
+    return j.success === true
+  } catch {
+    return false
+  }
+}
+
 function checkAuth(req: VercelRequest): { ok: boolean; reason?: string } {
   const adminSecret = process.env.ADMIN_SECRET
   if (adminSecret) {
@@ -76,6 +125,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!auth.ok) {
     return notFound(res)
   }
+
+  // Turnstile gate: required unless a still-valid session cookie is present.
+  // The cookie is HMAC-signed with ADMIN_SECRET so it cannot be forged.
+  const adminSecret = process.env.ADMIN_SECRET as string
+  const sessionCookie = readCookie(req, SESSION_COOKIE)
+  const sessionValid = verifySession(sessionCookie, adminSecret)
+  let issuedNewSession = false
+  if (!sessionValid) {
+    const tsToken = (req.headers['x-turnstile-token'] as string | undefined) ?? ''
+    const tsOk = await verifyTurnstile(tsToken, clientIp(req))
+    if (!tsOk) {
+      return notFound(res)
+    }
+    const expiresAt = Date.now() + SESSION_TTL_MS
+    const cookie = signSession(expiresAt, adminSecret)
+    res.setHeader(
+      'Set-Cookie',
+      `${SESSION_COOKIE}=${cookie}; Path=/api/admin; Max-Age=${SESSION_TTL_MS / 1000}; HttpOnly; Secure; SameSite=Strict`,
+    )
+    issuedNewSession = true
+  }
+  void issuedNewSession
 
   const supabaseUrl = process.env.SUPABASE_URL
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
