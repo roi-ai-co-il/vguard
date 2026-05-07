@@ -174,7 +174,7 @@ export default function AdminLogs() {
                 }}
                 onExpire={() => setTurnstileToken('')}
                 onError={() => setTurnstileToken('')}
-                options={{ theme: 'dark', size: 'flexible' }}
+                options={{ theme: 'dark' }}
               />
             </div>
           )}
