@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import {
   Sparkles,
-  ShieldCheck,
   Search,
   FileCheck2,
   Wrench,
@@ -11,6 +10,7 @@ import {
 } from 'lucide-react'
 import { ScanForm } from './components/ScanForm'
 import ContactSection from './components/ContactSection'
+import { VGuardsLogo } from '@/components/ui/vguards-logo'
 import { TypingEffect } from '@/components/ui/typing-effect'
 import { InteractiveGlobe } from '@/components/ui/interactive-globe'
 import { BentoGrid, type BentoCardProps } from '@/components/ui/bento'
@@ -212,7 +212,7 @@ export default function App() {
       >
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-4 sm:py-5 flex items-center justify-between gap-3">
           <a href="/" className="flex items-center gap-2 font-mono text-sm" aria-label="V-Guards home">
-            <ShieldCheck size={18} className="text-(--color-accent)" strokeWidth={2.25} aria-hidden="true" />
+            <VGuardsLogo size={20} className="text-(--color-accent)" strokeWidth={3} />
             <span className="font-semibold tracking-tight">V-Guards</span>
             <span className="text-(--color-fg-dim) animate-pulse">_</span>
           </a>

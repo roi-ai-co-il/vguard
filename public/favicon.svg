@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <title>V-Guards</title>
+  <path d="M32 6 L54 14 L54 32 Q54 50 32 60 Q10 50 10 32 L10 14 Z"
+        stroke="#22d3ee" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M22 26 L32 44 L42 26"
+        stroke="#22d3ee" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

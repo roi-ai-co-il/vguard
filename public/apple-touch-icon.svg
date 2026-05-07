@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180" fill="none">
+  <title>V-Guards</title>
+  <rect width="180" height="180" rx="40" fill="#09090b"/>
+  <path d="M90 30 L148 50 L148 90 Q148 134 90 158 Q32 134 32 90 L32 50 Z"
+        stroke="#22d3ee" stroke-width="7" stroke-linejoin="round"/>
+  <path d="M62 76 L90 122 L118 76"
+        stroke="#22d3ee" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
