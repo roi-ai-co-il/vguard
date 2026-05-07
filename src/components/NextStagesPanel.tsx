@@ -1537,13 +1537,19 @@ function Stage3Modal({
           <p id="verify-email-hint" className="mt-1.5 font-mono text-[10px] text-(--color-fg-dim) leading-relaxed">
             We email you the result either way: ✓ verified — Stage 3 unlocked, or ⚠ failed — what to fix and how. We remember your email locally; no newsletter, no follow-ups, no third-party sharing.
           </p>
+          {verifyEmail.length > 0 && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(verifyEmail.trim()) && (
+            <p className="mt-1 font-mono text-[10px] text-(--color-warning)" role="alert">
+              ⚠ Enter a valid email to enable Verify.
+            </p>
+          )}
         </div>
 
         <div className="mt-5 flex items-center gap-2 flex-wrap">
           <button
             type="button"
             onClick={() => verifyNow()}
-            disabled={status === 'checking'}
+            disabled={status === 'checking' || !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(verifyEmail.trim())}
+            title={!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(verifyEmail.trim()) ? 'Enter your email above first — Stage 3 result is emailed.' : undefined}
             className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-(--color-accent) text-(--color-bg) hover:bg-(--color-accent-strong) font-mono text-xs font-semibold transition-colors cursor-pointer min-h-[36px] disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {status === 'checking' ? (
