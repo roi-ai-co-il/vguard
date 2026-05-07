@@ -22,7 +22,36 @@ import type { Category, Finding, Severity } from '../../src/lib/scanner-types.js
 export interface ComposeContext {
   finalUrl: string
   detectedFramework: string | null
+  /**
+   * Hostname extracted from finalUrl, lowercased, no port.
+   * Filled by `enrichFindings` if not provided.
+   */
+  hostname?: string
+  /**
+   * eTLD+1 ("base domain") for the scanned URL — e.g. v-guards.com from
+   * www.v-guards.com. Used by DNS playbooks where records live on apex.
+   */
+  baseDomain?: string
+  /**
+   * If the scanner spotted a CDN/edge/host hint (Vercel / Netlify / Cloudflare /
+   * Railway / GitHub Pages / shared apex) — used to route deploy/redeploy
+   * commands to the right CLI in playbooks.
+   */
+  deployPlatform?: 'vercel' | 'netlify' | 'cloudflare' | 'railway' | 'github-pages' | 'unknown'
 }
+
+/**
+ * Per-finding-id playbook: high-quality, ctx-aware step-2 markdown body.
+ * When a playbook exists for `finding.id`, composeFixPrompt uses it INSTEAD
+ * of `finding.fixPrompt` — gives us a pen-tester-grade prompt for the most
+ * common findings without polluting the scanner code with massive template
+ * literals.
+ *
+ * Each playbook receives the finding + a normalized ctx and returns the
+ * full Step 2 body (the rest of the prompt — Step 1 / Step 3 / verify /
+ * guardrails — is added by the wrapper).
+ */
+export type Playbook = (finding: Finding, ctx: ComposeContext) => string
 
 const RESCAN_BASE = 'https://v-guards.com/?url='
 
@@ -970,17 +999,197 @@ const PM_HINT = [
   '> - Otherwise → npm.',
 ].join('\n')
 
+function normalizeContext(ctx: ComposeContext): ComposeContext {
+  const out = { ...ctx }
+  if (!out.hostname || !out.baseDomain) {
+    try {
+      const u = new URL(ctx.finalUrl)
+      out.hostname = u.hostname.toLowerCase()
+      const parts = out.hostname.split('.')
+      out.baseDomain = parts.length >= 2 ? parts.slice(-2).join('.') : out.hostname
+    } catch {
+      out.hostname = ctx.hostname ?? ''
+      out.baseDomain = ctx.baseDomain ?? ''
+    }
+  }
+  if (!out.deployPlatform) out.deployPlatform = 'unknown'
+  return out
+}
+
+function dnsProviderHint(ctx: ComposeContext): string {
+  // Generic per-major-DNS-host commands. The agent picks the matching one.
+  const d = ctx.baseDomain ?? ''
+  return [
+    `**Add the record at your DNS provider** (NOT in your code repo). Identify which one by checking \`dig +short NS ${d}\`:`,
+    `- **GoDaddy** (\`*.domaincontrol.com\`) — UI: dcc.godaddy.com/control/dnsmanagement?domainName=${d}. API (if you have a key): \`PATCH https://api.godaddy.com/v1/domains/${d}/records\` with \`Authorization: sso-key <key>:<secret>\`. The API supports A/AAAA/CNAME/MX/NS/SRV/TXT — does NOT support CAA or DNSSEC; those need the dashboard.`,
+    `- **Cloudflare** (\`*.ns.cloudflare.com\`) — API: \`POST https://api.cloudflare.com/client/v4/zones/<ZONE_ID>/dns_records\` with \`Authorization: Bearer <CLOUDFLARE_TOKEN>\`. Token needs \`Zone:DNS:Edit\`. CLI: \`flarectl dns create --zone ${d} --type TXT --name <name> --content '<value>'\`.`,
+    `- **Route 53** (\`*.awsdns-*\`) — \`aws route53 change-resource-record-sets --hosted-zone-id <id> --change-batch '{"Changes":[{"Action":"CREATE","ResourceRecordSet":{...}}]}'\`.`,
+    `- **Namecheap / IONOS / register.domains** — UI only (no production-grade API). Login → DNS panel → add record.`,
+    `- **Vercel DNS** (\`ns1.vercel-dns.com\`) — \`POST https://api.vercel.com/v2/domains/${d}/records\` with \`Authorization: Bearer $VERCEL_TOKEN\`.`,
+    ``,
+    `Verify with \`dig +short <type> <name>.${d}\` after adding. DNS propagation typically 30s to 5 min on a 600s TTL.`,
+  ].join('\n')
+}
+
+function deployHint(ctx: ComposeContext): string {
+  const platform = ctx.deployPlatform ?? 'unknown'
+  if (platform === 'vercel') return `**Redeploy:** \`npx vercel deploy --prod --yes\` (token in \`VERCEL_TOKEN\` env). After redeploy, env-var changes take effect; existing deployments keep their build-time env.`
+  if (platform === 'netlify') return `**Redeploy:** \`netlify deploy --prod\` (or push to the linked branch).`
+  if (platform === 'cloudflare') return `**Redeploy:** \`wrangler deploy\` (Workers) or \`wrangler pages deploy <dist>\` (Pages).`
+  if (platform === 'railway') return `**Redeploy:** \`railway up\` (or push to the linked GitHub branch). For service-only redeploys: \`serviceInstanceDeployV2\` GraphQL mutation.`
+  return `**Redeploy** to your hosting platform. For env-var changes specifically: env vars only apply to NEW deployments — verify by checking the deployed runtime's \`process.env.<NAME>\` actually has the new value.`
+}
+
+const PLAYBOOKS: Record<string, Playbook> = {
+  // ─── Email auth ──────────────────────────────────────────────────────────
+  'email-no-spf': (_finding, ctx) => {
+    const d = ctx.baseDomain ?? '<your-domain>'
+    return [
+      `**STEP A — Inventory every service that sends mail FROM @${d}.**`,
+      `Walk through: transactional ESP (Resend / Postmark / Mailgun / SendGrid / SES), marketing (Mailchimp / ConvertKit), CRM auto-replies (HubSpot / Salesforce), Google Workspace / Microsoft 365 if used, your app's own SMTP if any. **If the answer is "no mail at all"** — publish a hard-fail SPF: \`v=spf1 -all\` (single TXT at apex). Done.`,
+      ``,
+      `**STEP B — Build the SPF string.**`,
+      `Combine the per-provider \`include:\` directives into ONE TXT record (RFC 7208 caps at 10 DNS lookups, so don't blindly stack):`,
+      `  • Resend       → \`include:amazonses.com\``,
+      `  • SendGrid     → \`include:sendgrid.net\``,
+      `  • Mailgun      → \`include:mailgun.org\``,
+      `  • Postmark     → \`include:spf.mtasv.net\``,
+      `  • Google WS    → \`include:_spf.google.com\``,
+      `  • Microsoft 365 → \`include:spf.protection.outlook.com\``,
+      `  • SES standalone → \`include:amazonses.com\` + IPs of your sending region`,
+      `End with \`-all\` (hard fail — receiver must reject anything not listed). Never \`?all\` (neutral, useless) or \`+all\` (allows ANY IP — opposite of secure).`,
+      `Example for a site that uses Resend + Google Workspace: \`v=spf1 include:amazonses.com include:_spf.google.com -all\``,
+      ``,
+      `**STEP C — Publish at your DNS provider.**`,
+      ``,
+      dnsProviderHint(ctx),
+      ``,
+      `**STEP D — Validate end-to-end with a real send.**`,
+      `Send one test email from each ESP TO \`check-auth@verifier.port25.com\` (free auto-replier) — within ~1 min you get a report showing \`SPF: pass\` for the sending IP. Repeat per ESP.`,
+      ``,
+      `**STEP E — Re-scan with V-Guards** to confirm the finding cleared: ${RESCAN_BASE}${encodeURIComponent(ctx.finalUrl)}`,
+    ].join('\n')
+  },
+
+  'email-no-dkim': (_finding, ctx) => {
+    const d = ctx.baseDomain ?? '<your-domain>'
+    return [
+      `**STEP A — IDENTIFY your mail providers.** Same inventory as SPF — every service sending FROM @${d} needs its OWN DKIM key. Without DKIM, DMARC alignment will fail and forwarded mail will land in spam regardless of SPF.`,
+      ``,
+      `**STEP B — FETCH the exact DNS record from each provider's dashboard.**`,
+      `Each provider exposes "Verify domain" / "DKIM" with the exact record:`,
+      `  • Resend: \`TXT  resend._domainkey  →  "p=MIGfMA0GCSqGSIb3..."\` (no v= tag — RFC 6376 §3.6.1 makes v= optional)`,
+      `  • Google Workspace: \`TXT  google._domainkey  →  "v=DKIM1; k=rsa; p=MIGfMA0..."\``,
+      `  • SendGrid: \`CNAME  s1._domainkey  →  s1.domainkey.uXXX.YYY.sendgrid.net\` + s2 (TWO records)`,
+      `  • Mailgun: \`TXT  mailgun._domainkey  →  "k=rsa; p=MIGfMA0..."\` + a CNAME for tracking`,
+      `  • Postmark: \`TXT  pm-bounces._domainkey  →  "k=rsa; p=MIGfMA0..."\``,
+      `  • SES: \`CNAME\` × 3 (each pointing to amazonses.com) — generated per-domain in SES console.`,
+      `Selector NAME is FIXED per provider — you don't invent it.`,
+      ``,
+      `**STEP C — PUBLISH at DNS.**`,
+      ``,
+      dnsProviderHint(ctx),
+      ``,
+      `Common copy-paste mistakes:`,
+      `• Wrapping the value in extra quotes when the registrar UI doesn't expect them.`,
+      `• Inserting line breaks — DKIM TXT often >255 chars (auto-chunked by most registrars; if yours doesn't, manually split into "<chunk1>" "<chunk2>").`,
+      `• Adding \`v=DKIM1; k=rsa;\` prefix that the provider DIDN'T include (Resend / SES intentionally omit it).`,
+      ``,
+      `**STEP D — VALIDATE.** Send a test email from each ESP to \`https://www.mail-tester.com\` (free, no signup) — it gives a 0-10 score with full DKIM diagnostics. Need "DKIM signature: passed" + "DKIM domain alignment: passed" for every ESP.`,
+      ``,
+      `**STEP E — Re-scan with V-Guards** to confirm: ${RESCAN_BASE}${encodeURIComponent(ctx.finalUrl)}`,
+    ].join('\n')
+  },
+
+  'email-dmarc-monitor': (_finding, ctx) => {
+    const d = ctx.baseDomain ?? '<your-domain>'
+    return [
+      `**Current state:** \`p=none\` is *monitor mode* — receivers REPORT alignment failures to your \`rua=mailto:...\` but DON'T quarantine or reject anything. Spoofers are still being delivered.`,
+      ``,
+      `**Don't jump straight to \`p=reject\`** — go through the ramp below. Total time: ~3-4 weeks at the safe pace, faster if you're confident every ESP is aligned.`,
+      ``,
+      `**Phase 1 (now):** stay at \`p=none\` for 2 weeks WHILE collecting reports. Add a \`rua=\` you actually monitor (free aggregator: dmarcian.com / valimail.com / postmark / dmarcdigests.com). Look for any "fail" rows from IPs you don't recognize — fix those first (publish missing DKIM at the right selector, or add the IP to SPF).`,
+      ``,
+      `**Phase 2 (week 3):** when reports show >95% of legitimate mail aligned, ramp to \`p=quarantine; pct=25\` — only 25% of failing mail goes to spam, rest still delivered. Watch reports for 1 week. If your senders show up as failing, you missed an SPF include or DKIM selector.`,
+      ``,
+      `**Phase 3 (week 4):** \`p=quarantine; pct=100\` for 1 week → then \`p=reject\` permanently. At reject, spoofed mail bounces — receiver returns the original sender 5xx.`,
+      ``,
+      `**Final record example:** \`v=DMARC1; p=reject; adkim=s; aspf=s; rua=mailto:dmarc@${d}; pct=100\` (\`adkim=s\` and \`aspf=s\` = strict alignment — subdomain-only senders need their own DMARC).`,
+      ``,
+      dnsProviderHint(ctx),
+      ``,
+      `**Verify after publish:** \`dig +short TXT _dmarc.${d}\` should return your new policy. Then run https://www.dmarcanalyzer.com/dmarc/dmarc-record-check/ on \`${d}\` for syntax check.`,
+    ].join('\n')
+  },
+
+  // ─── DNS hardening ───────────────────────────────────────────────────────
+  'dns-no-caa': (_finding, ctx) => {
+    const d = ctx.baseDomain ?? '<your-domain>'
+    return [
+      `**Add 3 CAA records on the apex of ${d}** to whitelist exactly which CAs may issue certs for your domain. Without CAA, ANY CA in the public CA pool can issue (one bad actor at one CA = MitM).`,
+      ``,
+      `**The 3 records (use whichever CA actually issues your certs — usually Let's Encrypt for Vercel/Netlify/Cloudflare):**`,
+      `  • \`CAA  @  0 issue "letsencrypt.org"\``,
+      `  • \`CAA  @  0 issuewild "letsencrypt.org"\` (covers \`*.${d}\`)`,
+      `  • \`CAA  @  0 iodef "mailto:security@${d}"\` (CA emails you on issuance attempts)`,
+      `If you also use Sectigo (e.g. for Cloudflare Origin Cert): add \`0 issue "sectigo.com"\`. If you use Google Trust Services: \`0 issue "pki.goog"\`.`,
+      ``,
+      `**GoDaddy gotcha:** the GoDaddy v1 API does NOT support CAA records — must use the dashboard UI (\`dcc.godaddy.com/control/dnsmanagement?domainName=${d}\` → Add Record → CAA). The form has separate dropdowns for Flag (0) / Tag (issue / issuewild / iodef) / Value (the CA's domain or mailto:).`,
+      ``,
+      dnsProviderHint(ctx),
+      ``,
+      `**Verify** (within 5-10 min): \`dig +short CAA ${d}\` — should return your 3 records. Or via DoH: \`curl 'https://cloudflare-dns.com/dns-query?name=${d}&type=CAA' -H 'Accept: application/dns-json'\`.`,
+      ``,
+      `**Validate end-to-end:** request a new cert (e.g. \`certbot certonly --dry-run -d ${d}\`) — it should succeed. If you accidentally wrote the wrong CA in CAA, the cert request 4xx's with a CAA-violation error.`,
+    ].join('\n')
+  },
+
+  'dns-no-dnssec': (_finding, ctx) => {
+    const d = ctx.baseDomain ?? '<your-domain>'
+    return [
+      `**Enable DNSSEC** so DNS responses for ${d} are cryptographically signed — without it, an attacker on a weak network can poison the DNS cache and redirect users to a malicious server.`,
+      ``,
+      `**The setup is registrar-side, not in your code.** Two records get created automatically:`,
+      `  • DNSKEY (in your zone) — published by your DNS provider when you enable DNSSEC.`,
+      `  • DS (at the registrar) — links your zone's DNSKEY to the parent (.com TLD) registry.`,
+      ``,
+      `**If your registrar AND DNS host are the same** (e.g. GoDaddy as both): one click in the dashboard does both sides automatically. No manual DS exchange.`,
+      `  • GoDaddy: \`dcc.godaddy.com/control/portfolio/${d}/dnssec\` → "Manage DNSSEC" → "Enable DNSSEC". Auto-generates DS at the .com registry. ~5 min propagation.`,
+      `  • Cloudflare: dash.cloudflare.com → Domain → DNS → DNSSEC → "Enable DNSSEC", then COPY the DS record values and paste them at your registrar's DNSSEC tab.`,
+      ``,
+      `**If registrar ≠ DNS host** (e.g. Cloudflare DNS, Namecheap registrar): enable DNSSEC at the DNS host first (gets you the DNSKEY + the DS values to publish). Then go to the registrar and paste the DS values into their DNSSEC field.`,
+      ``,
+      `**Verify** (within 5-15 min): \`dig +short DNSKEY ${d}\` returns 2-4 keys (mix of type-256 ZSK + type-257 KSK). \`dig +short DS ${d}\` returns the DS records at the registry. Full validation: https://dnsviz.net/d/${d}/dnssec/ — should show all-green.`,
+      ``,
+      `**Failure mode to watch for:** if the DS at the registrar doesn't match the DNSKEY in your zone (typo on copy-paste), DNSSEC validation breaks and your domain becomes UNREACHABLE for resolvers that enforce DNSSEC (\`SERVFAIL\`). Use the dnsviz link to confirm before walking away.`,
+    ].join('\n')
+  },
+}
+
+function playbookOrFallback(finding: Finding, ctx: ComposeContext): string {
+  const fn = PLAYBOOKS[finding.id]
+  if (fn) return fn(finding, ctx)
+  return finding.fixPrompt
+}
+
 export function composeFixPrompt(finding: Finding, ctx: ComposeContext): string {
   // Preserve `ok` / clean findings as-is — they have no action to take.
   if (!finding.fixPrompt || finding.severity === 'ok') return finding.fixPrompt
 
-  const fw = frameworkLabel(ctx.detectedFramework)
-  const stack = stackHint(ctx.detectedFramework, finding.category)
-  const verify = verifyCommand(finding.category, ctx.finalUrl, finding.evidence)
-  const investigate = investigateStep(finding.category, finding.evidence, ctx.finalUrl)
-  const regression = regressionTest(finding.category, finding.evidence, ctx.finalUrl)
+  const normalized = normalizeContext(ctx)
+  const fw = frameworkLabel(normalized.detectedFramework)
+  const stack = stackHint(normalized.detectedFramework, finding.category)
+  const verify = verifyCommand(finding.category, normalized.finalUrl, finding.evidence)
+  const investigate = investigateStep(finding.category, finding.evidence, normalized.finalUrl)
+  const regression = regressionTest(finding.category, finding.evidence, normalized.finalUrl)
   const antiPat = antiPatterns(finding.category)
-  const rescanLink = `${RESCAN_BASE}${encodeURIComponent(ctx.finalUrl)}`
+  const rescanLink = `${RESCAN_BASE}${encodeURIComponent(normalized.finalUrl)}`
+  const fixBody = playbookOrFallback(finding, normalized)
+  const deployTip = deployHint(normalized)
+  ctx = normalized
+  // Mark verify intentionally used in suffix below
+  void verify
+  void deployTip
 
   const blocks: string[] = [
     `# 🛡️ Vguard auto-fix — ${finding.title}`,
@@ -1004,7 +1213,9 @@ export function composeFixPrompt(finding: Finding, ctx: ComposeContext): string 
     ``,
     `## Step 2 — Fix the code`,
     ``,
-    finding.fixPrompt,
+    fixBody,
+    ``,
+    deployTip,
   ]
 
   if (stack) {
