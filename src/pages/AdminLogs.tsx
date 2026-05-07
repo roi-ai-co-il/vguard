@@ -12,6 +12,7 @@ declare global {
         opts: {
           sitekey: string
           theme?: 'light' | 'dark' | 'auto'
+          size?: 'normal' | 'flexible' | 'compact' | 'invisible'
           callback?: (token: string) => void
           'error-callback'?: () => void
           'expired-callback'?: () => void
@@ -19,6 +20,7 @@ declare global {
       ) => string | null
       remove: (id: string) => void
       reset: (id?: string) => void
+      getResponse: (id?: string) => string | undefined
     }
   }
 }
@@ -47,6 +49,7 @@ function TurnstileBox({
       const id = window.turnstile.render(containerRef.current, {
         sitekey: TURNSTILE_SITE_KEY,
         theme: 'dark',
+        size: 'normal',
         callback: (token) => onToken(token),
         'error-callback': () => onToken(''),
         'expired-callback': () => onToken(''),
@@ -199,15 +202,17 @@ export default function AdminLogs() {
 
   function login(e: React.FormEvent) {
     e.preventDefault()
-    if (TURNSTILE_SITE_KEY && !turnstileToken) {
+    const liveToken = turnstileToken || window.turnstile?.getResponse() || ''
+    if (TURNSTILE_SITE_KEY && !liveToken) {
       setAuthError('Please complete the verification challenge.')
       return
     }
+    if (liveToken && liveToken !== turnstileToken) setTurnstileToken(liveToken)
     const clean = secret.trim()
     setSecret(clean)
     sessionStorage.setItem('vg_admin_secret', clean)
     setSubmittedSecret(clean)
-    fetchLogs(clean, turnstileToken)
+    fetchLogs(clean, liveToken)
   }
 
   useEffect(() => {
