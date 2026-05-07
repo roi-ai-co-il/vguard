@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { promises as dns } from 'node:dns'
 import { recordVerification } from './_lib/verification-store.js'
+import { sendVerificationConfirmation, fireAndForget } from './_lib/verify-email.js'
 
 export const config = {
   runtime: 'nodejs',
@@ -11,6 +12,8 @@ interface VerifyBody {
   domain?: string
   uuid?: string
   method?: 'file' | 'dns'
+  /** Optional — when present, send a confirmation email to this address on success. */
+  email?: string
 }
 
 interface VerifyResponse {
@@ -134,6 +137,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const domain = (body.domain ?? '').trim().toLowerCase()
   const uuid = (body.uuid ?? '').trim()
   const method = body.method ?? 'file'
+  const email = typeof body.email === 'string' ? body.email.trim().slice(0, 200) : ''
 
   if (!domain || !isValidDomain(domain)) {
     return res
@@ -165,6 +169,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         await recordVerification(domain, uuid, method, ua)
       } catch {
         // ignore — DB write is best-effort, deep scan can re-verify live
+      }
+      if (email) {
+        fireAndForget(sendVerificationConfirmation(email, domain, method))
       }
     }
     return res.status(200).json(result)

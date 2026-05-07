@@ -965,6 +965,7 @@ function Stage3Modal({
   const [userJwt, setUserJwt] = useState('')
   const [authMode, setAuthMode] = useState(false)
   const [vercelToken, setVercelToken] = useState('')
+  const [verifyEmail, setVerifyEmail] = useState('')
   // When DNS verification finds a stale Vguard UUID at the user's registrar,
   // we surface a one-click "use this code" button instead of making them push
   // yet another DNS update. Cleared on success / re-attempt / method switch.
@@ -1018,14 +1019,14 @@ function Stage3Modal({
         const r = await fetch('/api/verify-vercel-token', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ domain, uuid: verifyUuid, vercelToken }),
+          body: JSON.stringify({ domain, uuid: verifyUuid, vercelToken, email: verifyEmail.trim() || undefined }),
         })
         data = (await r.json()) as VerifyApiResponse
       } else {
         const r = await fetch('/api/verify', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ domain, uuid: verifyUuid, method }),
+          body: JSON.stringify({ domain, uuid: verifyUuid, method, email: verifyEmail.trim() || undefined }),
         })
         data = (await r.json()) as VerifyApiResponse
       }
@@ -1487,6 +1488,26 @@ function Stage3Modal({
               </p>
             </div>
           )}
+        </div>
+
+        <div className="mt-5">
+          <label htmlFor="verify-email" className="block font-mono text-[10px] tracking-widest uppercase text-(--color-fg-dim) mb-1.5">
+            Email for confirmation (optional)
+          </label>
+          <input
+            id="verify-email"
+            type="email"
+            value={verifyEmail}
+            onChange={(e) => setVerifyEmail(e.target.value)}
+            disabled={status === 'checking' || status === 'verified'}
+            autoComplete="email"
+            maxLength={200}
+            placeholder="you@example.com"
+            className="w-full max-w-sm bg-(--color-bg) border border-(--color-border) rounded-md px-3 py-2 font-mono text-xs text-(--color-fg) placeholder:text-(--color-fg-dim) focus:outline-none focus:border-(--color-accent-border) disabled:opacity-60"
+          />
+          <p className="mt-1.5 font-mono text-[10px] text-(--color-fg-dim) leading-relaxed">
+            We'll send a one-time confirmation when {domain} is verified — and only then. No newsletter, no follow-ups. Leave empty to skip.
+          </p>
         </div>
 
         <div className="mt-5 flex items-center gap-2 flex-wrap">

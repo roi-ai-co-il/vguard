@@ -11,6 +11,7 @@
  */
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { recordVerification } from './_lib/verification-store.js'
+import { sendVerificationConfirmation, fireAndForget } from './_lib/verify-email.js'
 
 export const config = {
   runtime: 'nodejs',
@@ -22,6 +23,8 @@ interface VerifyVercelTokenBody {
   uuid?: string
   /** User-supplied Vercel personal access token (from vercel.com/account/tokens) */
   vercelToken?: string
+  /** Optional — confirmation email recipient on successful verify. */
+  email?: string
 }
 
 interface VercelProject {
@@ -151,6 +154,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       recordVerification(domain, uuid, 'oauth', `vercel-token:${ua ?? ''}`).catch(() => {
         // ignore
       })
+      const email = typeof body.email === 'string' ? body.email.trim().slice(0, 200) : ''
+      if (email) {
+        fireAndForget(sendVerificationConfirmation(email, domain, 'vercel'))
+      }
       return res.status(200).json({
         ok: true,
         verified: true,
