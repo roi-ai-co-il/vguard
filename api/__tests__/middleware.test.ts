@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 
 const SECRET_PATH = '/internal-vg-logs-test-' + Math.random().toString(36).slice(2, 14)
 
-function makeReq(path: string, base = 'https://vguardus.com'): Request {
+function makeReq(path: string, base = 'https://v-guards.com'): Request {
   return new Request(new URL(path, base).toString())
 }
 
