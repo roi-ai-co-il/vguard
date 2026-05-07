@@ -2165,6 +2165,19 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
   }
 
   // === SRI on external scripts ===
+  // Hosts that intentionally do NOT support SRI: anti-bot / CAPTCHA scripts
+  // are silently auto-updated by the provider; pinning a hash would lock the
+  // user to a stale (insecure) version. The provider takes responsibility for
+  // the script body, the user takes responsibility for the host trust. Skip.
+  const SRI_EXEMPT_HOSTS = new Set<string>([
+    'challenges.cloudflare.com', // Cloudflare Turnstile
+    'js.hcaptcha.com',
+    'hcaptcha.com',
+    'www.google.com', // reCAPTCHA loader
+    'www.gstatic.com', // reCAPTCHA assets
+    'www.recaptcha.net',
+    'recaptcha.net',
+  ])
   const allScriptTags = Array.from(html.matchAll(/<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["'][^>]*>/gi))
   const externalNoSri: string[] = []
   for (const m of allScriptTags) {
@@ -2184,6 +2197,7 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
       continue
     }
     if (scriptHost === url.host) continue
+    if (SRI_EXEMPT_HOSTS.has(scriptHost)) continue
     if (/\bintegrity\s*=/i.test(tag)) continue
     externalNoSri.push(absUrl)
   }

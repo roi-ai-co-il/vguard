@@ -187,11 +187,14 @@ function buildLiveApiMap(data: WorkerScanResult): LiveApiMap {
   // Path patterns intended to be unauth-by-design across the ecosystem; flagging
   // them as a privilege-leak produces noise the user can't act on.
   const WELL_KNOWN_PUBLIC_PATHS: RegExp[] = [
-    /^\/(health|healthz|status|version|ping|ready|live)\/?$/i,
-    /^\/api\/(health|healthz|status|version|ping|ready|live)\/?$/i,
-    /^\/(manifest\.json|robots\.txt|sitemap\.xml|favicon\.ico)$/i,
+    /^\/(?:api\/)?(?:health|healthz|liveness|readiness|ready|ping|status|version|info|metrics|build-info)\/?$/i,
+    /^\/(?:api\/)?(?:recent|public|world|trending|leaderboard|stats|stats-public)(?:-[\w-]+)?\/?$/i,
+    /^\/manifest\.(?:json|webmanifest)$/i,
+    /^\/(?:robots\.txt|sitemap(?:-\d+)?\.xml|favicon\.ico|opensearch\.xml|browserconfig\.xml)$/i,
     /^\/\.well-known\//i,
-    /^\/(api\/)?(public|open)\//i,
+    /^\/(?:api\/)?(public|open)\//i,
+    /^\/(?:sw|service-worker|workbox-[\w-]+|firebase-messaging-sw|registerSW|sw-precache)\.js$/i,
+    /^\/workbox-.*\.js$/i,
   ]
   // eslint-disable-next-line no-inner-declarations
   function isWellKnownPublicEndpoint(rawUrl: string): boolean {
