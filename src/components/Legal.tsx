@@ -231,7 +231,7 @@ const PRIVACY: LegalDocument = {
     {
       level: 2,
       heading: '11. Contact',
-      body: 'For privacy-related questions, please contact: hello@roiai.co.il',
+      body: 'For privacy-related questions, please contact: infovguards@gmail.com',
     },
   ],
 }

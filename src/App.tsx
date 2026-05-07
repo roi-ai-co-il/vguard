@@ -495,7 +495,7 @@ export default function App() {
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-5 sm:py-6 flex flex-col gap-2 font-mono text-[11px] sm:text-xs text-(--color-fg-dim)">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-1 sm:gap-0">
             <span>© 2026 V-Guards</span>
-            <span>built by ROI AI · in stealth</span>
+            <span>in stealth</span>
           </div>
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-1 sm:gap-0">
             <span>Founders · Roy Argaman · Oded Safdie</span>

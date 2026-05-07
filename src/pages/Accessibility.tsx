@@ -25,11 +25,11 @@ export default function Accessibility() {
         <div className="space-y-6 text-sm sm:text-base leading-relaxed text-(--color-fg-muted)">
           <Section title="Our commitment">
             <p>
-              ROI AI is committed to making V-Guards (
+              V-Guards (
               <a href="https://v-guards.com" className="text-(--color-accent) hover:underline">
                 https://v-guards.com
               </a>
-              ) accessible to the widest possible audience, regardless of ability or technology.
+              ) is committed to making this site accessible to the widest possible audience, regardless of ability or technology.
               We strive to follow web accessibility best practices and continually improve the
               experience for all visitors.
             </p>
