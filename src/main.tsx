@@ -8,9 +8,9 @@ const Privacy = lazy(() => import('./pages/Privacy.tsx'))
 
 function pickRoute() {
   const path = window.location.pathname
-  if (path === '/admin/logs' || path === '/admin/logs/') return <AdminLogs />
   if (path === '/privacy' || path === '/privacy/') return <Privacy />
-  return <App />
+  if (path === '/' || path === '' || path === '/terms' || path === '/terms/') return <App />
+  return <AdminLogs />
 }
 
 createRoot(document.getElementById('root')!).render(
