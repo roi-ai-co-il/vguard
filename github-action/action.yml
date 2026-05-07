@@ -1,0 +1,43 @@
+name: 'Vguard Security Scan'
+description: 'Run a Vguard security scan against a deployed URL and post findings as a PR comment.'
+author: 'ROI AI'
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  url:
+    description: 'Target URL to scan (a deployed preview URL or production).'
+    required: true
+  fail-on:
+    description: 'Severity floor that fails the action: critical | warn | info | never.'
+    required: false
+    default: 'warn'
+  comment-on-pr:
+    description: 'Post the findings table as a PR comment. Set to "false" to disable.'
+    required: false
+    default: 'true'
+  comment-tag:
+    description: 'Marker tag the action uses to update its existing comment instead of stacking new ones.'
+    required: false
+    default: 'vguard'
+  api-url:
+    description: 'Override the Vguard API base (defaults to the public instance).'
+    required: false
+    default: 'https://vguard-tau.vercel.app'
+
+outputs:
+  vibe-score:
+    description: 'Numeric Vibe Score 0–100 (only set on a successful scan).'
+  critical:
+    description: 'Number of critical findings.'
+  warn:
+    description: 'Number of warn findings.'
+  info:
+    description: 'Number of info findings.'
+  outcome:
+    description: 'Scan outcome: success | blocked_by_waf | blocked_by_target | unreachable | timeout | internal.'
+
+runs:
+  using: 'node20'
+  main: 'index.js'

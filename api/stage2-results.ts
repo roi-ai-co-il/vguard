@@ -31,7 +31,7 @@ function analyzeStage2(url: string, d: CollectedData): Finding[] {
     findings.push({
       id: 'stage2-cookie-not-httponly',
       severity: 'warn',
-      category: 'cookies',
+      category: 'auth-weak',
       title: `${sensitiveCookieNames.length} sensitive cookie${
         sensitiveCookieNames.length === 1 ? '' : 's'
       } readable from JavaScript`,
@@ -49,7 +49,7 @@ function analyzeStage2(url: string, d: CollectedData): Finding[] {
     findings.push({
       id: 'stage2-localstorage-auth-tokens',
       severity: 'warn',
-      category: 'cookies',
+      category: 'auth-disclosure',
       title: 'Authentication tokens stored in localStorage',
       description: `${lsAuthKeys.join(
         ', ',
@@ -72,6 +72,31 @@ function analyzeStage2(url: string, d: CollectedData): Finding[] {
       description: `Firebase configuration is attached to the window object. While the Firebase config (apiKey, authDomain, etc.) is meant to be public, having it on a window global makes any 3rd-party script trivially dump it.`,
       evidence: 'window.firebaseConfig is defined',
       fixPrompt: `Avoid attaching Firebase config to window globals. Initialize Firebase inside an IIFE / module scope, exposing only what your app needs. This won't fix any real CVE but it raises the bar against accidental third-party-script exfiltration. Also enable Firebase App Check for stronger client-side attestation.`,
+    })
+  }
+
+  // Auth surface enumeration — auth-related globals + storage keys signal which auth provider is in use
+  // (good for the user to know they have a discoverable enum surface).
+  const allKeys = [...d.localStorageKeys, ...d.sessionStorageKeys, ...d.cookieKeys]
+  const authProviderHits: string[] = []
+  if (d.globals?.hasSupabaseClient) authProviderHits.push('window.supabase (Supabase Auth)')
+  if (d.globals?.hasFirebaseClient || d.globals?.hasFirebaseConfig)
+    authProviderHits.push('window.firebase / firebaseConfig (Firebase Auth)')
+  if (allKeys.some((k) => /^sb-.*-auth-token/i.test(k))) authProviderHits.push('Supabase session key')
+  if (allKeys.some((k) => /^firebase:authUser/i.test(k))) authProviderHits.push('Firebase session key')
+  if (allKeys.some((k) => /^(clerk|nextauth|auth0|cognito)/i.test(k)))
+    authProviderHits.push('Third-party auth provider session key')
+  if (authProviderHits.length > 0) {
+    findings.push({
+      id: 'stage2-auth-enum-surface',
+      severity: 'info',
+      category: 'auth-enum',
+      title: `Auth provider fingerprint visible to client (${authProviderHits.length} signal${
+        authProviderHits.length === 1 ? '' : 's'
+      })`,
+      description: `Stage 2 confirmed which authentication system this site uses based on client-side globals and storage keys. This isn't a vulnerability on its own, but it tells an attacker exactly which enumeration playbook to run (Supabase signup-leak, Firebase email-link enum, Auth0 connection probing). Keep your login/signup/reset endpoints' responses identical for known and unknown users.`,
+      evidence: authProviderHits.join('\n'),
+      fixPrompt: `Make all auth endpoints return identical responses for known and unknown emails: same body, same status, same response time. For Supabase: customize Auth email templates so password-reset always sends a generic "if registered, check your inbox" message and the API returns 200 either way. For Firebase: configure passwordReset with handleCodeInApp and avoid different error codes. Add Turnstile / hCaptcha on all auth forms and per-IP rate limit (5 attempts / 15min).`,
     })
   }
 

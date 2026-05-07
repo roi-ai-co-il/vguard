@@ -18,7 +18,7 @@
  * fill subdomains in the next round once we accept the extra ~600ms call.
  */
 
-import type { AttackSurface, CdnProvider } from '../../src/lib/scanner-types.js'
+import type { AttackSurface, CdnProvider, WafVendor } from '../../src/lib/scanner-types.js'
 
 interface BuildInput {
   primaryDomain: string
@@ -35,6 +35,13 @@ interface BuildInput {
   }
   /** S1+3 — Pre-resolved list of subdomains from crt.sh (caller controls latency). */
   subdomains?: string[]
+  /** WAF/edge state captured during the initial fetch + stealth retry. */
+  waf?: {
+    vendor: WafVendor
+    blocked: boolean
+    stealthRetryAttempted: boolean
+    stealthRetrySucceeded: boolean
+  } | null
 }
 
 /**
@@ -306,5 +313,9 @@ export function buildAttackSurface(input: BuildInput): AttackSurface {
     authProviders,
     dataStores,
     subdomains: input.subdomains ?? [],
+    wafVendor: input.waf?.vendor ?? null,
+    wafBlocked: input.waf?.blocked ?? false,
+    stealthRetryAttempted: input.waf?.stealthRetryAttempted ?? false,
+    stealthRetrySucceeded: input.waf?.stealthRetrySucceeded ?? false,
   }
 }

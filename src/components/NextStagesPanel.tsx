@@ -244,7 +244,7 @@ function buildBookmarkletSource(uuid: string, collectorOrigin: string): string {
   ].join('')
 }
 
-function Stage2Modal({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function Stage2Modal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [uuid] = useState(() => `vs2-${generateUuid()}`)
   const [copied, setCopied] = useState(false)
   const [pollState, setPollState] = useState<'idle' | 'waiting' | 'ready' | 'error'>('idle')
@@ -675,6 +675,9 @@ interface VerifyApiResponse {
   method?: VerifyMethod
   error?: string
   hint?: string
+  /** Stale-but-shaped UUID present at the user's DNS — surfaces a one-click
+   * "use this code" recovery path instead of forcing another DNS update. */
+  foundDnsUuid?: string
 }
 
 function generateUuid(): string {
@@ -683,6 +686,50 @@ function generateUuid(): string {
   }
   // Fallback
   return Array.from({ length: 32 }, () => Math.floor(Math.random() * 16).toString(16)).join('')
+}
+
+// Persist Stage-3 verification UUIDs in localStorage keyed by the domain
+// being verified. Survives page reload, modal open/close, and the 30s-5min
+// DNS propagation window — without it, every refresh issued a new UUID and
+// the user's just-added DNS record became immediately stale.
+const VERIFY_UUID_TTL_MS = 7 * 24 * 60 * 60 * 1000
+function verifyUuidStorageKey(domain: string): string {
+  return `vguard-verify-uuid:${domain.toLowerCase()}`
+}
+function loadOrCreatePersistedUuid(domain: string): string {
+  if (typeof window === 'undefined' || !domain) return `vs-${generateUuid()}`
+  const key = verifyUuidStorageKey(domain)
+  try {
+    const raw = window.localStorage.getItem(key)
+    if (raw) {
+      const parsed = JSON.parse(raw) as { uuid?: string; createdAt?: number }
+      if (
+        parsed.uuid && /^vs-[A-Za-z0-9-]{8,}$/.test(parsed.uuid) &&
+        typeof parsed.createdAt === 'number' &&
+        Date.now() - parsed.createdAt < VERIFY_UUID_TTL_MS
+      ) {
+        return parsed.uuid
+      }
+    }
+  } catch {
+    // ignore parse / storage errors, fall through and mint a new one
+  }
+  const fresh = `vs-${generateUuid()}`
+  try {
+    window.localStorage.setItem(key, JSON.stringify({ uuid: fresh, createdAt: Date.now() }))
+  } catch {
+    // localStorage may be unavailable (private mode, quota); UUID still works
+    // for the current session, just won't survive reload.
+  }
+  return fresh
+}
+function clearPersistedUuid(domain: string): void {
+  if (typeof window === 'undefined' || !domain) return
+  try {
+    window.localStorage.removeItem(verifyUuidStorageKey(domain))
+  } catch {
+    // ignore
+  }
 }
 
 interface FreeTierProvider {
@@ -897,7 +944,13 @@ function Stage3Modal({
   scannedUrl: string
   onDeepScanComplete?: (result: ScanResult) => void
 }) {
-  const [uuid] = useState(() => `vs-${generateUuid()}`)
+  // Persisted per-domain so a page refresh / modal close+reopen doesn't issue
+  // a fresh UUID and orphan the DNS / file record the user just added. DNS
+  // propagation alone takes ~30s-5min; if Vguard rotates the UUID inside
+  // that window the user races their own DNS updates forever (lost minutes
+  // per attempt). Reset button clears it explicitly. 7d TTL is well past any
+  // realistic verification roundtrip and short of "stale forever".
+  const [uuid, setUuid] = useState(() => loadOrCreatePersistedUuid(domain))
   // Detect free-tier hosting subdomains — for these, the user does NOT own the
   // parent domain, so DNS verification can't work. File upload is the right path.
   const freeTier = detectFreeTierProvider(domain)
@@ -912,6 +965,10 @@ function Stage3Modal({
   const [userJwt, setUserJwt] = useState('')
   const [authMode, setAuthMode] = useState(false)
   const [vercelToken, setVercelToken] = useState('')
+  // When DNS verification finds a stale Vguard UUID at the user's registrar,
+  // we surface a one-click "use this code" button instead of making them push
+  // yet another DNS update. Cleared on success / re-attempt / method switch.
+  const [foundDnsUuid, setFoundDnsUuid] = useState<string | null>(null)
   // Vercel-token method is hidden behind an "Advanced" disclosure — pasting a
   // PAT into a 3rd-party scanner is a real trust ask, not for every user.
   const [showAdvanced, setShowAdvanced] = useState(false)
@@ -941,9 +998,15 @@ function Stage3Modal({
     }
   }
 
-  async function verifyNow() {
+  async function verifyNow(uuidOverride?: string) {
+    // React state updates are async — when the "Use this DNS code" path adopts
+    // a new UUID it can't rely on `uuid` (the closure capture) reflecting the
+    // setUuid call yet. Allow callers to pass the value they want to verify
+    // explicitly. Falls back to the closure-captured state for normal clicks.
+    const verifyUuid = uuidOverride ?? uuid
     setStatus('checking')
     setHint('')
+    setFoundDnsUuid(null)
     try {
       let data: VerifyApiResponse
       if (method === 'vercel') {
@@ -955,24 +1018,30 @@ function Stage3Modal({
         const r = await fetch('/api/verify-vercel-token', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ domain, uuid, vercelToken }),
+          body: JSON.stringify({ domain, uuid: verifyUuid, vercelToken }),
         })
         data = (await r.json()) as VerifyApiResponse
       } else {
         const r = await fetch('/api/verify', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ domain, uuid, method }),
+          body: JSON.stringify({ domain, uuid: verifyUuid, method }),
         })
         data = (await r.json()) as VerifyApiResponse
       }
       if (data.verified) {
         setStatus('verified')
-        // Auto-trigger deep scan
-        setTimeout(() => runDeepScan(), 600)
+        // Auto-trigger deep scan. Pass the verify uuid explicitly so the
+        // closure-captured `uuid` from a stale render (e.g. when verifyNow
+        // was scheduled via setTimeout right after setUuid) can't poison the
+        // body the deep-scan endpoint receives.
+        setTimeout(() => runDeepScan(verifyUuid), 600)
       } else {
         setStatus('failed')
         setHint(data.hint ?? data.error ?? 'Could not verify ownership.')
+        if (data.foundDnsUuid && /^vs-[A-Za-z0-9-]{8,}$/.test(data.foundDnsUuid)) {
+          setFoundDnsUuid(data.foundDnsUuid)
+        }
       }
     } catch (e) {
       setStatus('failed')
@@ -981,7 +1050,13 @@ function Stage3Modal({
     }
   }
 
-  async function runDeepScan() {
+  async function runDeepScan(uuidOverride?: string) {
+    // Same closure-staleness concern as verifyNow — when called via setTimeout
+    // from a verify path that just adopted a new uuid, the closure-captured
+    // `uuid` may still be the pre-adopt value. Caller can pass the verified
+    // uuid explicitly; falls back to component state for normal "Run again"
+    // clicks where state is fresh.
+    const scanUuid = uuidOverride ?? uuid
     setStatus('scanning')
     setHint('')
     try {
@@ -990,7 +1065,7 @@ function Stage3Modal({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           url: scannedUrl,
-          uuid,
+          uuid: scanUuid,
           // 'vercel' verification was recorded under 'oauth' in the cache
           method: method === 'vercel' ? 'oauth' : method,
           userJwt: authMode && userJwt ? userJwt : undefined,
@@ -1417,7 +1492,7 @@ function Stage3Modal({
         <div className="mt-5 flex items-center gap-2 flex-wrap">
           <button
             type="button"
-            onClick={verifyNow}
+            onClick={() => verifyNow()}
             disabled={status === 'checking'}
             className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-(--color-accent) text-(--color-bg) hover:bg-(--color-accent-strong) font-mono text-xs font-semibold transition-colors cursor-pointer min-h-[36px] disabled:opacity-50 disabled:cursor-not-allowed"
           >
@@ -1439,13 +1514,29 @@ function Stage3Modal({
             )}
           </button>
           {status !== 'idle' && status !== 'checking' && (
-            <button
-              type="button"
-              onClick={() => setStatus('idle')}
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-(--color-surface-elevated) hover:bg-(--color-bg) border border-(--color-border) text-(--color-fg-muted) font-mono text-xs transition-colors cursor-pointer min-h-[36px]"
-            >
-              Reset
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => setStatus('idle')}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-(--color-surface-elevated) hover:bg-(--color-bg) border border-(--color-border) text-(--color-fg-muted) font-mono text-xs transition-colors cursor-pointer min-h-[36px]"
+              >
+                Reset
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  clearPersistedUuid(domain)
+                  const fresh = loadOrCreatePersistedUuid(domain)
+                  setUuid(fresh)
+                  setStatus('idle')
+                  setHint('New verification code generated. Update your DNS / file with the new value above.')
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-(--color-surface-elevated) hover:bg-(--color-bg) border border-(--color-border) text-(--color-fg-muted) font-mono text-xs transition-colors cursor-pointer min-h-[36px]"
+                title="Generate a fresh verification code (only if the current one is truly broken)"
+              >
+                New code
+              </button>
+            </>
           )}
         </div>
 
@@ -1510,7 +1601,20 @@ function Stage3Modal({
                 </p>
                 <button
                   type="button"
-                  onClick={onClose}
+                  onClick={() => {
+                    onClose()
+                    // Modal close animation needs a tick before the page can
+                    // scroll cleanly to the report section above. Without the
+                    // delay the scroll fires while the modal is still in DOM
+                    // and the user lands halfway between the modal fade-out
+                    // and the report.
+                    setTimeout(() => {
+                      const el = typeof document !== 'undefined' ? document.getElementById('vguard-report') : null
+                      if (el && typeof el.scrollIntoView === 'function') {
+                        el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                      }
+                    }, 250)
+                  }}
                   className="mt-3 inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-(--color-accent) text-(--color-bg) hover:bg-(--color-accent-strong) font-mono text-xs font-semibold transition-colors cursor-pointer min-h-[36px]"
                 >
                   See report
@@ -1531,6 +1635,41 @@ function Stage3Modal({
               Not yet verified
             </div>
             <p className="text-sm text-(--color-fg-muted) leading-relaxed">{hint}</p>
+            {foundDnsUuid && method === 'dns' && (
+              <div className="mt-3 flex flex-col sm:flex-row gap-2 sm:items-center">
+                <button
+                  type="button"
+                  onClick={() => {
+                    // Adopt the UUID that's already at the user's DNS into the
+                    // persisted UUID for this domain, then immediately retry.
+                    // Avoids the "rotate -> add -> rotate again" race entirely.
+                    if (typeof window !== 'undefined' && domain) {
+                      try {
+                        window.localStorage.setItem(
+                          verifyUuidStorageKey(domain),
+                          JSON.stringify({ uuid: foundDnsUuid, createdAt: Date.now() }),
+                        )
+                      } catch {
+                        // localStorage may be unavailable; the in-memory uuid below still works for this session.
+                      }
+                    }
+                    setUuid(foundDnsUuid)
+                    const adopted = foundDnsUuid
+                    setFoundDnsUuid(null)
+                    setHint('')
+                    setStatus('idle')
+                    // Pass the adopted UUID explicitly — setUuid hasn't flushed yet.
+                    setTimeout(() => verifyNow(adopted), 50)
+                  }}
+                  className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-md bg-(--color-accent) text-(--color-bg-on-accent) hover:opacity-90 font-mono text-xs tracking-widest uppercase transition-opacity cursor-pointer min-h-[36px]"
+                >
+                  Use this DNS code
+                </button>
+                <span className="text-xs text-(--color-fg-muted) font-mono break-all">
+                  {foundDnsUuid}
+                </span>
+              </div>
+            )}
           </motion.div>
         )}
       </div>

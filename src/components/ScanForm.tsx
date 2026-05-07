@@ -26,6 +26,7 @@ import {
   Cookie,
   Link2,
   ShieldAlert,
+  Shield,
   Code,
   Globe,
   Mail,
@@ -34,16 +35,90 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { VibeScoreGauge } from '@/components/ui/vibe-score-gauge'
-import { NextStagesPanel } from '@/components/NextStagesPanel'
+import { NextStagesPanel, Stage2Modal } from '@/components/NextStagesPanel'
 import type {
   Category,
   Finding as ApiFinding,
+  ScanError,
   ScanResponse,
   ScanResult,
   Severity,
+  WafVendor,
 } from '@/lib/scanner-types'
 
+const WAF_VENDOR_LABEL: Record<WafVendor, string> = {
+  cloudflare: 'Cloudflare',
+  akamai: 'Akamai',
+  imperva: 'Imperva',
+  fastly: 'Fastly',
+  'aws-cloudfront': 'AWS CloudFront',
+  'aws-waf': 'AWS WAF',
+  'vercel-bot-protection': 'Vercel Bot Protection',
+  sucuri: 'Sucuri',
+  stackpath: 'StackPath',
+  'ddos-guard': 'DDoS-Guard',
+  unknown: 'WAF / firewall',
+}
+
 type ScanState = 'idle' | 'scanning' | 'result' | 'error'
+
+interface StreamPhaseEvent {
+  type: 'phase'
+  step: number
+  total: number
+  name: string
+  label: string
+}
+type StreamEvent = StreamPhaseEvent | { type: 'result'; result: ScanResponse }
+
+/**
+ * Consume the NDJSON stream from /api/scan-stream, dispatching each event
+ * to the supplied callbacks. Resolves when the stream closes (after the
+ * `result` event); rejects on network/abort errors.
+ */
+async function consumeScanStream(
+  url: string,
+  signal: AbortSignal,
+  onPhase: (e: StreamPhaseEvent) => void,
+  onResult: (r: ScanResponse) => void,
+): Promise<void> {
+  const resp = await fetch('/api/scan-stream', {
+    method: 'POST',
+    signal,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url }),
+  })
+  if (!resp.ok || !resp.body) throw new Error(`HTTP ${resp.status}`)
+  const reader = resp.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+    for (const line of lines) {
+      const t = line.trim()
+      if (!t) continue
+      try {
+        const ev = JSON.parse(t) as StreamEvent
+        if (ev.type === 'phase') onPhase(ev)
+        else if (ev.type === 'result') onResult(ev.result)
+      } catch {
+        // Malformed line — ignore, the scan can still complete with the next event.
+      }
+    }
+  }
+  if (buffer.trim()) {
+    try {
+      const ev = JSON.parse(buffer.trim()) as StreamEvent
+      if (ev.type === 'result') onResult(ev.result)
+    } catch {
+      // ignore trailing partial
+    }
+  }
+}
 
 const SCAN_STEPS = [
   'Resolving DNS & TLS handshake',
@@ -59,6 +134,9 @@ const SCAN_STEPS = [
 const CATEGORY_META: Record<Category, { label: string; Icon: LucideIcon }> = {
   secrets: { label: 'Secrets & API keys', Icon: KeyRound },
   auth: { label: 'Auth & sessions', Icon: ShieldCheck },
+  'auth-enum': { label: 'User enumeration', Icon: ShieldCheck },
+  'auth-weak': { label: 'Auth weaknesses', Icon: ShieldCheck },
+  'auth-disclosure': { label: 'Auth info disclosure', Icon: ShieldCheck },
   headers: { label: 'HTTP security headers', Icon: FileWarning },
   paths: { label: 'Exposed paths', Icon: Folder },
   sourcemaps: { label: 'Source maps', Icon: FileCode },
@@ -75,7 +153,6 @@ const CATEGORY_META: Record<Category, { label: string; Icon: LucideIcon }> = {
   meta: { label: 'Scan metadata', Icon: Database },
 }
 
-const STEP_DURATION_MS = 480
 /**
  * Minimum wall-clock duration of the scanning UI. Even when the API resolves
  * faster, we hold the visualization for this long so users see the step-list
@@ -513,6 +590,98 @@ function CopyAllFixPromptsButton({ result }: { result: ScanResult }) {
   )
 }
 
+/**
+ * Surface the detected WAF / edge protection at the top of the result panel.
+ * Two purposes:
+ *   1. Show the user what's in front of their origin (informational — this is
+ *      defense, not a problem).
+ *   2. If the initial scan was blocked and the stealth retry rescued it, say
+ *      so explicitly. Builds trust: the report covers the live site even
+ *      though the WAF tried to deny us.
+ */
+function WafSurfacePanel({ surface }: { surface: NonNullable<ScanResult['attackSurface']> }) {
+  const vendor = surface.wafVendor
+  if (!vendor) return null
+  const blocked = surface.wafBlocked === true
+  const stealthOk = surface.stealthRetrySucceeded === true
+  return (
+    <div className="mb-3 px-3 py-2.5 rounded-md border border-amber-500/30 bg-amber-500/5 flex items-start gap-2.5">
+      <Shield size={14} strokeWidth={2.5} className="text-amber-300 mt-0.5 flex-shrink-0" aria-hidden="true" />
+      <div className="min-w-0 flex-1 text-xs leading-relaxed">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="font-mono text-[10px] uppercase tracking-widest text-amber-300/80">
+            Edge protection detected
+          </span>
+          <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-amber-200 font-mono text-[11px] font-semibold">
+            {WAF_VENDOR_LABEL[vendor]}
+          </span>
+        </div>
+        {blocked && stealthOk && (
+          <p className="mt-1.5 text-(--color-fg-muted)">
+            <span className="text-amber-200">Initial automated request was blocked, browser-like retry succeeded.</span>{' '}
+            The findings below cover the live site — Vguard adapted by sending stealth headers (Sec-Ch-Ua + Sec-Fetch-*) on the second try.
+          </p>
+        )}
+        {!blocked && (
+          <p className="mt-1.5 text-(--color-fg-muted)">
+            Detected from response headers — the scan was not blocked. Recorded in the attack surface map.
+          </p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+type ChipTone = 'default' | 'danger' | 'warn' | 'ok' | 'muted'
+function FilterChip({
+  label,
+  count,
+  active,
+  onClick,
+  tone = 'default',
+}: {
+  label: string
+  count: number
+  active: boolean
+  onClick: () => void
+  tone?: ChipTone
+}) {
+  const tones: Record<ChipTone, { active: string; idle: string }> = {
+    default: {
+      active: 'bg-(--color-accent) text-(--color-bg) border-transparent',
+      idle: 'bg-(--color-surface) text-(--color-fg-muted) border-(--color-border) hover:border-(--color-accent-border) hover:text-(--color-fg)',
+    },
+    danger: {
+      active: 'bg-(--color-danger) text-white border-transparent',
+      idle: 'bg-(--color-surface) text-(--color-danger) border-(--color-danger)/30 hover:border-(--color-danger)',
+    },
+    warn: {
+      active: 'bg-amber-500 text-black border-transparent',
+      idle: 'bg-(--color-surface) text-amber-300 border-amber-500/30 hover:border-amber-400',
+    },
+    ok: {
+      active: 'bg-emerald-500 text-black border-transparent',
+      idle: 'bg-(--color-surface) text-emerald-300 border-emerald-500/30 hover:border-emerald-400',
+    },
+    muted: {
+      active: 'bg-(--color-fg-muted) text-(--color-bg) border-transparent',
+      idle: 'bg-(--color-surface) text-(--color-fg-dim) border-(--color-border) hover:text-(--color-fg-muted)',
+    },
+  }
+  const cls = active ? tones[tone].active : tones[tone].idle
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`inline-flex items-center gap-1.5 px-2.5 h-7 rounded-full border font-mono text-[11px] uppercase tracking-wider transition-colors cursor-pointer ${cls}`}
+    >
+      {label}
+      <span className={`tabular-nums ${active ? 'opacity-90' : 'opacity-60'}`}>{count}</span>
+    </button>
+  )
+}
+
 function FindingCard({ finding }: { finding: ApiFinding }) {
   const [copied, setCopied] = useState(false)
   const meta = CATEGORY_META[finding.category]
@@ -645,19 +814,21 @@ export function ScanForm() {
   const [result, setResult] = useState<ScanResult | null>(null)
   const [stage2, setStage2] = useState<Stage2State>(STAGE2_INITIAL)
   const [errorMsg, setErrorMsg] = useState('')
+  const [scanError, setScanError] = useState<ScanError | null>(null)
+  const [stage2OpenStandalone, setStage2OpenStandalone] = useState(false)
+  type FindingFilter =
+    | { kind: 'all' }
+    | { kind: 'severity'; value: Severity }
+    | { kind: 'category'; value: Category }
+  const [findingFilter, setFindingFilter] = useState<FindingFilter>({ kind: 'all' })
+  const [livePhaseLabel, setLivePhaseLabel] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const stage2AbortRef = useRef<AbortController | null>(null)
   const apiDoneRef = useRef(false)
 
-  // Drive the fake step animation while the real scan runs.
-  // The real scan duration is independent — we hold at the last step until the API resolves.
-  useEffect(() => {
-    if (state !== 'scanning') return
-    if (apiDoneRef.current) return
-    if (stepIdx >= SCAN_STEPS.length - 1) return
-    const t = setTimeout(() => setStepIdx((i) => Math.min(i + 1, SCAN_STEPS.length - 1)), STEP_DURATION_MS)
-    return () => clearTimeout(t)
-  }, [state, stepIdx])
+  // Step progression is now driven by the real /api/scan-stream NDJSON events.
+  // Each `phase` event from the server bumps stepIdx; no fake timer needed.
+  // We keep STEP_DURATION_MS only as a fallback hint (unused after this rewrite).
 
   // Auto-cascade Stage 1 -> Stage 2.
   // After Stage 1 result lands, kick off the browser-assisted scan in the background.
@@ -721,6 +892,7 @@ export function ScanForm() {
     setUrl(normalized)
     setStepIdx(0)
     setErrorMsg('')
+    setFindingFilter({ kind: 'all' })
     setResult(null)
     setStage2(STAGE2_INITIAL)
     stage2AbortRef.current?.abort()
@@ -733,35 +905,50 @@ export function ScanForm() {
     abortRef.current = controller
 
     try {
-      const resp = await fetch('/api/scan', {
-        method: 'POST',
-        signal: controller.signal,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: normalized }),
-      })
-      const data = (await resp.json()) as ScanResponse
+      let receivedResult: ScanResponse | null = null
+      await consumeScanStream(
+        normalized,
+        controller.signal,
+        (phase) => {
+          // Map server's 1-based step to client's 0-based stepIdx; clamp to
+          // SCAN_STEPS length so the visual list never overflows.
+          setStepIdx(Math.min(phase.step - 1, SCAN_STEPS.length - 1))
+          setLivePhaseLabel(phase.label)
+        },
+        (data) => {
+          receivedResult = data
+        },
+      )
       apiDoneRef.current = true
-
+      if (!receivedResult) {
+        // Stream closed without a result event — treat as network error.
+        setErrorMsg('Scan stream ended without a result.')
+        setScanError(null)
+        setState('error')
+        return
+      }
+      const data = receivedResult as ScanResponse
       if (!data.ok) {
         setErrorMsg(data.error.message)
+        setScanError(data.error)
         setState('error')
         return
       }
       setResult(data)
-      // Honor minimum scan duration so users see the visualization even when
-      // the API is fast. Then animate to 100% and transition to results.
       const elapsed = performance.now() - startedAt
       const wait = Math.max(0, MIN_SCAN_VISUAL_MS - elapsed)
       setTimeout(() => {
         setStepIdx(SCAN_STEPS.length)
+        setLivePhaseLabel(null)
         setTimeout(() => setState('result'), 450)
       }, wait)
     } catch (e: unknown) {
       apiDoneRef.current = true
       const aborted = e instanceof DOMException && e.name === 'AbortError'
-      if (aborted) return // user navigated away or restarted
+      if (aborted) return
       const msg = e instanceof Error ? e.message : 'Network error'
       setErrorMsg(msg)
+      setScanError(null)
       setState('error')
     }
   }
@@ -769,6 +956,8 @@ export function ScanForm() {
   function rescan() {
     setStepIdx(0)
     setErrorMsg('')
+    setScanError(null)
+    setFindingFilter({ kind: 'all' })
     setStage2(STAGE2_INITIAL)
     stage2AbortRef.current?.abort()
     apiDoneRef.current = false
@@ -778,22 +967,36 @@ export function ScanForm() {
     const controller = new AbortController()
     abortRef.current = controller
 
-    fetch('/api/scan', {
-      method: 'POST',
-      signal: controller.signal,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url }),
-    })
-      .then(async (resp) => {
-        const data = (await resp.json()) as ScanResponse
+    let receivedResult: ScanResponse | null = null
+    consumeScanStream(
+      url,
+      controller.signal,
+      (phase) => {
+        setStepIdx(Math.min(phase.step - 1, SCAN_STEPS.length - 1))
+        setLivePhaseLabel(phase.label)
+      },
+      (data) => {
+        receivedResult = data
+      },
+    )
+      .then(() => {
         apiDoneRef.current = true
+        if (!receivedResult) {
+          setErrorMsg('Scan stream ended without a result.')
+          setScanError(null)
+          setState('error')
+          return
+        }
+        const data = receivedResult as ScanResponse
         if (!data.ok) {
           setErrorMsg(data.error.message)
+          setScanError(data.error)
           setState('error')
           return
         }
         setResult(data)
         setStepIdx(SCAN_STEPS.length)
+        setLivePhaseLabel(null)
         setTimeout(() => setState('result'), 350)
       })
       .catch((e) => {
@@ -802,6 +1005,7 @@ export function ScanForm() {
         if (aborted) return
         const msg = e instanceof Error ? e.message : 'Network error'
         setErrorMsg(msg)
+        setScanError(null)
         setState('error')
       })
   }
@@ -813,6 +1017,8 @@ export function ScanForm() {
     setUrl('')
     setStepIdx(0)
     setErrorMsg('')
+    setScanError(null)
+    setFindingFilter({ kind: 'all' })
     setResult(null)
     apiDoneRef.current = false
     setState('idle')
@@ -895,12 +1101,102 @@ export function ScanForm() {
                   currentStep={Math.min(stepIdx, SCAN_STEPS.length)}
                   reduceMotion={reduceMotion}
                 />
+                {livePhaseLabel && (
+                  <div className="mt-3 flex items-center gap-2 font-mono text-[11px] text-(--color-accent)">
+                    <Loader2 size={12} className="animate-spin flex-shrink-0" aria-hidden="true" />
+                    <span className="truncate">{livePhaseLabel}</span>
+                  </div>
+                )}
               </div>
+            </div>
+            <div className="mt-5 pt-4 border-t border-(--color-border) flex items-start gap-2.5 text-xs text-(--color-fg-muted)">
+              <Globe size={14} strokeWidth={2.25} className="text-(--color-accent) mt-0.5 flex-shrink-0" aria-hidden="true" />
+              <p className="leading-relaxed">
+                <span className="font-semibold text-(--color-fg)">Stage 2 (browser-assisted)</span> runs automatically right after — a real headless Chromium loads your page, captures live cookies, network calls, and runtime globals to catch the things a static probe can&apos;t.
+              </p>
             </div>
           </motion.div>
         )}
 
-        {state === 'error' && (
+        {state === 'error' && scanError?.code === 'blocked_by_waf' && (
+          <motion.div
+            key="error-waf"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3 }}
+            className="rounded-xl bg-(--color-surface) border border-amber-500/40 p-6 sm:p-8 max-w-xl"
+            role="alert"
+          >
+            <div className="flex items-start gap-3">
+              <span
+                className="flex items-center justify-center w-10 h-10 rounded-md flex-shrink-0"
+                style={{ background: 'rgba(245, 158, 11, 0.15)', color: 'rgb(245, 158, 11)' }}
+                aria-hidden="true"
+              >
+                <ShieldAlert size={18} strokeWidth={2} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <h3 className="text-base font-semibold text-(--color-fg)">
+                  Target denied automated access
+                </h3>
+                <p className="mt-1 text-sm text-(--color-fg-muted) leading-relaxed">
+                  This isn&apos;t a Vguard failure — the target&apos;s edge protection blocked
+                  our scanner&apos;s IP. Vercel Lambda IPs (where Vguard runs) are widely
+                  flagged as automated traffic. Real browsers and your visitors aren&apos;t
+                  affected.
+                </p>
+                <div className="mt-3 flex items-center gap-2 flex-wrap">
+                  {scanError.wafVendor && (
+                    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-amber-500/10 border border-amber-500/30 text-amber-300 font-mono text-[11px] font-semibold">
+                      <Shield size={11} strokeWidth={2.5} aria-hidden="true" />
+                      {WAF_VENDOR_LABEL[scanError.wafVendor]}
+                    </span>
+                  )}
+                  {typeof scanError.httpStatus === 'number' && (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-(--color-surface-elevated) border border-(--color-border) text-(--color-fg-muted) font-mono text-[11px]">
+                      HTTP {scanError.httpStatus}
+                    </span>
+                  )}
+                </div>
+                <p className="mt-3 font-mono text-xs text-(--color-fg-dim) truncate">{url}</p>
+                <div className="mt-4 flex items-center gap-2 flex-wrap">
+                  {scanError.suggestedAction === 'stage2-bookmarklet' && (
+                    <button
+                      type="button"
+                      onClick={() => setStage2OpenStandalone(true)}
+                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-(--color-accent) text-(--color-bg) hover:bg-(--color-accent-strong) font-mono text-xs font-semibold transition-colors cursor-pointer min-h-[36px]"
+                    >
+                      <Globe size={13} strokeWidth={2.5} aria-hidden="true" />
+                      Run Stage 2 (browser-assisted)
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={rescan}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-(--color-surface-elevated) hover:bg-(--color-surface) border border-(--color-border) hover:border-(--color-accent-border) text-(--color-fg-muted) hover:text-(--color-fg) font-mono text-xs transition-colors cursor-pointer min-h-[36px]"
+                  >
+                    <RefreshCw size={13} strokeWidth={2.5} aria-hidden="true" />
+                    Retry Stage 1
+                  </button>
+                  <button
+                    type="button"
+                    onClick={reset}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-(--color-surface-elevated) hover:bg-(--color-surface) border border-(--color-border) hover:border-(--color-accent-border) text-(--color-fg-muted) hover:text-(--color-fg) font-mono text-xs transition-colors cursor-pointer min-h-[36px]"
+                  >
+                    <ArrowLeft size={12} aria-hidden="true" />
+                    Try another URL
+                  </button>
+                </div>
+              </div>
+            </div>
+            <Stage2Modal
+              open={stage2OpenStandalone}
+              onClose={() => setStage2OpenStandalone(false)}
+            />
+          </motion.div>
+        )}
+
+        {state === 'error' && scanError?.code !== 'blocked_by_waf' && (
           <motion.div
             key="error"
             initial={{ opacity: 0, y: 8 }}
@@ -956,13 +1252,27 @@ export function ScanForm() {
             totals: displayTotals,
             vibeScore: displayScore,
           }
+          // Filter chips: derive available severities/categories from actual
+          // findings so we never show an empty chip.
+          const presentSeverities = (['critical', 'warn', 'info', 'ok'] as Severity[]).filter((s) =>
+            mergedFindings.some((f) => f.severity === s),
+          )
+          const presentCategories = Array.from(
+            new Set(mergedFindings.map((f) => f.category)),
+          ).sort() as Category[]
+          const visibleFindings = mergedFindings.filter((f) => {
+            if (findingFilter.kind === 'all') return true
+            if (findingFilter.kind === 'severity') return f.severity === findingFilter.value
+            return f.category === findingFilter.value
+          })
           return (
           <motion.div
             key="result"
+            id="vguard-report"
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.4 }}
-            className="rounded-xl bg-(--color-surface) border border-(--color-accent-border) overflow-hidden shadow-[0_0_40px_-12px_rgba(34,211,238,0.25)]"
+            className="rounded-xl bg-(--color-surface) border border-(--color-accent-border) overflow-hidden shadow-[0_0_40px_-12px_rgba(34,211,238,0.25)] scroll-mt-8"
             role="region"
             aria-label="Scan results"
           >
@@ -975,6 +1285,9 @@ export function ScanForm() {
                 stage2DurationMs={stage2.durationMs}
                 stage3Verified={result.stage === 3}
               />
+              {result.attackSurface?.wafVendor && (
+                <WafSurfacePanel surface={result.attackSurface} />
+              )}
               <div className="flex items-center gap-2 font-mono text-[10px] tracking-widest uppercase text-(--color-accent) mb-3">
                 <Check size={12} strokeWidth={3} aria-hidden="true" />
                 <span>
@@ -1094,6 +1407,40 @@ export function ScanForm() {
               </div>
             )}
 
+            {/* Filter chips — present severities first, then categories. Counts shown so users see how the filter narrows the list. */}
+            {mergedFindings.length > 1 && (
+              <div className="px-4 sm:px-6 py-3 border-b border-(--color-border) bg-(--color-bg) flex items-center gap-1.5 flex-wrap">
+                <FilterChip
+                  label="All"
+                  count={mergedFindings.length}
+                  active={findingFilter.kind === 'all'}
+                  onClick={() => setFindingFilter({ kind: 'all' })}
+                />
+                {presentSeverities.map((sev) => (
+                  <FilterChip
+                    key={`sev-${sev}`}
+                    label={sev[0].toUpperCase() + sev.slice(1)}
+                    count={mergedFindings.filter((f) => f.severity === sev).length}
+                    active={findingFilter.kind === 'severity' && findingFilter.value === sev}
+                    tone={
+                      sev === 'critical' ? 'danger' : sev === 'warn' ? 'warn' : sev === 'ok' ? 'ok' : 'muted'
+                    }
+                    onClick={() => setFindingFilter({ kind: 'severity', value: sev })}
+                  />
+                ))}
+                <span className="text-(--color-fg-dim) text-[11px] mx-1 select-none">·</span>
+                {presentCategories.map((cat) => (
+                  <FilterChip
+                    key={`cat-${cat}`}
+                    label={cat}
+                    count={mergedFindings.filter((f) => f.category === cat).length}
+                    active={findingFilter.kind === 'category' && findingFilter.value === cat}
+                    onClick={() => setFindingFilter({ kind: 'category', value: cat })}
+                  />
+                ))}
+              </div>
+            )}
+
             <motion.ul
               initial="hidden"
               animate="show"
@@ -1103,9 +1450,20 @@ export function ScanForm() {
               }}
               className="bg-(--color-surface)"
             >
-              {mergedFindings.map((f) => (
-                <FindingCard key={f.id} finding={f} />
-              ))}
+              {visibleFindings.length === 0 ? (
+                <li className="px-6 py-10 text-center text-(--color-fg-muted) text-sm">
+                  No findings match this filter.{' '}
+                  <button
+                    type="button"
+                    onClick={() => setFindingFilter({ kind: 'all' })}
+                    className="text-(--color-accent) hover:underline cursor-pointer"
+                  >
+                    Show all
+                  </button>
+                </li>
+              ) : (
+                visibleFindings.map((f) => <FindingCard key={f.id} finding={f} />)
+              )}
             </motion.ul>
 
             <div className="px-6 py-5 border-t border-(--color-border) bg-(--color-bg) flex items-center justify-between gap-4 flex-wrap">

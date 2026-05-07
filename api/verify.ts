@@ -19,7 +19,17 @@ interface VerifyResponse {
   method?: 'file' | 'dns'
   error?: string
   hint?: string
+  /**
+   * When DNS verification fails but a Vguard-shaped UUID (vs-...) IS present
+   * in the TXT record, surface it so the UI can offer "use this code" — i.e.
+   * adopt the existing record into the client's persisted UUID instead of
+   * forcing the user to update DNS again. Solves the common "I added the
+   * record but Vguard rotated its UUID before I clicked verify" race.
+   */
+  foundDnsUuid?: string
 }
+
+const VGUARD_UUID_RE = /vs-[A-Za-z0-9-]{16,64}/
 
 async function fetchWithTimeout(url: string, timeoutMs = 5000): Promise<Response> {
   const controller = new AbortController()
@@ -72,11 +82,26 @@ async function verifyDnsChallenge(domain: string, uuid: string): Promise<VerifyR
     if (flat.some((rec) => rec.includes(uuid))) {
       return { ok: true, verified: true, method: 'dns' }
     }
+    // Look for any Vguard-shaped UUID in the existing TXT records. If one is
+    // present, the user has a stale (or freshly-added but pre-rotation) code
+    // at the registrar — much faster recovery to adopt it than push a new DNS
+    // update through propagation again.
+    let foundDnsUuid: string | undefined
+    for (const rec of flat) {
+      const m = rec.match(VGUARD_UUID_RE)
+      if (m && m[0] !== uuid) {
+        foundDnsUuid = m[0]
+        break
+      }
+    }
     return {
       ok: true,
       verified: false,
       method: 'dns',
-      hint: `No matching TXT record at ${txtHost}. Add: ${txtHost} TXT "${uuid}" (DNS may take a few minutes to propagate).`,
+      hint: foundDnsUuid
+        ? `DNS at ${txtHost} has a Vguard verification code (${foundDnsUuid}) — but it doesn't match the current code on this page (${uuid}). Click "Use this DNS code" below to adopt the existing record (instant) — or update the DNS record value to "${uuid}" and wait for propagation.`
+        : `No matching TXT record at ${txtHost}. Add: ${txtHost} TXT "${uuid}" (DNS may take a few minutes to propagate).`,
+      foundDnsUuid,
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'unknown error'
@@ -131,10 +156,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       method === 'file' ? await verifyFileChallenge(domain, uuid) : await verifyDnsChallenge(domain, uuid)
     if (result.verified) {
       const ua = (req.headers['user-agent'] as string | undefined) ?? null
-      // Fire-and-forget; we don't gate the response on the cache write
-      recordVerification(domain, uuid, method, ua).catch(() => {
-        // ignore
-      })
+      // Await the cache write so the immediately-following /api/scan-deep
+      // call sees the cached entry and doesn't fall back to a live re-verify
+      // (Vercel's runtime DNS resolver can be ~30s behind a fresh TXT update,
+      // creating a flaky "verified then ownership-failed" UX). Fail-soft on
+      // the write itself — verification still passes for this response.
+      try {
+        await recordVerification(domain, uuid, method, ua)
+      } catch {
+        // ignore — DB write is best-effort, deep scan can re-verify live
+      }
     }
     return res.status(200).json(result)
   } catch (e) {

@@ -3,10 +3,14 @@
   "functions": {
     "api/scan.ts": {
       "maxDuration": 30
+    },
+    "api/scan-stream.ts": {
+      "maxDuration": 30
     }
   },
   "rewrites": [
     { "source": "/admin/logs", "destination": "/index.html" },
+    { "source": "/terms", "destination": "/index.html" },
     { "source": "/privacy", "destination": "/index.html" }
   ],
   "headers": [

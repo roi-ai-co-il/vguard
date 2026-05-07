@@ -204,12 +204,19 @@ function analyzeBodyForSensitiveData(
 ): SensitiveDataHit[] {
   if (budget.remaining <= 0) return []
   const out: SensitiveDataHit[] = []
-  const isJs = contentType.toLowerCase().startsWith('application/javascript')
+  const ct = contentType.toLowerCase()
+  const isJs = ct.startsWith('application/javascript') || ct.startsWith('text/javascript')
+  // CSS bodies have `unicode-range: U+NNNN-NNNN, …` declarations from font
+  // subsetting that look like international phone numbers to a phone regex
+  // (strip the `U` prefix and you get `+NNNN-NNNN`). Color hex / shadow
+  // values trip credit-card / ID regexes the same way. PII scanning on a
+  // stylesheet has zero true-positive value — skip it.
+  const isCss = ct.startsWith('text/css')
   // Cap body at 64KB for regex work — large JSON pages get truncated.
   const text = body.length > 64 * 1024 ? body.slice(0, 64 * 1024) : body
   for (const pat of SENSITIVE_PATTERNS) {
-    // Skip PII patterns on JS bundles (false-positive heavy, low signal).
-    if (isJs && PII_TYPES.has(pat.type)) continue
+    // Skip PII patterns on JS bundles AND CSS (false-positive heavy, low signal).
+    if ((isJs || isCss) && PII_TYPES.has(pat.type)) continue
     if (budget.remaining <= 0) break
     pat.re.lastIndex = 0
     const matches = text.match(pat.re) || []

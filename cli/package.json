@@ -1,0 +1,41 @@
+{
+  "name": "vguard",
+  "version": "0.1.0",
+  "description": "Vguard — security scanner for vibe-coded apps. Scans a URL, returns findings + paste-ready fix prompts.",
+  "bin": {
+    "vguard": "./dist/index.js"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "keywords": [
+    "security",
+    "scanner",
+    "vibe-coded",
+    "owasp",
+    "csp",
+    "rls",
+    "supabase",
+    "vercel"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "homepage": "https://vguard-tau.vercel.app",
+  "bugs": {
+    "url": "https://vguard-tau.vercel.app"
+  },
+  "author": "ROI AI (Royi Argaman, Oded Safdie)",
+  "devDependencies": {
+    "@types/node": "^20.19.39",
+    "typescript": "^5.9.3"
+  }
+}

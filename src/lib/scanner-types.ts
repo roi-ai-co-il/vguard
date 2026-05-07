@@ -8,6 +8,9 @@ export type Severity = 'critical' | 'warn' | 'info' | 'ok'
 export type Category =
   | 'secrets'
   | 'auth'
+  | 'auth-enum'
+  | 'auth-weak'
+  | 'auth-disclosure'
   | 'headers'
   | 'paths'
   | 'sourcemaps'
@@ -44,16 +47,51 @@ export interface Finding {
   riskBand?: 'low' | 'medium' | 'high' | 'severe'
 }
 
+/**
+ * Vendor signals we recognize from response headers when a target denies
+ * automated access. Drives a chip on the error UI + tailored fix copy.
+ */
+export type WafVendor =
+  | 'cloudflare'
+  | 'akamai'
+  | 'imperva'
+  | 'fastly'
+  | 'aws-cloudfront'
+  | 'aws-waf'
+  | 'vercel-bot-protection'
+  | 'sucuri'
+  | 'stackpath'
+  | 'ddos-guard'
+  | 'unknown'
+
+/**
+ * What Vguard thinks the user should do next when a 4xx came from a WAF.
+ * The frontend renders this as a CTA button.
+ */
+export type SuggestedAction =
+  | 'stage2-bookmarklet' // run from user's browser, bypasses WAF
+  | 'stage2-server-browser' // server-side Playwright with realistic profile
+  | 'stage3-verify-ownership' // owner can prove they own the domain → unlock
+  | 'fix-target' // 4xx is the user's app actually broken (rare, e.g. 410)
+  | 'try-canonical-host' // www vs apex / http vs https mismatch
+
 export interface ScanError {
   code:
     | 'invalid_url'
     | 'unreachable'
-    | 'blocked_by_target'
+    | 'blocked_by_target' // generic 4xx (e.g. 404 / 410), site reachable but rejected
+    | 'blocked_by_waf' // 403/406/429/451 with WAF/CDN signals — different UX
     | 'timeout'
     | 'too_large'
     | 'rate_limited'
     | 'internal'
   message: string
+  /** HTTP status from the target when the error originated from a fetch. */
+  httpStatus?: number
+  /** WAF/edge vendor identified from response headers (only on `blocked_by_waf`). */
+  wafVendor?: WafVendor
+  /** Recommended next step the frontend should surface as a CTA. */
+  suggestedAction?: SuggestedAction
 }
 
 export interface ScanResult {
@@ -125,6 +163,23 @@ export interface AttackSurface {
   baseDomain: string
   /** Detected CDN/edge in front of the origin, from response headers. */
   cdn: CdnProvider
+  /**
+   * WAF / bot-protection vendor identified during the scan, if any. Set when
+   * the target returned a 4xx with WAF signals. Distinct from `cdn` because
+   * a site can sit behind a CDN without bot-protection (or vice-versa: a
+   * site with no CDN can still front AWS WAF directly).
+   */
+  wafVendor?: WafVendor | null
+  /**
+   * True when the initial scanner request was blocked (4xx) and we recognized
+   * a WAF. Always paired with `wafVendor`. The scan may still have succeeded
+   * if the stealth retry got through — see `stealthRetrySucceeded`.
+   */
+  wafBlocked?: boolean
+  /** True when we attempted a stealth-headers retry after the initial 4xx. */
+  stealthRetryAttempted?: boolean
+  /** True when the stealth retry returned a usable 2xx/3xx response. */
+  stealthRetrySucceeded?: boolean
   /**
    * Public endpoints the scanner saw referenced in HTML, bundles, sitemaps,
    * or platform detection. Deduped by `path`; `source` is the strongest

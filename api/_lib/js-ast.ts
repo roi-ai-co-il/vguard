@@ -112,6 +112,29 @@ function isUrlSafeExpression(expr: unknown): boolean {
   return false
 }
 
+// React DOM's setInnerHTMLImpl (and the equivalent in Preact / older
+// React-DOM-Server bundles) emits a recognizable invariant-then-sink shape:
+//   throw <id>(<num>);<id>.<SINK>=<id>
+// The minified <id> aliases vary across versions/wrappers, the numeric
+// invariant code does not. When this exact shape sits immediately before a
+// detected sink assignment, the assignment is unambiguously framework-internal
+// — it can only fire when the user passed something to the framework's HTML-
+// injection escape-hatch prop, which is detected separately. Suppressing this
+// shape here removes noise the user can't act on without false-negative on
+// real app code.
+const REACT_INVARIANT_SINK_RE = /\bthrow\s+\w+\s*\([^;]{0,60}\)\s*;\s*$/
+
+// Property names that, when they show up as the RHS of a sink assignment, are
+// almost always the SPA framework reading its own internal vocabulary:
+//   - .children  — Next.js Script component inlines children into a created element
+//   - .__html    — React's escape-hatch shape { __html: ... }
+//   - .SINK pass-through (e.g. el.SINK = src.SINK) is also vendor noise
+// App code virtually never uses these as the RHS of a DOM-sink assignment —
+// the typical app pattern is el.SINK = someString where someString is a local
+// Identifier or template literal. Suppressing this noise still leaves real
+// misuse visible (free Identifier RHS or interpolated template literal).
+const VENDOR_SINK_RHS_PROPS = new Set(['children', '__html', 'innerHTML', 'outerHTML'])
+
 // DOM-sink assignments where the right-hand side is a static literal (string,
 // number, null, or template literal with no interpolations) are not XSS
 // vectors — the rendered HTML is fully under the developer's control at write
@@ -245,7 +268,25 @@ export function analyzeBundles(bundleTexts: string[]): AstAnalysis {
           const m = left as unknown as { property?: { name?: string }; object?: { name?: string } }
           const propName = m.property?.name
           if (propName && DOM_SINK_PROP_NAMES.has(propName) && !isStaticDomSinkRhs(right)) {
-            if (out.domSinkAssignments.length < 10) {
+            // Pattern-aware vendor suppression #1: assignment is immediately
+            // preceded by React's invariant-throw shape (DOM hot-path code).
+            const start = (n as unknown as { start?: number }).start
+            const isReactInternalSink =
+              typeof start === 'number' &&
+              REACT_INVARIANT_SINK_RE.test(trimmed.slice(Math.max(0, start - 80), start))
+            // Pattern-aware vendor suppression #2: RHS reads a framework's
+            // own vocabulary property (.children for Next.js Script,
+            // .__html for React's HTML-injection escape-hatch shape, etc.).
+            // These are framework-internal pass-through patterns that fire
+            // only when the developer fed user content to the prop, which
+            // is what dedicated JSX-prop detectors should catch — not this.
+            const rightExpr = right as unknown as { type?: string; property?: { type?: string; name?: string } }
+            const isVendorRhsPattern =
+              rightExpr?.type === 'MemberExpression' &&
+              rightExpr.property?.type === 'Identifier' &&
+              !!rightExpr.property.name &&
+              VENDOR_SINK_RHS_PROPS.has(rightExpr.property.name)
+            if (!isReactInternalSink && !isVendorRhsPattern && out.domSinkAssignments.length < 10) {
               out.domSinkAssignments.push({
                 sink: propName,
                 sample: `${m.object?.name ?? '?'}.${propName} = ...`,

@@ -16,6 +16,141 @@ const PROBE_TIMEOUT_MS = 2500
 const MAX_BUNDLE_SIZE = 2 * 1024 * 1024 // 2 MB
 const MAX_BUNDLES = 4
 
+// WAFs (Cloudflare, Akamai, AWS WAF, Imperva) auto-block any UA that doesn't
+// match a known browser shape — `Vguard-Scanner/0.1` would always 403 on them.
+// Industry-standard approach for security scanners (Burp, ZAP, Acunetix) is a
+// real Chrome UA. We append a `Vguard/1.0` token so site owners reading their
+// access logs can still attribute the traffic.
+const SCANNER_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Vguard/1.0 (+https://vguard-tau.vercel.app)'
+// "Stealthier" UA used as a one-shot retry when the first request 4xx'd. No
+// Vguard token, full Sec-Ch-Ua headers — looks indistinguishable from a real
+// Chrome browser. Only used after an explicit block; not the default to keep
+// us honest in normal-path access logs.
+const STEALTH_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+const BROWSER_ACCEPT = 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
+const BROWSER_ACCEPT_LANGUAGE = 'en-US,en;q=0.9,he;q=0.8'
+
+// Headers a real Chrome 131 sends that bot detectors specifically look for.
+// Their absence is itself a fingerprint — Cloudflare's "managed challenge"
+// scores requests that lack `Sec-Fetch-*` and `Sec-Ch-Ua-*` as suspicious.
+const STEALTH_HEADERS: Record<string, string> = {
+  'User-Agent': STEALTH_UA,
+  Accept: BROWSER_ACCEPT,
+  'Accept-Language': BROWSER_ACCEPT_LANGUAGE,
+  'Accept-Encoding': 'gzip, deflate, br, zstd',
+  'Sec-Ch-Ua': '"Chromium";v="131", "Not_A Brand";v="24", "Google Chrome";v="131"',
+  'Sec-Ch-Ua-Mobile': '?0',
+  'Sec-Ch-Ua-Platform': '"Windows"',
+  'Sec-Fetch-Dest': 'document',
+  'Sec-Fetch-Mode': 'navigate',
+  'Sec-Fetch-Site': 'none',
+  'Sec-Fetch-User': '?1',
+  'Upgrade-Insecure-Requests': '1',
+  'Cache-Control': 'max-age=0',
+}
+
+import type { WafVendor, SuggestedAction } from '../../src/lib/scanner-types.js'
+
+/**
+ * Identify the WAF/edge vendor from response headers + body sniff. Returns
+ * `null` when no signals match (caller should treat as a generic block).
+ *
+ * Each branch is ordered by signal strength. We prefer specific identifying
+ * headers (`cf-ray`, `x-amz-cf-id`) over generic ones (`server: cloudflare`)
+ * because the specific ones are harder to spoof / misattribute.
+ */
+function detectWafVendor(resp: Response, body: string): WafVendor {
+  const h = (name: string) => resp.headers.get(name) ?? ''
+  const server = h('server').toLowerCase()
+  const via = h('via').toLowerCase()
+  const xPoweredBy = h('x-powered-by').toLowerCase()
+  const lowerBody = body.slice(0, 4096).toLowerCase()
+
+  // Cloudflare — most common WAF in our user base
+  if (h('cf-ray') || h('cf-cache-status') || /\bcloudflare\b/.test(server)) return 'cloudflare'
+  if (lowerBody.includes('attention required! | cloudflare') || lowerBody.includes('__cf_bm') ||
+      lowerBody.includes('cf-error-details')) return 'cloudflare'
+
+  // Akamai
+  if (/akamai|akamaighost/.test(server) || h('x-akamai-transformed') || h('akamai-grn')) return 'akamai'
+  if (lowerBody.includes('reference&#32;&#35;') && lowerBody.includes('akamai')) return 'akamai'
+
+  // Imperva / Incapsula
+  if (h('x-iinfo') || h('x-cdn') === 'Incapsula' || /imperva|incapsula/.test(server)) return 'imperva'
+  if (lowerBody.includes('incapsula incident id')) return 'imperva'
+
+  // Fastly — uses Varnish under the hood
+  if (h('fastly-debug-digest') || /^fastly/i.test(h('x-served-by')) ||
+      (/varnish/.test(via) && /^cache-/.test(h('x-served-by')))) return 'fastly'
+
+  // AWS CloudFront (with or without AWS WAF in front)
+  const isCloudFront = h('x-amz-cf-id') || /cloudfront/.test(via) || /cloudfront/.test(server)
+  if (isCloudFront) {
+    // AWS WAF returns 403 with a body containing this exact phrase
+    if (resp.status === 403 && /request blocked/i.test(body.slice(0, 2048))) return 'aws-waf'
+    return 'aws-cloudfront'
+  }
+
+  // Vercel BotID / Bot Protection — Vercel-hosted apps with bot protection on
+  if (h('x-vercel-id') || /vercel/.test(server)) {
+    if (lowerBody.includes('security checkpoint') || lowerBody.includes('botid:')) {
+      return 'vercel-bot-protection'
+    }
+  }
+
+  // Sucuri
+  if (h('x-sucuri-id') || /sucuri/.test(server)) return 'sucuri'
+  if (lowerBody.includes('sucuri website firewall')) return 'sucuri'
+
+  // StackPath / MaxCDN
+  if (/stackpath/i.test(h('x-cdn')) || /stackpath/i.test(server)) return 'stackpath'
+
+  // DDoS-Guard
+  if (/ddos-guard/.test(server) || h('x-ddosguard')) return 'ddos-guard'
+  if (lowerBody.includes('ddos-guard.net')) return 'ddos-guard'
+
+  // Generic AWS WAF (when CloudFront wasn't the intermediate)
+  if (h('x-amzn-requestid') && resp.status === 403 && /request blocked|forbidden/i.test(body.slice(0, 2048))) {
+    return 'aws-waf'
+  }
+
+  // Suspicious enough to flag as WAF without naming
+  if (resp.status === 403 || resp.status === 406 || resp.status === 429 || resp.status === 451) {
+    return 'unknown'
+  }
+
+  // 4xx without WAF signals — let caller treat as generic blocked_by_target
+  return 'unknown'
+}
+
+const VENDOR_LABELS: Record<WafVendor, string> = {
+  cloudflare: 'Cloudflare',
+  akamai: 'Akamai',
+  imperva: 'Imperva (Incapsula)',
+  fastly: 'Fastly',
+  'aws-cloudfront': 'AWS CloudFront',
+  'aws-waf': 'AWS WAF',
+  'vercel-bot-protection': 'Vercel Bot Protection',
+  sucuri: 'Sucuri',
+  stackpath: 'StackPath',
+  'ddos-guard': 'DDoS-Guard',
+  unknown: 'a WAF / firewall',
+}
+
+function suggestedActionFor(vendor: WafVendor, status: number): SuggestedAction {
+  // Vercel Bot Protection only fires on heavy automation; a real user / Stage 2
+  // browser bypasses it instantly.
+  if (vendor === 'vercel-bot-protection') return 'stage2-bookmarklet'
+  // Rate-limited responses → wait + retry, but a browser-origin run resolves it.
+  if (status === 429) return 'stage2-bookmarklet'
+  // 451 = legal block; not bypassable, no actionable next step.
+  if (status === 451) return 'fix-target'
+  // Default for any WAF: bookmarklet runs from user's origin → no WAF.
+  return 'stage2-bookmarklet'
+}
+
 interface SecretPattern {
   name: string
   re: RegExp
@@ -1396,11 +1531,34 @@ async function probeApiSurface(
   return out
 }
 
+/**
+ * Fingerprint of the homepage HTML, used to detect SPA shells masquerading
+ * as real routes. SPA frameworks (Vite + React, Next.js without SSR for the
+ * matched route, Vue Router fallback, SvelteKit static, etc.) serve the
+ * SAME index.html for every path so the client router can mount; an admin
+ * probe then sees HTTP 200 but the body is just the shell — no privileged
+ * data ever crossed the wire. Comparing body length + a content prefix
+ * rules out the shell case without false-negatives on real admin pages,
+ * which always differ in body or are bigger.
+ */
+function makeHomepageFingerprint(html: string): { length: number; head: string } {
+  return { length: html.length, head: html.slice(0, 256) }
+}
+
+function isSpaShellResponse(
+  body: string,
+  fp: { length: number; head: string },
+): boolean {
+  if (Math.abs(body.length - fp.length) > 16) return false
+  return body.slice(0, 256) === fp.head
+}
+
 async function discoverAndProbeAdminRoutes(
   bundleText: string,
   html: string,
   origin: string,
-): Promise<{ path: string; status: number; contentLength: number | null }[]> {
+): Promise<{ path: string; status: number; contentLength: number | null; isSpaShell: boolean }[]> {
+  const homepageFp = makeHomepageFingerprint(html)
   const candidates = new Set<string>()
   // Pattern 1: react-router style — `<Route path="/admin/...">` or path:"/admin..."
   for (const m of (bundleText + html).matchAll(
@@ -1439,7 +1597,8 @@ async function discoverAndProbeAdminRoutes(
           {
             method: 'GET',
             headers: {
-              'User-Agent': 'Vguard-Scanner/0.1 (+https://vguard.dev)',
+              'User-Agent': SCANNER_UA,
+              'Accept-Language': BROWSER_ACCEPT_LANGUAGE,
               Accept: 'text/html,application/json;q=0.9,*/*;q=0.8',
             },
             redirect: 'manual',
@@ -1448,10 +1607,24 @@ async function discoverAndProbeAdminRoutes(
         )
         const lengthHeader = r.headers.get('content-length')
         const contentLength = lengthHeader ? parseInt(lengthHeader, 10) : null
+        // Read the body bounded so SPA-shell detection has something to compare.
+        // Cap at the homepage length plus a small slack — anything larger is
+        // definitely not the shell, and we don't need to download a full
+        // /admin page just to know it isn't.
+        const bodyBudget = Math.max(homepageFp.length + 1024, 4096)
+        let body = ''
+        try {
+          const probeBody = await readBoundedText(r, bodyBudget)
+          body = probeBody.text
+        } catch {
+          body = ''
+        }
+        const isSpaShell = body.length > 0 && isSpaShellResponse(body, homepageFp)
         return {
           path,
           status: r.status,
           contentLength: Number.isFinite(contentLength) ? contentLength : null,
+          isSpaShell,
         }
       } catch {
         return null
@@ -1459,7 +1632,8 @@ async function discoverAndProbeAdminRoutes(
     }),
   )
   return results.filter(
-    (x): x is { path: string; status: number; contentLength: number | null } => x !== null,
+    (x): x is { path: string; status: number; contentLength: number | null; isSpaShell: boolean } =>
+      x !== null,
   )
 }
 
@@ -1650,13 +1824,30 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
   // Runs in parallel; failure → empty list (don't block the scan).
   const subdomainsP = discoverSubdomainsFromCT(getBaseDomain(url.hostname)).catch(() => [] as string[])
 
+  // WAF state captured across both fetch phases. Surfaced in the result via
+  // attackSurface.wafVendor + a synthetic `meta-waf-detected` finding so the
+  // user sees what's in front of their origin (and whether we had to bypass
+  // an initial block to even reach the page).
+  const wafState: {
+    vendor: WafVendor | null
+    blocked: boolean
+    stealthRetryAttempted: boolean
+    stealthRetrySucceeded: boolean
+  } = {
+    vendor: null,
+    blocked: false,
+    stealthRetryAttempted: false,
+    stealthRetrySucceeded: false,
+  }
+
   let mainResp: Response
   try {
     mainResp = await fetchWithTimeout(url.toString(), {
       method: 'GET',
       headers: {
-        'User-Agent': 'Vguard-Scanner/0.1 (+https://vguard.dev)',
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'User-Agent': SCANNER_UA,
+        'Accept-Language': BROWSER_ACCEPT_LANGUAGE,
+        Accept: BROWSER_ACCEPT,
       },
     })
   } catch (e: unknown) {
@@ -1673,12 +1864,80 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
   }
 
   if (mainResp.status >= 400 && mainResp.status < 500) {
-    return {
-      ok: false,
-      error: {
-        code: 'blocked_by_target',
-        message: `${url.host} returned HTTP ${mainResp.status}. We can't scan it from here.`,
-      },
+    // 403 / 406 / 429 / 451 from a 4xx range strongly suggests a WAF
+    // (Cloudflare, Akamai, AWS WAF, Imperva, Fastly, Vercel Bot Protection,
+    // Sucuri, StackPath, DDoS-Guard) flagged our outbound IP — Vercel Lambda
+    // IP ranges are a known bot signal. Two-phase response:
+    //   (1) Retry once with stealth headers (Sec-Ch-Ua + Sec-Fetch-*). Some
+    //       Cloudflare "managed challenge" rules score on header completeness
+    //       alone, so a more browser-faithful request slips through.
+    //   (2) If still blocked: return `blocked_by_waf` with the vendor name and
+    //       a suggested next step. This is NOT a scanner failure — the target
+    //       chose to deny automated access. The frontend renders this as a
+    //       distinct UX with a one-click handoff to Stage 2.
+    const wafLikely = [403, 406, 429, 451].includes(mainResp.status)
+
+    if (wafLikely) {
+      // (1) Stealth retry — only on WAF-likely codes; 404 / 410 / 400 don't
+      // benefit from a different UA so we skip the extra round-trip.
+      wafState.blocked = true
+      // Sniff vendor from the initial blocked response headers so we still
+      // report it on the success path (when stealth retry passes).
+      const initialBlockBody = await mainResp.clone().text().catch(() => '')
+      wafState.vendor = detectWafVendor(mainResp, initialBlockBody.slice(0, 8192))
+      try {
+        wafState.stealthRetryAttempted = true
+        const stealthResp = await fetchWithTimeout(url.toString(), {
+          method: 'GET',
+          headers: STEALTH_HEADERS,
+        })
+        if (stealthResp.status >= 200 && stealthResp.status < 400) {
+          // Stealth retry succeeded — continue with this response as if it
+          // were the primary. This is correct: WAFs that pass on stealth
+          // are not blocking the user's real visitors either.
+          wafState.stealthRetrySucceeded = true
+          mainResp = stealthResp
+        } else {
+          // Still blocked — read body for vendor sniff, then return structured
+          // error. Cap body read at 8KB; WAF block pages are tiny.
+          const blockBody = await stealthResp.text().catch(() => '')
+          const vendor = detectWafVendor(stealthResp, blockBody.slice(0, 8192))
+          const status = stealthResp.status
+          const suggestedAction = suggestedActionFor(vendor, status)
+          return {
+            ok: false,
+            error: {
+              code: 'blocked_by_waf',
+              httpStatus: status,
+              wafVendor: vendor,
+              suggestedAction,
+              message: `${url.host} blocked the scan with HTTP ${status}. ${VENDOR_LABELS[vendor]} flagged our IP as automated traffic — this is not a scanner failure, the target denied access. ${suggestedAction === 'stage2-bookmarklet' ? 'Run Stage 2 (browser-assisted) instead — it executes inside your own browser session, so the WAF can\'t block it.' : suggestedAction === 'fix-target' ? 'HTTP 451 indicates a legal block; this URL is unavailable for legal reasons in our region.' : 'Try Stage 2 to bypass the block.'}`,
+            },
+          }
+        }
+      } catch {
+        // Stealth retry threw (timeout/abort) — fall through to generic 4xx.
+      }
+    }
+
+    if (mainResp.status >= 400 && mainResp.status < 500) {
+      // Generic 4xx without WAF signals: 404, 410, 400 — site is reachable
+      // but rejected this URL. Different from a WAF block.
+      const blockBody = await mainResp.text().catch(() => '')
+      const vendor = detectWafVendor(mainResp, blockBody.slice(0, 8192))
+      const isWaf = wafLikely && vendor !== 'unknown'
+      return {
+        ok: false,
+        error: {
+          code: isWaf ? 'blocked_by_waf' : 'blocked_by_target',
+          httpStatus: mainResp.status,
+          wafVendor: isWaf ? vendor : undefined,
+          suggestedAction: isWaf ? suggestedActionFor(vendor, mainResp.status) : undefined,
+          message: isWaf
+            ? `${url.host} blocked the scan with HTTP ${mainResp.status}. ${VENDOR_LABELS[vendor]} flagged our IP as automated traffic — this is not a scanner failure, the target denied access. Run Stage 2 (browser-assisted) instead.`
+            : `${url.host} returned HTTP ${mainResp.status}. The site is reachable but rejected this URL — check the path is correct, or try the canonical host (www vs apex).`,
+        },
+      }
     }
   }
 
@@ -1686,6 +1945,15 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
   const finalUrl = mainResp.url || url.toString()
   const findings: Finding[] = []
   const detectedFramework = detectFramework(html)
+
+  // If we haven't already pinned a WAF vendor (no initial block), sniff the
+  // successful response headers + body. Many sites front Cloudflare/Akamai/
+  // Vercel without ever 4xx'ing us — surfacing the vendor in the attack
+  // surface map is still useful intel.
+  if (!wafState.vendor) {
+    const sniffed = detectWafVendor(mainResp, html.slice(0, 8192))
+    if (sniffed !== 'unknown') wafState.vendor = sniffed
+  }
 
   // === HEADERS ===
   for (const req of HEADER_REQS) {
@@ -2065,7 +2333,22 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
       s3BucketHosts.add(`${m[1]}.s3.amazonaws.com`)
     }
     // localhost references in production
+    // The supabase-js SDK ships `GOTRUE_URL = 'http://localhost:9999'` and
+    // `STORAGE_KEY = 'supabase.auth.token'` as bundled defaults — they exist
+    // in every Supabase project's bundle whether or not the user has any dev
+    // config leaked. When the surrounding context shows these constants are
+    // adjacent to the auth-token storage key OR the literal "9999" port, the
+    // hit is the SDK default, not a leak the developer can fix.
     for (const m of bundleText.matchAll(/https?:\/\/localhost:\d{2,5}/gi)) {
+      const ctxStart = Math.max(0, (m.index ?? 0) - 80)
+      const ctxEnd = Math.min(bundleText.length, (m.index ?? 0) + m[0].length + 80)
+      const context = bundleText.slice(ctxStart, ctxEnd)
+      const isSupabaseGoTrueDefault =
+        /:9999\b/.test(m[0]) &&
+        (/supabase\.auth\.token/.test(context) ||
+          /\bGOTRUE_URL\b/.test(context) ||
+          /["']supabase["']/.test(context))
+      if (isSupabaseGoTrueDefault) continue
       localhostHits.push(m[0])
       if (localhostHits.length >= 5) break
     }
@@ -2838,12 +3121,28 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
       })
     }
     if (astResult.domSinkAssignments.length > 0) {
+      // SPA frameworks ship vendor code that uses these sinks internally to
+      // implement their own escape-hatch props. A small count on an app whose
+      // framework was detected is statistically vendor-internal, not user-
+      // controlled. Demote to info so the finding remains visible without
+      // blocking the score; raw app misuse will trip separate JSX-prop
+      // detectors aimed at framework escape hatches.
+      const isSpaFramework =
+        detectedFramework === 'Next.js' ||
+        detectedFramework === 'Nuxt' ||
+        detectedFramework === 'Vite + React' ||
+        detectedFramework === 'SvelteKit' ||
+        detectedFramework === 'Remix' ||
+        detectedFramework === 'Astro'
+      const demoteToInfo = isSpaFramework && astResult.domSinkAssignments.length <= 3
       findings.push({
         id: 'js-ast-dom-sink',
-        severity: 'warn',
+        severity: demoteToInfo ? 'info' : 'warn',
         category: 'html',
         title: `${astResult.domSinkAssignments.length} DOM-injection sink${astResult.domSinkAssignments.length === 1 ? '' : 's'} in shipped JS`,
-        description: `AST parse found assignments to innerHTML / outerHTML, or calls to insertAdjacentHTML / write* on the document. These are DOM XSS sinks: any user-controlled string that ends up here renders as HTML, including <script> and event handlers. Safe only if the input is hard-coded or run through a sanitizer like DOMPurify before reaching the sink.`,
+        description: demoteToInfo
+          ? `AST parse found ${astResult.domSinkAssignments.length} assignment${astResult.domSinkAssignments.length === 1 ? '' : 's'} to a DOM-sink property in the shipped JS. ${detectedFramework} ships vendor code that uses these sinks internally to implement its escape-hatch props; a small count on a framework app is usually vendor-internal, not under your control. Worth a glance — search your source for the framework's HTML-injection prop and confirm any user-controlled string is sanitized first (DOMPurify) before it reaches that prop.`
+          : `AST parse found assignments to innerHTML / outerHTML, or calls to insertAdjacentHTML / write* on the document. These are DOM XSS sinks: any user-controlled string that ends up here renders as HTML, including <script> and event handlers. Safe only if the input is hard-coded or run through a sanitizer like DOMPurify before reaching the sink.`,
         evidence: astResult.domSinkAssignments
           .slice(0, 6)
           .map((s) => `${s.sink}: ${s.sample}`)
@@ -2947,14 +3246,20 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
     bundleTextAll,
     html,
     url.origin,
-  ).catch(() => [] as { path: string; status: number; contentLength: number | null }[])
+  ).catch(() => [] as { path: string; status: number; contentLength: number | null; isSpaShell: boolean }[])
   const publicAdminRoutes = adminProbeResults.filter(
     (r) =>
       r.status === 200 &&
       // Filter out tiny responses that are clearly redirects-via-HTML or
       // generic 200 OK error pages: typically real admin pages return >1KB
       // of HTML/JSON. Anything under 200 bytes is almost always a stub.
-      (r.contentLength === null || r.contentLength >= 200),
+      (r.contentLength === null || r.contentLength >= 200) &&
+      // Filter out SPA shells. Vite + React, Next.js static export, Vue Router
+      // history-mode fallback, and similar setups serve the SAME index.html
+      // for every path — admin auth is enforced client-side after the shell
+      // mounts. Reporting the shell as "admin returned 200 unauth" is a false
+      // positive: no privileged data crossed the wire, just the bootstrap HTML.
+      !r.isSpaShell,
   )
   if (publicAdminRoutes.length > 0) {
     findings.push({
@@ -3001,6 +3306,161 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
       evidence: Array.from(new Set(localhostHits)).slice(0, 4).join('\n'),
       fixPrompt: `Search-and-replace your codebase for "localhost". Replace with environment-aware values: process.env.NEXT_PUBLIC_API_URL or import.meta.env.VITE_API_URL, with a production fallback. Tree-shake out test/dev branches via NODE_ENV checks. Then rebuild and confirm "localhost" is gone from the dist/ output.`,
     })
+  }
+
+  // === AUTH-FOCUSED DETECTORS (added 2026-05-06 per Royi+Oded) ===
+  // Three classes: User Enumeration, Auth Weaknesses, Auth Information Disclosure.
+  // Stage 1 = passive only — derive from already-fetched HTML + bundles + headers.
+  // Catalog: see "Auth-focused detection classes" section in Vguard - Attack Catalog.md.
+
+  // --- auth-enum: surface signup/login/reset endpoints as a unified enum surface ---
+  {
+    const authSurfaceHits: string[] = []
+    const enumPatterns: { pattern: RegExp; label: string }[] = [
+      { pattern: /\b(?:href|action|src)\s*=\s*["']([^"']*\/(?:login|sign[-_]?in|signin)[^"']*)["']/gi, label: 'login' },
+      { pattern: /\b(?:href|action|src)\s*=\s*["']([^"']*\/(?:signup|sign[-_]?up|register)[^"']*)["']/gi, label: 'signup' },
+      { pattern: /\b(?:href|action|src)\s*=\s*["']([^"']*\/(?:forgot[-_]?password|reset[-_]?password|password[-_]?reset)[^"']*)["']/gi, label: 'password-reset' },
+      { pattern: /\b(?:href|action|src)\s*=\s*["']([^"']*\/api\/(?:auth|users)\/(?:exists|check[-_]?email|check[-_]?username)[^"']*)["']/gi, label: 'existence-api' },
+    ]
+    for (const { pattern, label } of enumPatterns) {
+      for (const m of html.matchAll(pattern)) {
+        authSurfaceHits.push(`${label}: ${m[1]}`)
+        if (authSurfaceHits.length >= 8) break
+      }
+      if (authSurfaceHits.length >= 8) break
+    }
+    if (authSurfaceHits.length > 0) {
+      const hasReset = authSurfaceHits.some((h) => h.startsWith('password-reset'))
+      const hasExistsApi = authSurfaceHits.some((h) => h.startsWith('existence-api'))
+      findings.push({
+        id: 'auth-enum-surface',
+        severity: hasExistsApi ? 'warn' : 'info',
+        category: 'auth-enum',
+        title: hasExistsApi
+          ? 'User-existence API endpoint exposed'
+          : `Auth surface present (${authSurfaceHits.length} endpoint${authSurfaceHits.length === 1 ? '' : 's'} discovered)`,
+        description: hasExistsApi
+          ? 'A dedicated "does this email/username exist?" endpoint was found. These endpoints are the most common source of user enumeration — anyone can iterate a wordlist of emails and learn which are registered. Combined with no rate limiting this leaks your full user base.'
+          : `Login, signup, and/or password-reset flows are reachable. Stage 1 only catalogs them — confirming whether they reveal "user not found" vs "wrong password" with different responses (or different timing) requires Stage 2/3 active probing.${
+              hasReset
+                ? ' Note the password-reset flow: returning 200 for known emails and 404 for unknown is the most common enum leak.'
+                : ''
+            }`,
+        evidence: authSurfaceHits.slice(0, 6).join('\n'),
+        fixPrompt: `For every auth endpoint (login / signup / password-reset / forgot-password): return the SAME response body and SAME HTTP status whether the email exists or not, AND respond in roughly constant time (use a constant-time compare or add a small randomized delay before responding). Concretely for password-reset: always return 200 with "If that email is registered, we sent a reset link" — never 404. For login: same generic "Invalid credentials" for both unknown-email and wrong-password cases. Add Cloudflare Turnstile / hCaptcha + per-IP rate limit (5 attempts per 15 min) on every auth endpoint. If you have a dedicated "/api/check-email" or "/api/users/exists" endpoint — DELETE it; it's a built-in user enumeration oracle.`,
+      })
+    }
+  }
+
+  // --- auth-weak: JWT inspection (alg:none, weak claims, missing exp) ---
+  {
+    const jwtRe = /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{0,200}/g
+    const seenJwts = new Set<string>()
+    const weakJwts: { token: string; problem: string }[] = []
+    const sources = [html, bundleTextAll]
+    for (const src of sources) {
+      for (const m of src.matchAll(jwtRe)) {
+        const token = m[0]
+        if (seenJwts.has(token)) continue
+        seenJwts.add(token)
+        if (seenJwts.size > 20) break
+        try {
+          const [hRaw, pRaw] = token.split('.')
+          const header = JSON.parse(
+            Buffer.from(hRaw.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'),
+          )
+          const payload = JSON.parse(
+            Buffer.from(pRaw.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'),
+          )
+          const problems: string[] = []
+          if (typeof header.alg === 'string' && header.alg.toLowerCase() === 'none') {
+            problems.push('alg=none (signature not verified)')
+          }
+          if (payload && typeof payload === 'object') {
+            const role = String(payload.role ?? payload.roles ?? '').toLowerCase()
+            if (role.includes('admin') || role.includes('super') || role === 'service_role') {
+              problems.push(`elevated role claim: ${role}`)
+            }
+            if (Array.isArray(payload.permissions) && payload.permissions.includes('*')) {
+              problems.push('permissions: ["*"]')
+            }
+            if (typeof payload.exp !== 'number') {
+              problems.push('no exp (token never expires)')
+            }
+          }
+          if (problems.length > 0) {
+            weakJwts.push({
+              token: token.slice(0, 12) + '...' + token.slice(-4),
+              problem: problems.join(', '),
+            })
+          }
+        } catch {
+          // not a real JWT — skip
+        }
+      }
+    }
+    if (weakJwts.length > 0) {
+      const isCritical = weakJwts.some(
+        (j) => j.problem.includes('alg=none') || j.problem.includes('admin') || j.problem.includes('service_role'),
+      )
+      findings.push({
+        id: 'auth-weak-jwt',
+        severity: isCritical ? 'critical' : 'warn',
+        category: 'auth-weak',
+        title: `${weakJwts.length} JWT${weakJwts.length === 1 ? '' : 's'} with weak header/claims exposed in bundle`,
+        description:
+          'JWT(s) found in your HTML or JS bundles have problematic headers or claims. Tokens with alg=none accept ANY signature (trivial forgery). Tokens with admin/service_role claims grant elevated access if reused. Tokens without exp never expire — long-lived persistent compromise if leaked.',
+        evidence: weakJwts.slice(0, 4).map((j) => `${j.token} — ${j.problem}`).join('\n'),
+        fixPrompt: `For each weak JWT: (1) If it is a service-role / admin-level token, IT MUST NEVER BE IN CLIENT CODE — move the call server-side immediately and rotate the key. (2) Set jwt.sign options to enforce alg='HS256' or 'RS256' (never 'none') and exp ≤ 1h for user sessions. (3) On the verifier, explicitly pass the allowed algorithms array — never rely on the header's alg field alone (alg:none confusion attack). For Supabase: anon keys are SAFE in client code by design (RLS enforces); service_role keys are NOT — server-only. For Auth0/Clerk/NextAuth: enforce a short access-token TTL with refresh-token rotation.`,
+      })
+    }
+  }
+
+  // --- auth-disclosure: session IDs in URLs, Bearer headers in HTML, stack traces ---
+  {
+    const disclosureHits: string[] = []
+    // Session IDs in URLs (href/action/src/redirects in HTML)
+    const urlParamRe = /[?&](sid|session[_-]?id|jsessionid|phpsessid|token|jwt|access[_-]?token|auth[_-]?token|api[_-]?key)=([^"'&\s<>]{8,})/gi
+    for (const m of html.matchAll(urlParamRe)) {
+      disclosureHits.push(`URL param: ${m[1]}=${m[2].slice(0, 8)}...`)
+      if (disclosureHits.length >= 4) break
+    }
+    // Bearer or Authorization values inline in HTML
+    const inlineAuthRe = /(authorization|bearer)\s*[:=]\s*["']?(eyJ[A-Za-z0-9_.-]{20,}|bearer\s+[A-Za-z0-9_.-]{20,})/gi
+    for (const m of html.matchAll(inlineAuthRe)) {
+      disclosureHits.push(`inline ${m[1]}: ${m[2].slice(0, 12)}...`)
+      if (disclosureHits.length >= 8) break
+    }
+    // Stack traces with auth keywords (server error pages)
+    const stackTraceRe = /(at\s+\w+(?:\.[\w$]+)*\s*\([^)]+:\d+:\d+\)|Traceback\s+\(most recent call last\)|Exception\s+in\s+thread)/i
+    if (stackTraceRe.test(html)) {
+      const authKeyword = /(jwt|passport|nextauth|supabase\.auth|firebase\.auth|auth0|clerk|cognito)/i
+      if (authKeyword.test(html)) {
+        const idx = html.search(stackTraceRe)
+        disclosureHits.push(
+          `stack-trace + auth keyword in body @ offset ${idx}: ${html.slice(idx, idx + 120).replace(/\s+/g, ' ')}`,
+        )
+      }
+    }
+
+    if (disclosureHits.length > 0) {
+      const hasInlineToken = disclosureHits.some(
+        (h) => h.startsWith('inline') || h.startsWith('URL param: token=') || h.startsWith('URL param: jwt='),
+      )
+      findings.push({
+        id: 'auth-disclosure-leak',
+        severity: hasInlineToken ? 'critical' : 'warn',
+        category: 'auth-disclosure',
+        title: hasInlineToken
+          ? 'Authentication token disclosed in HTML / URL'
+          : `Authentication-related disclosure (${disclosureHits.length} signal${disclosureHits.length === 1 ? '' : 's'})`,
+        description: hasInlineToken
+          ? 'A real-looking authentication token (JWT or Bearer credential) appears directly in the page HTML or in a URL query parameter. Anyone who reads the page source — or any service that logs URLs (proxies, analytics, browser history, Referer header) — captures it.'
+          : 'Found auth-related disclosure signals: session/token-named URL parameters, or stack traces that mention auth libraries. These leak implementation details and sometimes credentials to anyone who can fetch the page.',
+        evidence: disclosureHits.slice(0, 5).join('\n'),
+        fixPrompt: `Move every authentication token OUT of URLs and HTML attributes. Tokens belong in (a) HttpOnly+Secure+SameSite=Strict cookies set by the server, or (b) Authorization HTTP headers added by your fetch client at request time, or (c) sessionStorage with explicit XSS hardening. Never as ?token=... query params (logged everywhere) and never inlined in HTML (visible to view-source). For stack traces: in production, return a generic 500 page — log the trace server-side only. In Next.js: set output: 'standalone' + custom error.tsx; in Express: app.use((err, req, res, next) => res.status(500).json({error: 'Internal'})) AFTER your error logger. Disable any /debug, /api/debug, /__inspect routes in production.`,
+      })
+    }
   }
 
   // === CLEAN MARKERS ===
@@ -3081,7 +3541,53 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
       aiEndpoints,
     },
     subdomains,
+    waf:
+      wafState.vendor && wafState.vendor !== 'unknown'
+        ? {
+            vendor: wafState.vendor,
+            blocked: wafState.blocked,
+            stealthRetryAttempted: wafState.stealthRetryAttempted,
+            stealthRetrySucceeded: wafState.stealthRetrySucceeded,
+          }
+        : null,
   })
+
+  // Push a synthetic `info` finding when a WAF is in front of the origin.
+  // Keeping it as `info` (not `warn`) — having a WAF is a defense, not a
+  // problem. The value is informational: the user knows what's there, and
+  // sees whether our scan had to bypass an initial block to even reach them.
+  if (wafState.vendor && wafState.vendor !== 'unknown') {
+    const vendorLabel = VENDOR_LABELS[wafState.vendor]
+    const evidenceLines: string[] = [`Vendor detected: ${vendorLabel}`]
+    if (wafState.blocked && wafState.stealthRetrySucceeded) {
+      evidenceLines.push(
+        'Initial automated request was blocked, browser-like retry succeeded.',
+      )
+    } else if (wafState.blocked && wafState.stealthRetryAttempted && !wafState.stealthRetrySucceeded) {
+      evidenceLines.push(
+        'Both the initial and the stealth retry were blocked — only Stage 2 (browser-assisted) can scan past this layer.',
+      )
+    } else if (!wafState.blocked) {
+      evidenceLines.push('Detected from response headers; the scan was not blocked.')
+    }
+    scored.push({
+      id: 'meta-waf-detected',
+      severity: 'info',
+      category: 'meta',
+      title: `${vendorLabel} edge protection in front of your origin`,
+      description: `Your site sits behind ${vendorLabel}, which provides bot/DDoS mitigation before requests reach the origin. ${
+        wafState.blocked
+          ? `Vguard's initial automated request was blocked; we ${wafState.stealthRetrySucceeded ? 'completed the scan via a stealth retry that mimicked a real browser' : 'were not able to bypass the block — Stage 2 (browser-assisted) is the recommended next step'}.`
+          : 'Real users are unaffected.'
+      } Having edge protection is a defense, not a problem — this finding is informational.`,
+      evidence: evidenceLines.join('\n'),
+      fixPrompt: '',
+      riskScore: 0,
+      riskBand: 'low',
+    })
+    // Re-roll totals to reflect the new info finding so the score panel matches.
+    totals.info += 1
+  }
 
   return {
     ok: true,

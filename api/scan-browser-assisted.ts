@@ -22,6 +22,26 @@ export const config = {
   maxDuration: 60,
 }
 
+// Path patterns conventionally served unauth across the web. When the Stage 2
+// "first-party API call returned 2xx without auth" detector trips on these
+// it's a false positive — the contract is public-by-design (health checks,
+// status pages, version banners, public listings, manifest/sitemap/robots,
+// service workers, PWA assets). Anchored patterns avoid matching admin-style
+// paths that just happen to contain the word "status" deeper in the route.
+const WELL_KNOWN_PUBLIC_PATHS: RegExp[] = [
+  /^\/(?:api\/)?(?:health|healthz|liveness|readiness|ready|ping|status|version|info|metrics|build-info)\/?$/i,
+  /^\/(?:api\/)?(?:recent|public|world|trending|leaderboard|stats|stats-public)(?:-[\w-]+)?\/?$/i,
+  /^\/manifest\.(?:json|webmanifest)$/i,
+  /^\/(?:robots\.txt|sitemap(?:-\d+)?\.xml|favicon\.ico|opensearch\.xml|browserconfig\.xml)$/i,
+  /^\/\.well-known\//i,
+  // Service workers + PWA registration files MUST be publicly fetchable for
+  // the browser to install them; gating them defeats the whole feature.
+  // Covers the standard names plus common build-tool outputs (workbox,
+  // firebase messaging, vite-pwa).
+  /^\/(?:sw|service-worker|workbox-[\w-]+|firebase-messaging-sw|registerSW|sw-precache)\.js$/i,
+  /^\/workbox-.*\.js$/i,
+]
+
 interface BrowserScanBody {
   url?: string
   /**
@@ -619,14 +639,29 @@ function analyzeBrowserScan(data: WorkerScanResult): Finding[] {
   }
 
   // 8. Console errors — informational signal of misconfiguration
-  if (data.consoleErrors.length >= 3) {
+  // Some browser-emitted "errors" are actually the security headers WORKING:
+  // a Permissions-Policy violation log line means the policy correctly
+  // blocked an unauthorized API call. Reporting those as a problem punishes
+  // users for shipping the very header we recommend. Same logic for CSP
+  // report-only chatter and well-known third-party widget noise that the
+  // page owner can't fix.
+  const HARMLESS_CONSOLE_NOISE: RegExp[] = [
+    /Permissions[- ]policy violation:/i, // header doing its job
+    /\bxr-spatial-tracking\b/i,            // browser default policy denial
+    /\bidentity-credentials-get\b/i,        // FedCM default policy denial
+    /Content Security Policy.*report-only/i, // report-only is intentionally noisy
+  ]
+  const meaningfulConsoleErrors = data.consoleErrors.filter(
+    (e) => !HARMLESS_CONSOLE_NOISE.some((re) => re.test(e)),
+  )
+  if (meaningfulConsoleErrors.length >= 3) {
     findings.push({
       id: 'stage2-console-errors',
       severity: 'info',
       category: 'meta',
-      title: `${data.consoleErrors.length} console error${data.consoleErrors.length === 1 ? '' : 's'} during page load`,
-      description: `The browser logged multiple errors while loading the page. Errors don't directly indicate a vulnerability, but they often expose stack traces, internal endpoints, or auth misconfig that helps an attacker recon.`,
-      evidence: data.consoleErrors.slice(0, 5).join('\n---\n'),
+      title: `${meaningfulConsoleErrors.length} console error${meaningfulConsoleErrors.length === 1 ? '' : 's'} during page load`,
+      description: `The browser logged multiple errors while loading the page. Errors don't directly indicate a vulnerability, but they often expose stack traces, internal endpoints, or auth misconfig that helps an attacker recon. (Permissions-Policy violations and similar "header is doing its job" noise are filtered out before counting.)`,
+      evidence: meaningfulConsoleErrors.slice(0, 5).join('\n---\n'),
       fixPrompt: `Open the browser DevTools console on this page and triage the errors. For each: confirm it's not leaking internal info (file paths, internal API URLs, auth endpoints). Fix or silence; uncaught errors are also a UX bug. Production builds should be clean — if these only show in dev, that's fine, but verify they don't appear on the deployed bundle.`,
     })
   }
