@@ -965,7 +965,17 @@ function Stage3Modal({
   const [userJwt, setUserJwt] = useState('')
   const [authMode, setAuthMode] = useState(false)
   const [vercelToken, setVercelToken] = useState('')
-  const [verifyEmail, setVerifyEmail] = useState('')
+  const [verifyEmail, setVerifyEmail] = useState(() => {
+    // Remember the email from the last successful verify so repeat users
+    // don't have to re-type. Stored under a generic key (not per-domain) —
+    // the email is the user's, the domain is the target.
+    if (typeof window === 'undefined') return ''
+    try {
+      return window.localStorage.getItem('vguard-verify-email') ?? ''
+    } catch {
+      return ''
+    }
+  })
   // When DNS verification finds a stale Vguard UUID at the user's registrar,
   // we surface a one-click "use this code" button instead of making them push
   // yet another DNS update. Cleared on success / re-attempt / method switch.
@@ -1005,6 +1015,13 @@ function Stage3Modal({
     // setUuid call yet. Allow callers to pass the value they want to verify
     // explicitly. Falls back to the closure-captured state for normal clicks.
     const verifyUuid = uuidOverride ?? uuid
+    // Email is now required — verify form-side before sending to server.
+    const trimmedEmail = verifyEmail.trim()
+    if (!trimmedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(trimmedEmail)) {
+      setStatus('failed')
+      setHint('Email is required so we can email you the verify result.')
+      return
+    }
     setStatus('checking')
     setHint('')
     setFoundDnsUuid(null)
@@ -1032,6 +1049,15 @@ function Stage3Modal({
       }
       if (data.verified) {
         setStatus('verified')
+        // Persist the email for the next visit — saves the user from
+        // retyping when they come back to verify another domain or rerun.
+        if (verifyEmail.trim() && typeof window !== 'undefined') {
+          try {
+            window.localStorage.setItem('vguard-verify-email', verifyEmail.trim())
+          } catch {
+            // localStorage may be unavailable (private mode, quota); fail-soft
+          }
+        }
         // Auto-trigger deep scan. Pass the verify uuid explicitly so the
         // closure-captured `uuid` from a stale render (e.g. when verifyNow
         // was scheduled via setTimeout right after setUuid) can't poison the
@@ -1492,21 +1518,24 @@ function Stage3Modal({
 
         <div className="mt-5">
           <label htmlFor="verify-email" className="block font-mono text-[10px] tracking-widest uppercase text-(--color-fg-dim) mb-1.5">
-            Email for confirmation (optional)
+            Email <span className="text-(--color-accent)">·  required</span>
           </label>
           <input
             id="verify-email"
             type="email"
+            required
             value={verifyEmail}
             onChange={(e) => setVerifyEmail(e.target.value)}
             disabled={status === 'checking' || status === 'verified'}
             autoComplete="email"
             maxLength={200}
             placeholder="you@example.com"
+            aria-required="true"
+            aria-describedby="verify-email-hint"
             className="w-full max-w-sm bg-(--color-bg) border border-(--color-border) rounded-md px-3 py-2 font-mono text-xs text-(--color-fg) placeholder:text-(--color-fg-dim) focus:outline-none focus:border-(--color-accent-border) disabled:opacity-60"
           />
-          <p className="mt-1.5 font-mono text-[10px] text-(--color-fg-dim) leading-relaxed">
-            We'll send a one-time confirmation when {domain} is verified — and only then. No newsletter, no follow-ups. Leave empty to skip.
+          <p id="verify-email-hint" className="mt-1.5 font-mono text-[10px] text-(--color-fg-dim) leading-relaxed">
+            We email you the result either way: ✓ verified — Stage 3 unlocked, or ⚠ failed — what to fix and how. We remember your email locally; no newsletter, no follow-ups, no third-party sharing.
           </p>
         </div>
 

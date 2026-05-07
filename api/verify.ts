@@ -1,7 +1,11 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { promises as dns } from 'node:dns'
 import { recordVerification } from './_lib/verification-store.js'
-import { sendVerificationConfirmation, fireAndForget } from './_lib/verify-email.js'
+import {
+  sendVerificationConfirmation,
+  sendVerificationFailure,
+  fireAndForget,
+} from './_lib/verify-email.js'
 
 export const config = {
   runtime: 'nodejs',
@@ -138,6 +142,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const uuid = (body.uuid ?? '').trim()
   const method = body.method ?? 'file'
   const email = typeof body.email === 'string' ? body.email.trim().slice(0, 200) : ''
+  // Email is now mandatory for Stage 3 — Royi's product decision so we can
+  // notify on success AND failure (with a per-method fix prompt).
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) {
+    return res.status(400).json({
+      ok: false,
+      error: 'A valid email is required so we can email you the result.',
+    } satisfies VerifyResponse)
+  }
 
   if (!domain || !isValidDomain(domain)) {
     return res
@@ -173,6 +185,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (email) {
         fireAndForget(sendVerificationConfirmation(email, domain, method))
       }
+    } else if (email) {
+      const reason = result.hint ?? result.error ?? 'Could not verify ownership.'
+      fireAndForget(sendVerificationFailure(email, domain, method, uuid, reason))
     }
     return res.status(200).json(result)
   } catch (e) {

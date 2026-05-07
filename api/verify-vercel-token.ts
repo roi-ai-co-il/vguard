@@ -11,7 +11,11 @@
  */
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { recordVerification } from './_lib/verification-store.js'
-import { sendVerificationConfirmation, fireAndForget } from './_lib/verify-email.js'
+import {
+  sendVerificationConfirmation,
+  sendVerificationFailure,
+  fireAndForget,
+} from './_lib/verify-email.js'
 
 export const config = {
   runtime: 'nodejs',
@@ -132,6 +136,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!vercelToken || vercelToken.length < 20) {
     return res.status(400).json({ ok: false, error: 'Invalid Vercel token.' })
   }
+  const email = typeof body.email === 'string' ? body.email.trim().slice(0, 200) : ''
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) {
+    return res.status(400).json({
+      ok: false,
+      error: 'A valid email is required so we can email you the result.',
+    })
+  }
 
   try {
     // Quick smoke test — does the token work at all?
@@ -139,11 +150,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       headers: { Authorization: `Bearer ${vercelToken}` },
     })
     if (!meCheck.ok) {
+      const reason = `Vercel rejected the token (HTTP ${meCheck.status}). Make sure you copied a fresh personal token from vercel.com/account/tokens with "Full Access" scope.`
+      fireAndForget(sendVerificationFailure(email, domain, 'vercel', uuid, reason))
       return res.status(200).json({
         ok: true,
         verified: false,
         method: 'vercel-token',
-        hint: `Vercel rejected the token (HTTP ${meCheck.status}). Make sure you copied a fresh personal token from vercel.com/account/tokens with "Full Access" scope.`,
+        hint: reason,
       })
     }
 
@@ -154,10 +167,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       recordVerification(domain, uuid, 'oauth', `vercel-token:${ua ?? ''}`).catch(() => {
         // ignore
       })
-      const email = typeof body.email === 'string' ? body.email.trim().slice(0, 200) : ''
-      if (email) {
-        fireAndForget(sendVerificationConfirmation(email, domain, 'vercel'))
-      }
+      fireAndForget(sendVerificationConfirmation(email, domain, 'vercel'))
       return res.status(200).json({
         ok: true,
         verified: true,
@@ -166,11 +176,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         matchedAlias: result.matchedAlias,
       })
     }
+    const reason = `The token works, but ${domain} isn't an alias of any project in this Vercel account or its teams. Verify you signed in with the Vercel account that actually owns this domain, or use the file/DNS method instead.`
+    fireAndForget(sendVerificationFailure(email, domain, 'vercel', uuid, reason))
     return res.status(200).json({
       ok: true,
       verified: false,
       method: 'vercel-token',
-      hint: `The token works, but ${domain} isn't an alias of any project in this Vercel account or its teams. Verify you signed in with the Vercel account that actually owns this domain, or use the file/DNS method instead.`,
+      hint: reason,
     })
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'unknown error'
