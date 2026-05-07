@@ -91,7 +91,7 @@ export default function AccessibilityWidget() {
     <>
       <button
         type="button"
-        aria-label="פתח תפריט נגישות"
+        aria-label="Open accessibility menu"
         aria-expanded={open}
         aria-controls="a11y-panel"
         onClick={() => setOpen((o) => !o)}
@@ -116,11 +116,11 @@ export default function AccessibilityWidget() {
           >
             <div className="flex items-center justify-between px-4 py-3 border-b border-(--color-border)">
               <h2 id="a11y-title" className="font-mono text-sm tracking-widest uppercase text-(--color-accent)">
-                Accessibility · נגישות
+                Accessibility
               </h2>
               <button
                 type="button"
-                aria-label="סגור תפריט נגישות"
+                aria-label="Close accessibility menu"
                 onClick={() => setOpen(false)}
                 className="text-(--color-fg-muted) hover:text-(--color-fg) p-1"
               >
@@ -129,11 +129,11 @@ export default function AccessibilityWidget() {
             </div>
             <div className="p-4 space-y-3">
               <div className="flex items-center justify-between">
-                <label htmlFor="a11y-font" className="text-sm text-(--color-fg)">גודל טקסט</label>
+                <label htmlFor="a11y-font" className="text-sm text-(--color-fg)">Text size</label>
                 <div id="a11y-font" className="flex items-center gap-2">
                   <button
                     type="button"
-                    aria-label="הקטן טקסט"
+                    aria-label="Decrease text size"
                     onClick={() => stepFont(-1)}
                     className="w-8 h-8 rounded border border-(--color-border) text-(--color-fg) hover:bg-(--color-fg-muted)/10 flex items-center justify-center"
                   >
@@ -144,7 +144,7 @@ export default function AccessibilityWidget() {
                   </span>
                   <button
                     type="button"
-                    aria-label="הגדל טקסט"
+                    aria-label="Increase text size"
                     onClick={() => stepFont(1)}
                     className="w-8 h-8 rounded border border-(--color-border) text-(--color-fg) hover:bg-(--color-fg-muted)/10 flex items-center justify-center"
                   >
@@ -156,21 +156,21 @@ export default function AccessibilityWidget() {
               <Toggle
                 id="a11y-contrast"
                 icon={<Contrast size={16} aria-hidden="true" />}
-                label="ניגודיות גבוהה"
+                label="High contrast"
                 checked={prefs.highContrast}
                 onChange={(v) => update('highContrast', v)}
               />
               <Toggle
                 id="a11y-links"
                 icon={<Underline size={16} aria-hidden="true" />}
-                label="הדגשת קישורים"
+                label="Underline links"
                 checked={prefs.underlineLinks}
                 onChange={(v) => update('underlineLinks', v)}
               />
               <Toggle
                 id="a11y-motion"
                 icon={<Pause size={16} aria-hidden="true" />}
-                label="עצירת אנימציות"
+                label="Pause animations"
                 checked={prefs.reduceMotion}
                 onChange={(v) => update('reduceMotion', v)}
               />
@@ -182,13 +182,13 @@ export default function AccessibilityWidget() {
                   className="inline-flex items-center gap-1.5 text-xs font-mono text-(--color-fg-muted) hover:text-(--color-fg)"
                 >
                   <RotateCcw size={12} aria-hidden="true" />
-                  איפוס
+                  Reset
                 </button>
                 <a
                   href="/accessibility"
                   className="text-xs font-mono text-(--color-accent) hover:underline"
                 >
-                  הצהרת נגישות ←
+                  Accessibility statement →
                 </a>
               </div>
             </div>
