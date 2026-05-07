@@ -1,6 +1,6 @@
 # Vguard — security scanner for vibe-coded apps
 
-> Co-founders: Royi + Oded (joined 2026-04-29). Idea note: [`Knowledge/09 רעיונות/Vguard.md`](../../Knowledge/09%20רעיונות/Vguard.md). Attack catalog: [`Knowledge/09 רעיונות/Vguard - Attack Catalog.md`](../../Knowledge/09%20רעיונות/Vguard%20-%20Attack%20Catalog.md).
+> Co-founders: Royi + Oded (joined 2026-04-29). Idea note: [`Knowledge/04 פרויקטים/V-Guards.md`](../../Knowledge/04%20פרויקטים/V-Guards.md). Attack catalog: [`Knowledge/04 פרויקטים/V-Guards - Attack Catalog.md`](../../Knowledge/04%20פרויקטים/V-Guards%20-%20Attack%20Catalog.md).
 
 ## What it is
 
@@ -37,7 +37,7 @@ External-only checks, nothing that looks like an attack. The user pastes a URL a
 - Forms + endpoints discovery (CSRF tokens, AI endpoints, auth signup probes)
 - Active probing: Open Redirect canary, reflected XSS canary, SQLi error-based
 
-**~75 detectors, ~99% of URL-only spec coverage.** See [`Knowledge/09 רעיונות/Vguard - Attack Catalog.md`](../../Knowledge/09%20רעיונות/Vguard%20-%20Attack%20Catalog.md) for the live list.
+**~75 detectors, ~99% of URL-only spec coverage.** See [`Knowledge/04 פרויקטים/V-Guards - Attack Catalog.md`](../../Knowledge/04%20פרויקטים/V-Guards%20-%20Attack%20Catalog.md) for the live list.
 
 The current `api/scan.ts` is Stage 1. Stages 2 and 3 are separate endpoints + UI flows.
 
@@ -363,7 +363,7 @@ Polish in the same round (one render cycle, "while we're in there"):
 
 ### 3. Footer — Founders credit added
 
-Royi + Oded Safdie are co-founders of Vguard (per `Knowledge/09 רעיונות/Vguard.md`). Added a second footer row:
+Royi + Oded Safdie are co-founders of Vguard (per `Knowledge/04 פרויקטים/V-Guards.md`). Added a second footer row:
 
 > **Founders ·** Royi Argaman · Oded Safdie
 
@@ -448,7 +448,7 @@ The deploy itself also got hardening headers (CSP / COOP / COEP=credentialless /
 - No Auth, no rate limiting, no DB persistence. The scanner is fully stateless. This is a public free-tier risk — when usage picks up, gate it.
 - No authenticated test mode. Tier "Team" in pricing advertises this, but the wiring isn't there.
 - No Supabase RLS deep probes (the actual wedge from the idea note). Needs anon-key intake from the user + careful legal copy ("I own this domain").
-- No prompt-injection canaries against `/api/chat`-style endpoints. Catalog ready in [`Vguard - Attack Catalog`](../../Knowledge/09%20רעיונות/Vguard%20-%20Attack%20Catalog.md), no execution yet.
+- No prompt-injection canaries against `/api/chat`-style endpoints. Catalog ready in [`Vguard - Attack Catalog`](../../Knowledge/04%20פרויקטים/V-Guards%20-%20Attack%20Catalog.md), no execution yet.
 - The "Live · scanning the world" section uses 4 hardcoded findings + a decorative globe. When `vs_scans` table exists with ≥50 real scans, wire this to a tail of recent findings.
 
 ## Adding a new detector

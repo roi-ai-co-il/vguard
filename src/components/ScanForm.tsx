@@ -1056,7 +1056,7 @@ export function ScanForm() {
               autoCapitalize="off"
               spellCheck={false}
               required
-              placeholder="https://your-app.vercel.app"
+              placeholder="https://your-app.com"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
               className={`${inputClass} flex-1 border-(--color-border) focus:border-(--color-accent-border)`}

@@ -65,7 +65,7 @@ const SCAN_CARDS: BentoCardProps[] = [
       'We crawl every chunk and source map for the patterns Cursor / Claude / Lovable accidentally inline. Each finding ships with a paste-ready prompt to move the call server-side.',
     graphic: (
       <div className="absolute inset-0 p-6 font-mono text-[11px] leading-relaxed">
-        <div className="text-(--color-fg-dim)">$ vguard scan https://app.vercel.app</div>
+        <div className="text-(--color-fg-dim)">$ vguard scan https://your-app.com</div>
         <div className="text-(--color-fg-dim)">{'> probing JS bundle...'}</div>
         <div className="mt-3 rounded-md bg-(--color-bg) border border-(--color-danger)/40 p-3 shadow-[0_0_24px_-8px_rgba(255,107,107,0.5)]">
           <div className="text-(--color-danger) font-semibold">! CRITICAL — secret found</div>
@@ -158,7 +158,7 @@ const SCAN_CARDS: BentoCardProps[] = [
       'Every header that should be set, with the exact `vercel.json` snippet to fix it. CVE detection across your dependency tree.',
     graphic: (
       <div className="absolute inset-0 p-5 font-mono text-[10px] leading-relaxed">
-        <div className="text-(--color-fg-dim)">$ curl -I https://app.vercel.app</div>
+        <div className="text-(--color-fg-dim)">$ curl -I https://your-app.com</div>
         <div className="mt-2 text-(--color-fg-muted)">HTTP/2 200</div>
         <div className="text-(--color-fg-muted)">strict-transport-security: <span className="text-(--color-ok)">max-age=63072000</span></div>
         <div className="text-(--color-fg-muted)">x-content-type-options: <span className="text-(--color-ok)">nosniff</span></div>
