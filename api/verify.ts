@@ -183,11 +183,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // ignore — DB write is best-effort, deep scan can re-verify live
       }
       if (email) {
-        fireAndForget(sendVerificationConfirmation(email, domain, method))
+        // Await — Vercel serverless kills the function after res.json(),
+        // so fire-and-forget won't actually complete. Resend round-trip
+        // is ~200-500ms, well within our 15s maxDuration.
+        try {
+          await sendVerificationConfirmation(email, domain, method)
+        } catch {
+          // Email failure shouldn't fail the verify response.
+        }
       }
     } else if (email) {
       const reason = result.hint ?? result.error ?? 'Could not verify ownership.'
-      fireAndForget(sendVerificationFailure(email, domain, method, uuid, reason))
+      try {
+        await sendVerificationFailure(email, domain, method, uuid, reason)
+      } catch {
+        // ignore — verify response still goes through
+      }
     }
     return res.status(200).json(result)
   } catch (e) {

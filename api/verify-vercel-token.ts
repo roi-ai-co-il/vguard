@@ -151,7 +151,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     })
     if (!meCheck.ok) {
       const reason = `Vercel rejected the token (HTTP ${meCheck.status}). Make sure you copied a fresh personal token from vercel.com/account/tokens with "Full Access" scope.`
-      fireAndForget(sendVerificationFailure(email, domain, 'vercel', uuid, reason))
+      try { await sendVerificationFailure(email, domain, 'vercel', uuid, reason) } catch {}
       return res.status(200).json({
         ok: true,
         verified: false,
@@ -167,7 +167,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       recordVerification(domain, uuid, 'oauth', `vercel-token:${ua ?? ''}`).catch(() => {
         // ignore
       })
-      fireAndForget(sendVerificationConfirmation(email, domain, 'vercel'))
+      try { await sendVerificationConfirmation(email, domain, 'vercel') } catch {}
       return res.status(200).json({
         ok: true,
         verified: true,
@@ -177,7 +177,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       })
     }
     const reason = `The token works, but ${domain} isn't an alias of any project in this Vercel account or its teams. Verify you signed in with the Vercel account that actually owns this domain, or use the file/DNS method instead.`
-    fireAndForget(sendVerificationFailure(email, domain, 'vercel', uuid, reason))
+    try { await sendVerificationFailure(email, domain, 'vercel', uuid, reason) } catch {}
     return res.status(200).json({
       ok: true,
       verified: false,
