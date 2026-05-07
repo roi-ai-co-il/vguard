@@ -216,9 +216,6 @@ export default function App() {
             <span className="font-semibold tracking-tight">V-Guards</span>
             <span className="text-(--color-fg-dim) animate-pulse">_</span>
           </a>
-          <div className="font-mono text-[10px] sm:text-xs text-(--color-fg-dim) tracking-widest uppercase">
-            beta · invite-only
-          </div>
         </div>
       </motion.header>
 
@@ -503,6 +500,11 @@ export default function App() {
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-1 sm:gap-0">
             <span>Founders · Roy Argaman · Oded Safdie</span>
             <a href="mailto:infovguards@gmail.com" className="hover:text-(--color-fg-muted) transition-colors">infovguards@gmail.com</a>
+          </div>
+          <div className="flex items-center gap-4 pt-1">
+            <a href="/terms" className="hover:text-(--color-fg-muted) transition-colors">Terms</a>
+            <a href="/privacy" className="hover:text-(--color-fg-muted) transition-colors">Privacy</a>
+            <a href="/accessibility" className="hover:text-(--color-fg-muted) transition-colors">Accessibility</a>
           </div>
         </div>
       </footer>

@@ -20,7 +20,7 @@ const TERMS: LegalDocument = {
     {
       level: 2,
       heading: '1. Purpose of Service',
-      body: 'Vguard is a security analysis tool intended solely for defensive and educational purposes. The platform is designed to help users identify potential security weaknesses in systems they own or are explicitly authorized to test.',
+      body: 'V-Guards is a security analysis tool intended solely for defensive and educational purposes. The platform is designed to help users identify potential security weaknesses in systems they own or are explicitly authorized to test.',
     },
     {
       level: 2,
@@ -29,13 +29,13 @@ const TERMS: LegalDocument = {
       bullets: [
         'You will only scan domains, applications, or systems that you own or have explicit permission to test.',
         'You are solely responsible for all actions performed using this platform.',
-        'You will not use Vguard for malicious, unauthorized, or illegal activities.',
+        'You will not use V-Guards for malicious, unauthorized, or illegal activities.',
       ],
     },
     {
       level: 2,
       heading: '3. No Warranty',
-      body: 'Vguard is provided "as is" without warranties of any kind. We do not guarantee:',
+      body: 'V-Guards is provided "as is" without warranties of any kind. We do not guarantee:',
       bullets: [
         'Accuracy of findings',
         'Completeness of results',
@@ -60,7 +60,7 @@ const TERMS: LegalDocument = {
     {
       level: 2,
       heading: '5. Limitation of Liability',
-      body: 'Under no circumstances shall Vguard or its operators be liable for:',
+      body: 'Under no circumstances shall V-Guards or its operators be liable for:',
       bullets: [
         'Any damages resulting from use of the platform',
         'Misuse of findings',
@@ -90,7 +90,7 @@ const TERMS: LegalDocument = {
     {
       level: 2,
       heading: '9. Acceptance',
-      body: 'By using Vguard, you confirm that you have read, understood, and agreed to these Terms.',
+      body: 'By using V-Guards, you confirm that you have read, understood, and agreed to these Terms.',
     },
   ],
 }
@@ -98,7 +98,7 @@ const TERMS: LegalDocument = {
 const PRIVACY: LegalDocument = {
   title: 'Privacy Policy',
   intro: [
-    'Vguard is a web security analysis platform designed to help users identify potential vulnerabilities in websites and applications.',
+    'V-Guards is a web security analysis platform designed to help users identify potential vulnerabilities in websites and applications.',
     'This Privacy Policy explains what data we collect, how we use it, and your rights regarding that data.',
   ],
   sections: [
@@ -106,7 +106,7 @@ const PRIVACY: LegalDocument = {
     {
       level: 3,
       heading: '2.1 Data Provided by Users',
-      body: 'When you use Vguard, you may provide:',
+      body: 'When you use V-Guards, you may provide:',
       bullets: [
         'Website URLs for scanning',
         'Domain ownership verification data (e.g., DNS records or verification files)',
@@ -218,7 +218,7 @@ const PRIVACY: LegalDocument = {
     {
       level: 2,
       heading: '9. Third-Party Services',
-      body: 'Vguard may interact with external services (e.g., DNS resolvers, cloud providers). These services operate under their own privacy policies.',
+      body: 'V-Guards may interact with external services (e.g., DNS resolvers, cloud providers). These services operate under their own privacy policies.',
     },
     {
       level: 2,
@@ -310,7 +310,7 @@ function LegalDocumentView({ doc }: { doc: LegalDocument }) {
 
       <footer className="border-t border-(--color-border) mt-auto">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 py-5 font-mono text-[11px] sm:text-xs text-(--color-fg-dim) flex flex-wrap items-center justify-between gap-3">
-          <span>© 2026 Vguard</span>
+          <span>© 2026 V-Guards</span>
           <div className="flex items-center gap-4">
             <a href="/terms" className="hover:text-(--color-fg) transition-colors">
               Terms

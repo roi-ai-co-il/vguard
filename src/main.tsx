@@ -20,13 +20,15 @@ if (fontsLink) {
 
 const AdminLogs = lazy(() => import('./pages/AdminLogs.tsx'))
 const Privacy = lazy(() => import('./pages/Privacy.tsx'))
+const Terms = lazy(() => import('./pages/Terms.tsx'))
 const AccessibilityPage = lazy(() => import('./pages/Accessibility.tsx'))
 
 function pickRoute() {
   const path = window.location.pathname
   if (path === '/privacy' || path === '/privacy/') return <Privacy />
+  if (path === '/terms' || path === '/terms/') return <Terms />
   if (path === '/accessibility' || path === '/accessibility/') return <AccessibilityPage />
-  if (path === '/' || path === '' || path === '/terms' || path === '/terms/') return <App />
+  if (path === '/' || path === '') return <App />
   return <AdminLogs />
 }
 
