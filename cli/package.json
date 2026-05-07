@@ -33,7 +33,7 @@
   "bugs": {
     "url": "https://vguardus.com"
   },
-  "author": "ROI AI (Royi Argaman, Oded Safdie)",
+  "author": "ROI AI (Roy Argaman, Oded Safdie)",
   "devDependencies": {
     "@types/node": "^20.19.39",
     "typescript": "^5.9.3"

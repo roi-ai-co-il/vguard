@@ -492,9 +492,15 @@ export default function App() {
       </main>
 
       <footer className="relative border-t border-(--color-border) mt-auto z-10">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-5 sm:py-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-1 sm:gap-0 font-mono text-[11px] sm:text-xs text-(--color-fg-dim)">
-          <span>© 2026 Vguard</span>
-          <span>built by ROI AI · in stealth</span>
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-5 sm:py-6 flex flex-col gap-2 font-mono text-[11px] sm:text-xs text-(--color-fg-dim)">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-1 sm:gap-0">
+            <span>© 2026 Vguard</span>
+            <span>built by ROI AI · in stealth</span>
+          </div>
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-1 sm:gap-0">
+            <span>Founders · Roy Argaman · Oded Safdie</span>
+            <a href="mailto:infovguards@gmail.com" className="hover:text-(--color-fg-muted) transition-colors">infovguards@gmail.com</a>
+          </div>
         </div>
       </footer>
     </div>

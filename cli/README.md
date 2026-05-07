@@ -75,4 +75,4 @@ NO_COLOR=1         Disable ANSI color output
 
 ## License
 
-MIT — built by [ROI AI](https://roiai.co.il) (Royi Argaman, Oded Safdie).
+MIT — built by [ROI AI](https://roiai.co.il) (Roy Argaman, Oded Safdie).

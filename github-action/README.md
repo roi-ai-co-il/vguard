@@ -67,4 +67,4 @@ See [the main repo README](../README.md) — same Stage 1 pipeline as `npx vguar
 
 ## License
 
-MIT — built by [ROI AI](https://roiai.co.il) (Royi Argaman, Oded Safdie).
+MIT — built by [ROI AI](https://roiai.co.il) (Roy Argaman, Oded Safdie).
