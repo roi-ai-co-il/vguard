@@ -1,12 +1,6 @@
 import { useState, useEffect, useRef, type FormEvent } from 'react'
-import {
-  motion,
-  AnimatePresence,
-  useReducedMotion,
-  useMotionValue,
-  useTransform,
-  animate,
-} from 'framer-motion'
+import { ScanningLoader } from '@/components/ui/scanning-loader'
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion'
 import {
   ArrowRight,
   ArrowLeft,
@@ -195,90 +189,6 @@ function severityTooltip(s: Severity) {
   return 'Clean — verified working.'
 }
 
-function CircleProgress({ progress, reduceMotion }: { progress: number; reduceMotion: boolean }) {
-  const size = 184
-  const stroke = 6
-  const radius = (size - stroke) / 2
-  const circumference = 2 * Math.PI * radius
-  const offset = circumference * (1 - progress)
-  const targetPct = Math.round(progress * 100)
-
-  // Smooth animated counter
-  const displayCount = useMotionValue(0)
-  const displayText = useTransform(displayCount, (v) => Math.round(v).toString())
-
-  useEffect(() => {
-    const controls = animate(displayCount, targetPct, {
-      duration: reduceMotion ? 0 : 0.45,
-      ease: 'easeOut',
-    })
-    return controls.stop
-  }, [displayCount, reduceMotion, targetPct])
-
-  return (
-    <div
-      className="relative"
-      style={{ width: size, height: size }}
-      role="img"
-      aria-label={`Analysis progress: ${targetPct} percent`}
-    >
-      <svg width={size} height={size} className="-rotate-90" aria-hidden="true">
-        <defs>
-          <linearGradient id="scan-progress-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="var(--color-accent)" />
-            <stop offset="100%" stopColor="var(--color-accent-strong)" />
-          </linearGradient>
-        </defs>
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          stroke="var(--color-border)"
-          strokeWidth={stroke}
-          fill="none"
-        />
-        <motion.circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          stroke="url(#scan-progress-grad)"
-          strokeWidth={stroke}
-          fill="none"
-          strokeLinecap="round"
-          strokeDasharray={circumference}
-          animate={{ strokeDashoffset: offset }}
-          transition={{ duration: reduceMotion ? 0 : 0.4, ease: [0.16, 1, 0.3, 1] }}
-          style={{ filter: 'drop-shadow(0 0 14px rgba(34, 211, 238, 0.55))' }}
-        />
-        {/* Subtle outer ring pulse */}
-        <motion.circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius + 4}
-          stroke="var(--color-accent)"
-          strokeWidth={1}
-          fill="none"
-          opacity={0.18}
-          animate={
-            reduceMotion
-              ? undefined
-              : { opacity: [0.05, 0.25, 0.05], r: [radius + 2, radius + 8, radius + 2] }
-          }
-          transition={{ duration: 2.4, repeat: Infinity, ease: 'easeInOut' }}
-        />
-      </svg>
-      <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-        <div className="font-mono text-5xl font-semibold tabular-nums text-(--color-fg) leading-none">
-          <motion.span>{displayText}</motion.span>
-          <span className="text-(--color-fg-muted) text-3xl">%</span>
-        </div>
-        <div className="font-mono text-[10px] tracking-[0.25em] uppercase text-(--color-accent) mt-2">
-          Analyzing
-        </div>
-      </div>
-    </div>
-  )
-}
 
 interface StepListProps {
   steps: string[]
@@ -1024,7 +934,6 @@ export function ScanForm() {
     setState('idle')
   }
 
-  const progress = Math.min(stepIdx / SCAN_STEPS.length, 1)
 
   const inputClass =
     'w-full px-4 py-3.5 rounded-lg bg-(--color-surface) border text-(--color-fg) placeholder:text-(--color-fg-dim) font-mono text-sm focus:outline-none transition-colors min-h-[48px]'
@@ -1087,7 +996,7 @@ export function ScanForm() {
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-[auto_1fr] gap-6 sm:gap-8 items-center">
               <div className="flex justify-center sm:justify-start">
-                <CircleProgress progress={progress} reduceMotion={reduceMotion} />
+                <ScanningLoader size={140} text="SCANNING" />
               </div>
               <div>
                 <div className="font-mono text-[10px] tracking-[0.25em] uppercase text-(--color-fg-dim) mb-3 flex items-center justify-between">

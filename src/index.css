@@ -87,6 +87,77 @@ input:focus-visible {
   }
 }
 
+/* ScanningLoader — animated SCANNING text + rotating accent ring */
+@keyframes vgScanningRing {
+  0% {
+    transform: rotate(90deg);
+    box-shadow:
+      0 6px 12px 0 var(--color-accent) inset,
+      0 12px 18px 0 var(--color-accent-strong) inset,
+      0 36px 36px 0 rgba(6, 182, 212, 0.65) inset,
+      0 0 3px 1.2px rgba(34, 211, 238, 0.35),
+      0 0 6px 1.8px rgba(6, 182, 212, 0.25);
+  }
+  50% {
+    transform: rotate(270deg);
+    box-shadow:
+      0 6px 12px 0 var(--color-accent) inset,
+      0 12px 6px 0 var(--color-accent-strong) inset,
+      0 24px 36px 0 rgba(6, 182, 212, 0.55) inset,
+      0 0 3px 1.2px rgba(34, 211, 238, 0.35),
+      0 0 6px 1.8px rgba(6, 182, 212, 0.25);
+  }
+  100% {
+    transform: rotate(450deg);
+    box-shadow:
+      0 6px 12px 0 var(--color-accent) inset,
+      0 12px 18px 0 var(--color-accent-strong) inset,
+      0 36px 36px 0 rgba(6, 182, 212, 0.65) inset,
+      0 0 3px 1.2px rgba(34, 211, 238, 0.35),
+      0 0 6px 1.8px rgba(6, 182, 212, 0.25);
+  }
+}
+
+@keyframes vgScanningLetter {
+  0%, 100% {
+    opacity: 0.5;
+    transform: translateY(0);
+  }
+  20% {
+    opacity: 1;
+    transform: scale(1.15);
+    text-shadow: 0 0 8px var(--color-accent);
+  }
+  40% {
+    opacity: 0.8;
+    transform: translateY(0);
+  }
+}
+
+.vg-scanning-ring {
+  animation: vgScanningRing 5s linear infinite;
+}
+
+.vg-scanning-letter {
+  animation: vgScanningLetter 2.4s infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vg-scanning-ring,
+  .vg-scanning-letter {
+    animation: none;
+  }
+  .vg-scanning-letter {
+    opacity: 1;
+  }
+  .vg-scanning-ring {
+    box-shadow:
+      0 6px 12px 0 var(--color-accent) inset,
+      0 12px 18px 0 var(--color-accent-strong) inset,
+      0 0 3px 1.2px rgba(34, 211, 238, 0.35);
+  }
+}
+
 /* ScannerCardStream keyframes — invoked inline by the component */
 @keyframes vgGlitch {
   0%, 16%, 50%, 100% { opacity: 1; }
