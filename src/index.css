@@ -92,6 +92,33 @@ input:focus-visible {
   background-size: 32px 32px;
 }
 
+/* Accessibility widget overrides — driven by data attrs on <html> set by AccessibilityWidget */
+html { font-size: calc(16px * var(--a11y-font-scale, 1)); }
+
+html[data-a11y-contrast="high"] {
+  --color-bg: #000000;
+  --color-fg: #ffffff;
+  --color-fg-muted: #f0f0f0;
+  --color-fg-dim: #d0d0d0;
+  --color-border: #808080;
+  --color-border-strong: #a0a0a0;
+  --color-accent: #00ffff;
+  --color-accent-strong: #00e5ff;
+  --color-accent-border: #00ffff;
+}
+html[data-a11y-contrast="high"] body { color: #ffffff; }
+
+html[data-a11y-links="underlined"] a { text-decoration: underline !important; }
+
+html[data-a11y-motion="reduced"] *,
+html[data-a11y-motion="reduced"] *::before,
+html[data-a11y-motion="reduced"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
 /* Hero radial glow */
 .hero-glow {
   background: radial-gradient(

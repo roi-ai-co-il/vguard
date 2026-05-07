@@ -26,6 +26,7 @@ export const TypingEffect = ({
   const isInView = useInView(containerRef, { once: true })
 
   const currentText = texts[currentTextIndex % texts.length]
+  const maxLen = texts.reduce((m, t) => Math.max(m, t.length), 0)
 
   useEffect(() => {
     if (!isInView) return
@@ -50,8 +51,9 @@ export const TypingEffect = ({
     <span
       ref={containerRef}
       className={cn('relative inline-flex items-baseline', className)}
+      style={{ minWidth: `${maxLen}ch` }}
     >
-      {displayedText}
+      <span aria-live="polite">{displayedText}</span>
       <motion.span
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
