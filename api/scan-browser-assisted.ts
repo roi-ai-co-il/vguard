@@ -660,6 +660,21 @@ function analyzeBrowserScan(data: WorkerScanResult): Finding[] {
     /font-size:0;color:transparent.*NaN/i, // 3rd-party styled console.log debug calls (Cloudflare Turnstile uses this pattern)
     /^https:\/\/challenges\.cloudflare\.com/i, // Turnstile iframe internals
     /chrome-extension:\/\//i,               // user's installed extensions, not the site
+    // CSP violations from cross-origin iframes (Turnstile, embedded auth widgets,
+    // payment forms) — they have their own CSPs with nonces/unsafe-eval that look
+    // alarming in the page console but are NOT enforced against the parent page's
+    // CSP. The give-away is the message references a nonce we never set.
+    /Executing inline script violates.*nonce-/i,
+    /violates.*'nonce-[A-Za-z0-9_+/=-]{16,}'/i,
+    // Stage 2 worker's own navigation/load failures get pushed into the same
+    // consoleErrors array (see stage2-worker/index.ts) — they're scanner-side,
+    // not site-side. Filter to surface only what the SITE's JS produces.
+    /^navigation:\s*page\.goto:.*Timeout/i,
+    /^navigation:\s*net::ERR_/i,
+    // Generic "Failed to load resource" without a path is unactionable — usually
+    // a third-party widget's own asset (Turnstile sub-resource, ad blocker
+    // shimming a tracker). Specific paths still surface.
+    /^Failed to load resource: the server responded with a status of \d+ \(\)$/i,
   ]
   const meaningfulConsoleErrors = data.consoleErrors.filter(
     (e) => !HARMLESS_CONSOLE_NOISE.some((re) => re.test(e)),

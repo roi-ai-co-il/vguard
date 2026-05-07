@@ -1144,6 +1144,78 @@ const PLAYBOOKS: Record<string, Playbook> = {
     ].join('\n')
   },
 
+  // ─── Headers ────────────────────────────────────────────────────────────
+  'headers-no-x-frame-options': (_finding, ctx) => {
+    return [
+      `**Add the header at your hosting platform** (NOT in the React/Vite source — these are response headers from the edge/CDN).`,
+      ``,
+      `**On Vercel** (most common for Vite): edit \`vercel.json\` at the project root. Add to the headers array:`,
+      `\`\`\`json`,
+      `{ "key": "X-Frame-Options", "value": "DENY" }`,
+      `\`\`\``,
+      `Plus harden CSP at the same time — \`X-Frame-Options\` is the legacy belt; \`Content-Security-Policy: frame-ancestors 'none'\` is the modern suspenders. Modern browsers prefer \`frame-ancestors\` (it supports multi-origin allowlists; XFO doesn't), but XFO covers very old clients. Set BOTH:`,
+      `\`\`\`json`,
+      `"headers": [{`,
+      `  "source": "/(.*)",`,
+      `  "headers": [`,
+      `    { "key": "X-Frame-Options", "value": "DENY" },`,
+      `    { "key": "Content-Security-Policy", "value": "default-src 'self'; frame-ancestors 'none'; ..." }`,
+      `  ]`,
+      `}]`,
+      `\`\`\``,
+      ``,
+      `**If you DO need to embed your site as an iframe somewhere (e.g. a partner dashboard, embed widget):**`,
+      `- Don't use \`X-Frame-Options: ALLOW-FROM\` — deprecated in all modern browsers.`,
+      `- Use \`X-Frame-Options: SAMEORIGIN\` (allows your own origin only) AND \`CSP: frame-ancestors 'self' https://partner.example\`.`,
+      `- The CSP \`frame-ancestors\` whitelist is the source of truth; XFO is just a fallback.`,
+      ``,
+      `**On Cloudflare Pages**: \`public/_headers\` file:`,
+      `\`\`\``,
+      `/*`,
+      `  X-Frame-Options: DENY`,
+      `  Content-Security-Policy: default-src 'self'; frame-ancestors 'none'; ...`,
+      `\`\`\``,
+      ``,
+      `**On Netlify**: same \`_headers\` file at site root, or a \`[[headers]]\` block in \`netlify.toml\`.`,
+      ``,
+      `**Verify after redeploy:**`,
+      `\`\`\`bash`,
+      `curl -sI ${ctx.finalUrl} | grep -iE 'x-frame-options|frame-ancestors'`,
+      `\`\`\``,
+      `Should print both \`X-Frame-Options: DENY\` AND \`Content-Security-Policy: ... frame-ancestors 'none' ...\`. If only CSP returns and not XFO — most browsers are fine, but the scanner expects both.`,
+      ``,
+      `**Why this attack matters:** without these, an attacker can put your site in a \`<iframe>\` on attacker.com, overlay invisible buttons (CSS opacity 0.001), and trick logged-in users into clicking "Delete account" / "Transfer funds" — the request goes from THEIR session, not the attacker's. This is clickjacking.`,
+    ].join('\n')
+  },
+
+  // ─── Meta / observability ───────────────────────────────────────────────
+  'stage2-console-errors': (finding, ctx) => {
+    return [
+      `**Open the live console + read each error.** The Vguard scanner already filtered out known-harmless noise (Permissions-Policy denials, TrustedHTML/TrustedScript Issues panel notices, Cloudflare Turnstile iframe internals, navigation timeouts from the scanner's own worker). What's left in the evidence above is something OUR page is doing.`,
+      ``,
+      `**Triage workflow (do this in order):**`,
+      ``,
+      `**1. Reproduce locally.** Open ${ctx.finalUrl} in Chrome with DevTools console open. Reproduce each error from the Evidence block. If it doesn't repro locally, check whether the error mentions a path/file in your bundle vs a third-party (CDN, analytics, embed). Third-party = file in step 3.`,
+      ``,
+      `**2. Categorize each error:**`,
+      `   - **Network 4xx/5xx** — \`Failed to load resource: 4xx\` for a path under your origin. Find which fetch / image / script triggered it (\`git grep\` the path). Either remove the broken reference or fix the endpoint. 401/403 from analytics is usually fine — your ad-blocker; user-side noise.`,
+      `   - **CSP violation** — your CSP blocks something (good!) but the BLOCKED thing is intentional. Add the source to the right CSP directive (script-src / connect-src / style-src). Avoid \`'unsafe-inline'\` / \`'unsafe-eval'\` — externalize the inline blob into a separate file or use a nonce.`,
+      `   - **CSP violation referencing a nonce you never set** — comes from a third-party iframe (Stripe / Turnstile / embedded auth). Page-level CSP doesn't apply. Suppress with the regex above OR ignore.`,
+      `   - **Uncaught TypeError / ReferenceError** — code bug. \`git grep\` the function/property name; fix or wrap in try/catch (only if the failure is genuinely recoverable — silent swallowing is worse than the error).`,
+      `   - **Hydration mismatch (React only)** — server output ≠ client output. Usually \`Date.now()\`, \`Math.random()\`, or \`window\` access during render. Move into \`useEffect\`.`,
+      `   - **Deprecation warnings** — yellow not red, but track them anyway: pin the dep version, schedule the upgrade.`,
+      ``,
+      `**3. After fixing, re-scan.** The scanner only flags this finding when ≥3 meaningful console errors fire. Get to ≤2 and the finding goes away.`,
+      ``,
+      `**4. If a category is unfixable** (e.g. a CDN you don't control), document it in the codebase: a comment near the relevant config explaining WHY this error is accepted. The next scan + reviewer can read it without re-investigating.`,
+      ``,
+      `**Why console errors matter for security:** stack traces leak file paths, internal API URLs, environment names ("preview-deploy.vercel.app"), auth misconfig hints. Even when no single error is exploitable, the aggregate gives an attacker a free recon. A clean console is a security signal — and a UX signal: errors slow down the JS engine.`,
+      ``,
+      `**The 4 errors in this scan (after filtering):**`,
+      finding.evidence.split('\n---\n').slice(0, 6).map((e, i) => `  ${i + 1}. \`${e.split('\n')[0].slice(0, 120)}\``).join('\n'),
+    ].join('\n')
+  },
+
   'dns-no-dnssec': (_finding, ctx) => {
     const d = ctx.baseDomain ?? '<your-domain>'
     return [
