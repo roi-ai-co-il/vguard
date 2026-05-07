@@ -87,6 +87,17 @@ input:focus-visible {
   }
 }
 
+/* ScannerCardStream keyframes — invoked inline by the component */
+@keyframes vgGlitch {
+  0%, 16%, 50%, 100% { opacity: 1; }
+  15%, 99% { opacity: 0.9; }
+  49% { opacity: 0.8; }
+}
+@keyframes vgScanPulse {
+  0% { opacity: 0.7; transform: translateX(-50%) scaleY(1); }
+  100% { opacity: 1; transform: translateX(-50%) scaleY(1.03); }
+}
+
 /* Subtle ambient grid texture on the background — adds depth without noise */
 .bg-grid {
   background-image:

@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 250" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1a1610"/>
+      <stop offset="1" stop-color="#2e2615"/>
+    </linearGradient>
+  </defs>
+  <rect width="400" height="250" fill="url(#g)"/>
+  <rect width="400" height="34" fill="#100c08"/>
+  <circle cx="14" cy="17" r="4" fill="#ff5f56"/>
+  <circle cx="28" cy="17" r="4" fill="#ffbd2e"/>
+  <circle cx="42" cy="17" r="4" fill="#27c93f"/>
+  <rect x="70" y="9" width="240" height="16" rx="6" fill="#221a10"/>
+  <text x="80" y="20" font-family="ui-monospace, monospace" font-size="10" fill="#fbbf24">https://my-app.bolt.new</text>
+  <text x="20" y="80" font-family="Inter, sans-serif" font-size="22" font-weight="700" fill="#fff5d8">Bolt deploy</text>
+  <text x="20" y="105" font-family="ui-monospace, monospace" font-size="11" fill="#a8895a">/* /api/users.ts */</text>
+  <text x="20" y="135" font-family="ui-monospace, monospace" font-size="10" fill="#d4b87a">GET /admin/ → 200 OK ← exposed</text>
+  <text x="20" y="155" font-family="ui-monospace, monospace" font-size="10" fill="#7a6238">.git/HEAD → 200, .env → 200</text>
+  <text x="20" y="175" font-family="ui-monospace, monospace" font-size="10" fill="#7a6238">// CSP header missing ← P1</text>
+  <rect x="20" y="200" width="60" height="20" rx="4" fill="#fbbf24" fill-opacity="0.15" stroke="#fbbf24" stroke-width="1"/>
+  <text x="50" y="214" text-anchor="middle" font-family="ui-monospace, monospace" font-size="10" fill="#fbbf24">BOLT</text>
+</svg>

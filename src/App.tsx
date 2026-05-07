@@ -12,7 +12,7 @@ import { ScanForm } from './components/ScanForm'
 import ContactSection from './components/ContactSection'
 import { VGuardsLogo } from '@/components/ui/vguards-logo'
 import { TypingEffect } from '@/components/ui/typing-effect'
-import { InteractiveGlobe } from '@/components/ui/interactive-globe'
+import { ScannerCardStream } from '@/components/ui/scanner-card-stream'
 import { BentoGrid, type BentoCardProps } from '@/components/ui/bento'
 import { CpuArchitecture } from '@/components/ui/cpu-architecture'
 
@@ -291,13 +291,13 @@ export default function App() {
             >
               <div className="inline-flex items-center gap-2 font-mono text-[10px] sm:text-xs text-(--color-accent) mb-4 tracking-widest uppercase px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full bg-(--color-accent-muted) border border-(--color-accent-border)">
                 <Activity size={12} aria-hidden="true" />
-                Live · scanning the world
+                Live · how we scan
               </div>
               <h2 className="text-[1.5rem] sm:text-3xl font-semibold tracking-tight leading-[1.15] text-balance">
-                Right now, somewhere on the planet, a vibe-coded app just leaked a secret.
+                Watch your bundle dissolve into the patterns we read.
               </h2>
               <p className="mt-3 text-(--color-fg-muted) text-[14px] sm:text-base leading-relaxed">
-                Drag the globe. Each pulse is a region where developers ship Cursor / Lovable / Bolt apps without a security review. We help them find the leaks before attackers do.
+                Drag the cards. Each one is a vibe-coded app — Cursor, Lovable, Bolt, Replit, v0. As the scanner passes, the polished UI gives way to the bytes underneath: secrets, RLS leaks, exposed paths, missing headers.
               </p>
 
               <ul className="mt-6 space-y-2.5">
@@ -368,14 +368,14 @@ export default function App() {
             </motion.div>
 
             <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
+              initial={{ opacity: 0, scale: 0.97 }}
               whileInView={{ opacity: 1, scale: 1 }}
               viewport={{ once: true, amount: 'some' }}
               transition={{ duration: 0.6 }}
-              className="lg:col-span-7 flex items-center justify-center"
+              className="lg:col-span-7"
             >
-              <div className="w-full max-w-[320px] sm:max-w-[520px] aspect-square">
-                <InteractiveGlobe size={520} className="!w-full !h-full" />
+              <div className="w-full rounded-xl overflow-hidden border border-(--color-border) bg-(--color-surface)">
+                <ScannerCardStream height={250} />
               </div>
             </motion.div>
           </div>
