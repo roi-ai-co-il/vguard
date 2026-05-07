@@ -1,7 +1,84 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { Turnstile, type TurnstileInstance } from '@marsidev/react-turnstile'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY as string | undefined
+const TURNSTILE_SITE_KEY =
+  (import.meta.env.VITE_TURNSTILE_SITE_KEY as string | undefined) ||
+  '0x4AAAAAAC_BzqF_UH-VXX5R'
+
+declare global {
+  interface Window {
+    turnstile?: {
+      render: (
+        el: HTMLElement | string,
+        opts: {
+          sitekey: string
+          theme?: 'light' | 'dark' | 'auto'
+          callback?: (token: string) => void
+          'error-callback'?: () => void
+          'expired-callback'?: () => void
+        },
+      ) => string | null
+      remove: (id: string) => void
+      reset: (id?: string) => void
+    }
+  }
+}
+
+function TurnstileBox({
+  onToken,
+  resetSignal,
+}: {
+  onToken: (token: string) => void
+  resetSignal: number
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const widgetIdRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    let attempt = 0
+    const tryRender = () => {
+      if (cancelled) return
+      if (!containerRef.current) return
+      if (!window.turnstile) {
+        if (attempt++ < 50) setTimeout(tryRender, 200)
+        return
+      }
+      if (widgetIdRef.current) return
+      const id = window.turnstile.render(containerRef.current, {
+        sitekey: TURNSTILE_SITE_KEY,
+        theme: 'dark',
+        callback: (token) => onToken(token),
+        'error-callback': () => onToken(''),
+        'expired-callback': () => onToken(''),
+      })
+      if (id) widgetIdRef.current = id
+    }
+    tryRender()
+    return () => {
+      cancelled = true
+      if (widgetIdRef.current && window.turnstile) {
+        try {
+          window.turnstile.remove(widgetIdRef.current)
+        } catch {
+          /* ignore */
+        }
+        widgetIdRef.current = null
+      }
+    }
+  }, [onToken])
+
+  useEffect(() => {
+    if (resetSignal > 0 && widgetIdRef.current && window.turnstile) {
+      try {
+        window.turnstile.reset(widgetIdRef.current)
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [resetSignal])
+
+  return <div ref={containerRef} />
+}
 
 interface AuditRow {
   id: number
@@ -71,7 +148,11 @@ export default function AdminLogs() {
   const [loading, setLoading] = useState(false)
   const [authError, setAuthError] = useState<string>('')
   const [turnstileToken, setTurnstileToken] = useState<string>('')
-  const turnstileRef = useRef<TurnstileInstance | null>(null)
+  const [turnstileResetSignal, setTurnstileResetSignal] = useState<number>(0)
+  const handleTurnstileToken = useCallback((token: string) => {
+    setTurnstileToken(token)
+    if (token) setAuthError('')
+  }, [])
 
   const queryString = useMemo(() => {
     const p = new URLSearchParams()
@@ -100,7 +181,7 @@ export default function AdminLogs() {
         setSubmittedSecret('')
         // Turnstile tokens are single-use; reset so the user can retry.
         setTurnstileToken('')
-        turnstileRef.current?.reset()
+        setTurnstileResetSignal((n) => n + 1)
         return
       }
       if (r.status === 429) {
@@ -163,21 +244,9 @@ export default function AdminLogs() {
             name="vg-admin-token"
             className="w-full bg-zinc-950 border border-zinc-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-zinc-500"
           />
-          {TURNSTILE_SITE_KEY && (
-            <div className="flex justify-center">
-              <Turnstile
-                ref={turnstileRef}
-                siteKey={TURNSTILE_SITE_KEY}
-                onSuccess={(token) => {
-                  setTurnstileToken(token)
-                  setAuthError('')
-                }}
-                onExpire={() => setTurnstileToken('')}
-                onError={() => setTurnstileToken('')}
-                options={{ theme: 'dark' }}
-              />
-            </div>
-          )}
+          <div className="flex justify-center">
+            <TurnstileBox onToken={handleTurnstileToken} resetSignal={turnstileResetSignal} />
+          </div>
           {authError && <p className="text-sm text-red-400">{authError}</p>}
           <button
             type="submit"
