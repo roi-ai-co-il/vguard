@@ -182,26 +182,71 @@ export async function sendVerificationFailure(
     `Need help? Reply to this email or contact infovguards@gmail.com.\n\n` +
     `— V-Guards`
 
+  const fixHtmlList = fixSteps
+    .map((s) => {
+      const trimmed = s.trim()
+      if (trimmed === '') return ''
+      // Indent lines starting with a digit-and-dot OR with a unicode bullet — preserve as bullets
+      if (/^[•◦●]/.test(trimmed)) return `<li style="margin:6px 0;color:#444">${escapeHtml(trimmed.replace(/^[•◦●]\s*/, ''))}</li>`
+      if (/^\d+\./.test(trimmed)) return `<p style="margin:14px 0 6px;font-weight:600;color:#111;font-size:14px">${escapeHtml(trimmed)}</p>`
+      return `<p style="margin:6px 0;color:#444;font-size:13px">${escapeHtml(trimmed)}</p>`
+    })
+    .join('')
+
   const html = `
-<div style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#111;max-width:600px;line-height:1.5">
-  <div style="background:#09090b;color:#ff6b6b;padding:18px 24px;border-radius:8px 8px 0 0;font-family:ui-monospace,SF Mono,Consolas,monospace;display:flex;align-items:center;gap:10px">
-    <img src="https://v-guards.com/logo-200.png" alt="V-Guards" width="28" height="28" style="display:inline-block;vertical-align:middle;margin-right:8px;border-radius:6px" />
-    <strong style="vertical-align:middle">V-Guards</strong>
-    <span style="vertical-align:middle"> · verification failed ⚠</span>
-  </div>
-  <div style="border:1px solid #eee;border-top:none;padding:24px;border-radius:0 0 8px 8px">
-    <p style="margin:0 0 16px;font-size:16px"><strong>${escapeHtml(domain)}</strong> couldn't be verified.</p>
-    <table style="border-collapse:collapse;font-size:14px;margin-bottom:20px">
-      <tr><td style="padding:4px 16px 4px 0;color:#666">Method</td><td>${escapeHtml(methodLabel)}</td></tr>
-      <tr><td style="padding:4px 16px 4px 0;color:#666">Reason</td><td style="font-family:ui-monospace,monospace;font-size:13px;color:#cc0000">${escapeHtml(reason)}</td></tr>
-      <tr><td style="padding:4px 16px 4px 0;color:#666">Time</td><td>${new Date().toISOString()}</td></tr>
+<div style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#111;max-width:600px;line-height:1.5;margin:0 auto">
+  <!-- Header -->
+  <div style="background:#09090b;color:#ff6b6b;padding:20px 24px;border-radius:10px 10px 0 0;font-family:ui-monospace,SF Mono,Consolas,monospace">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%">
+      <tr>
+        <td style="vertical-align:middle;width:40px"><img src="https://v-guards.com/logo-200.png" alt="V-Guards" width="32" height="32" style="display:block;border-radius:7px" /></td>
+        <td style="vertical-align:middle;padding-left:12px">
+          <div style="font-size:15px"><strong style="color:#fff">V-Guards</strong> <span style="color:#888">·</span> <span style="color:#ff6b6b">verification failed ⚠</span></div>
+        </td>
+      </tr>
     </table>
-    <h3 style="margin:0 0 8px;font-size:14px;color:#222">How to fix</h3>
-    <pre style="background:#f6f8fa;border:1px solid #e1e4e8;border-radius:6px;padding:12px;font-size:12px;line-height:1.45;overflow-x:auto;white-space:pre-wrap">${escapeHtml(fixSteps.join('\n'))}</pre>
-    <p style="margin:20px 0 0">
-      <a href="${retryLink}" style="display:inline-block;background:#22d3ee;color:#09090b;text-decoration:none;padding:10px 20px;border-radius:6px;font-weight:600">Retry verification →</a>
-    </p>
-    <p style="margin:24px 0 0;color:#888;font-size:12px">Need help? Reply to this email or contact <a href="mailto:infovguards@gmail.com" style="color:#06b6d4">infovguards@gmail.com</a>.</p>
+  </div>
+
+  <div style="border:1px solid #e5e7eb;border-top:none;padding:0;border-radius:0 0 10px 10px">
+    <!-- Hero summary -->
+    <div style="padding:24px 24px 8px">
+      <p style="margin:0 0 4px;font-size:16px;color:#111"><strong>${escapeHtml(domain)}</strong> couldn't be verified.</p>
+      <p style="margin:0;color:#666;font-size:13px">Don't worry — the fix is below, copy-paste ready.</p>
+    </div>
+
+    <!-- Method block -->
+    <div style="padding:14px 24px;border-top:1px solid #f3f4f6">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:#9ca3af;font-weight:600;margin-bottom:4px">Method</div>
+      <div style="font-size:14px;color:#111">${escapeHtml(methodLabel)}</div>
+    </div>
+
+    <!-- Reason block -->
+    <div style="padding:14px 24px;border-top:1px solid #f3f4f6;background:#fef2f2">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:#dc2626;font-weight:600;margin-bottom:6px">Reason</div>
+      <div style="font-size:13px;color:#7f1d1d;line-height:1.55;font-family:ui-monospace,SF Mono,Consolas,monospace;word-break:break-word">${escapeHtml(reason)}</div>
+    </div>
+
+    <!-- Time block -->
+    <div style="padding:14px 24px;border-top:1px solid #f3f4f6">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:#9ca3af;font-weight:600;margin-bottom:4px">Time</div>
+      <div style="font-size:13px;color:#444;font-family:ui-monospace,SF Mono,Consolas,monospace">${new Date().toISOString()}</div>
+    </div>
+
+    <!-- How to fix block -->
+    <div style="padding:20px 24px;border-top:1px solid #f3f4f6">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:#06b6d4;font-weight:600;margin-bottom:10px">How to fix</div>
+      <div>${fixHtmlList.replace(/(<li[^>]*>.*?<\/li>(\s*<li[^>]*>.*?<\/li>)*)/g, '<ul style="margin:6px 0 6px 22px;padding:0">$1</ul>')}</div>
+    </div>
+
+    <!-- CTA -->
+    <div style="padding:0 24px 24px">
+      <a href="${retryLink}" style="display:inline-block;background:#22d3ee;color:#09090b;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:700;font-size:14px">Retry verification →</a>
+    </div>
+
+    <!-- Footer -->
+    <div style="padding:16px 24px;border-top:1px solid #f3f4f6;background:#fafafa;border-radius:0 0 10px 10px">
+      <p style="margin:0;color:#6b7280;font-size:12px">Need help? Reply to this email or contact <a href="mailto:infovguards@gmail.com" style="color:#06b6d4;text-decoration:none">infovguards@gmail.com</a>.</p>
+    </div>
   </div>
 </div>`.trim()
 
