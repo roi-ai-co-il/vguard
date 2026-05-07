@@ -10,6 +10,7 @@ import {
   Activity,
 } from 'lucide-react'
 import { ScanForm } from './components/ScanForm'
+import ContactSection from './components/ContactSection'
 import { TypingEffect } from '@/components/ui/typing-effect'
 import { InteractiveGlobe } from '@/components/ui/interactive-globe'
 import { BentoGrid, type BentoCardProps } from '@/components/ui/bento'
@@ -489,6 +490,8 @@ export default function App() {
             ))}
           </motion.div>
         </section>
+
+        <ContactSection />
       </main>
 
       <footer className="relative border-t border-(--color-border) mt-auto z-10">
