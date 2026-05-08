@@ -8,6 +8,7 @@ import { getDomain } from 'tldts'
 import type { Finding, ScanResponse, Severity } from '../../src/lib/scanner-types.js'
 import { enrichFindings } from './fix-prompt-composer.js'
 import { aggregateBand, applyRisk, classifyRouteContext, computeAggregateRisk } from './risk-scorer.js'
+import { applyEngine, defaultContext } from './scoring-engine.js'
 import { buildAttackSurface, discoverSubdomainsFromCT } from './attack-surface.js'
 import { analyzeBundles as analyzeBundlesAst } from './js-ast.js'
 
@@ -371,6 +372,12 @@ function shortPath(u: string): string {
   }
 }
 
+/**
+ * Legacy static scorer — kept only as a sanity floor / debug compare.
+ * The live vibe score now comes from `scoring-engine.applyEngine`, which
+ * does dynamic trait-based classification + diminishing returns. See
+ * `api/_lib/scoring-engine.ts` for the design doc.
+ */
 function scoreFromTotals(t: { critical: number; warn: number; info: number }): number {
   return Math.max(0, 100 - t.critical * 20 - t.warn * 7 - t.info * 2)
 }
@@ -3576,7 +3583,10 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
     info: findings.filter((f) => f.severity === 'info').length,
     ok: findings.filter((f) => f.severity === 'ok').length,
   }
-  const vibeScore = scoreFromTotals(totals)
+  // Legacy static score kept as a debug fallback only — replaced below by
+  // the dynamic engine. Don't read this for the live response.
+  const _legacyVibeScore = scoreFromTotals(totals)
+  void _legacyVibeScore
 
   const sevOrder: Record<Severity, number> = { critical: 0, warn: 1, info: 2, ok: 3 }
   findings.sort((a, b) => sevOrder[a.severity] - sevOrder[b.severity])
@@ -3590,7 +3600,26 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
   const fwAndVersion = detectFrameworkAndVersion(html, bundleTextAll)
   const detectedFrameworkVersion = fwAndVersion?.version ?? null
   const detectedReactVersion = detectReactVersion(bundleTextAll)
-  const scored = applyRisk(enriched, routeContext)
+  // Risk scoring — first pass with the legacy CVSS-style scorer for the
+  // back-compat `riskScore`/`riskBand` fields that downstream consumers rely
+  // on, then the new dynamic engine for the *live* vibeScore + risk class +
+  // confidence + uiGroup. The engine's output overwrites `riskScore`/`riskBand`
+  // so the per-finding numbers stay consistent with what the engine penalised.
+  const cspHasUnsafe = /content-security-policy/i.test(
+    Array.from(mainResp.headers.keys()).join(','),
+  )
+    ? /'unsafe-(?:inline|eval)'/i.test(mainResp.headers.get('content-security-policy') || '')
+    : false
+  const engineCtx = defaultContext({
+    pathname: new URL(finalUrl).pathname,
+    isHttps: finalUrl.startsWith('https://'),
+    cspHasUnsafe,
+    stage: 1,
+  })
+  const legacyScored = applyRisk(enriched, routeContext)
+  const engineOut = applyEngine(legacyScored, engineCtx)
+  const scored = engineOut.findings
+  const dynamicVibeScore = engineOut.vibeScore
   const aggregateRisk = computeAggregateRisk(scored)
 
   const subdomains = await subdomainsP
@@ -3661,7 +3690,7 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
     url: rawUrl,
     scannedAt: new Date().toISOString(),
     durationMs: Date.now() - t0,
-    vibeScore,
+    vibeScore: dynamicVibeScore,
     aggregateRisk,
     aggregateRiskBand: aggregateBand(aggregateRisk),
     totals,

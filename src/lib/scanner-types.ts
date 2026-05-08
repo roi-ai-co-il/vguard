@@ -45,6 +45,24 @@ export interface Finding {
    * `severe` (8–10). Derived from `riskScore` so the UI doesn't recompute.
    */
   riskBand?: 'low' | 'medium' | 'high' | 'severe'
+  /**
+   * Dynamic-engine risk class (2026-05-08+). Five buckets, derived from
+   * traits (exploitability, auth-impact, runtime-confirmed, etc.) — not
+   * from a static per-id table.
+   */
+  riskClass?:
+    | 'critical-exploit'
+    | 'high-impact-misconfig'
+    | 'medium-weakness'
+    | 'low-hardening'
+    | 'informational'
+  /** Confidence the finding is real and actionable. */
+  confidence?: 'confirmed' | 'likely' | 'informational'
+  /**
+   * Coarse UI section for grouped report rendering:
+   *   security-risks | hardening-improvements | informational.
+   */
+  uiGroup?: 'security-risks' | 'hardening-improvements' | 'informational'
 }
 
 /**
