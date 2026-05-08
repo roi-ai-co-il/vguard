@@ -63,7 +63,7 @@ const SCAN_CARDS: BentoCardProps[] = [
     eyebrow: 'P0 · Secrets & API keys',
     title: 'Find Anthropic, OpenAI, Supabase keys baked into your bundle',
     description:
-      'We crawl every chunk and source map for the patterns Cursor / Claude / Lovable accidentally inline. Each finding ships with a paste-ready prompt to move the call server-side.',
+      'JS bundles + source maps scanned for inlined keys. Each hit ships with a fix prompt.',
     graphic: (
       <div className="absolute inset-0 p-6 font-mono text-[11px] leading-relaxed">
         <div className="text-(--color-fg-dim)">$ vguard scan https://your-app.com</div>
@@ -86,7 +86,7 @@ const SCAN_CARDS: BentoCardProps[] = [
     eyebrow: 'P0 · Auth & sessions',
     title: 'Catch the Supabase RLS policies that look safe but aren’t',
     description:
-      '`auth.uid() IS NOT NULL`, `share_token IS NOT NULL`, lone JWT checks, and the other patterns that leak data when signup is open by default.',
+      'Catches the RLS patterns that leak rows when signup is open by default.',
     graphic: (
       <div className="absolute inset-0 p-6 font-mono text-[11px] leading-relaxed">
         <div className="text-(--color-fg-dim)">-- public.documents</div>
@@ -111,7 +111,7 @@ const SCAN_CARDS: BentoCardProps[] = [
     eyebrow: 'P1 · AI surfaces',
     title: 'Test your AI endpoints for prompt injection',
     description:
-      'Chat endpoints that accept user-controlled system prompts, agents with over-broad tool scopes, RAG context leakage.',
+      'Probes chat endpoints, agent tool scopes, and RAG context leaks.',
     graphic: (
       <div className="absolute inset-0 p-5 font-mono text-[10px] leading-relaxed">
         <div className="text-(--color-fg-dim)">POST /api/[your-llm]</div>
@@ -137,7 +137,7 @@ const SCAN_CARDS: BentoCardProps[] = [
     eyebrow: 'P0 · Exposed paths',
     title: 'Find what shouldn’t be public',
     description:
-      '.env, .git, source maps, .DS_Store, and the Vercel preview URLs your team forgot to lock down.',
+      '.env, .git, source maps, preview URLs your team forgot to lock down.',
     graphic: (
       <div className="absolute inset-0 p-5 font-mono text-[10px] leading-relaxed">
         <div className="text-(--color-fg-muted)">/</div>
@@ -156,7 +156,7 @@ const SCAN_CARDS: BentoCardProps[] = [
     eyebrow: 'P1 · Headers & CVEs',
     title: 'CSP, HSTS, CORS, and the rest',
     description:
-      'Every header that should be set, with the exact `vercel.json` snippet to fix it. CVE detection across your dependency tree.',
+      'Missing headers + dep CVEs, each with the exact config snippet to fix.',
     graphic: (
       <div className="absolute inset-0 p-5 font-mono text-[10px] leading-relaxed">
         <div className="text-(--color-fg-dim)">$ curl -I https://your-app.com</div>

@@ -75,6 +75,26 @@ input:focus-visible {
   outline-offset: 2px;
 }
 
+/* iOS Safari auto-zooms inputs whose font-size < 16px and never zooms
+   back out — the page stays scaled up and the user sees a "cut-off"
+   site after tapping the URL field. Force minimum 16px on all input
+   types + textareas + selects so Safari skips the zoom entirely.
+   (Tailwind class-set values still win when more specific.) */
+@media screen and (max-width: 768px) {
+  input[type="text"],
+  input[type="url"],
+  input[type="email"],
+  input[type="search"],
+  input[type="password"],
+  input[type="number"],
+  input[type="tel"],
+  input:not([type]),
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
+
 /* ui-ux-pro: respect prefers-reduced-motion */
 @media (prefers-reduced-motion: reduce) {
   *,
