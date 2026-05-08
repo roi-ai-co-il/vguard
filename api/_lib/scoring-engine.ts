@@ -22,12 +22,14 @@
  *    source maps, robots.txt, COOP/COEP/CORP/Permissions-Policy — is
  *    `hardening` or `informational`.
  *
- *  - Hard score caps when no verified impact:
- *      vibeScore floor = 75
- *      aggregateRiskBand cannot be `severe` or `high` (capped at `medium`)
+ *  - Impact-aware caps when no verified impact (NO artificial score floor —
+ *    realism preserved; the caps alone bound the worst case to ~85):
+ *      aggregateRiskBand capped at `low` (never `medium`/`high`/`severe`)
  *      Hardening-only total penalty: <= 10 pts
  *      Informational-only total penalty: <= 1 pt
- *      Cookie/header/CSP-only total penalty: <= 15 pts
+ *      Cookie/header/CSP-only combined total penalty: <= 15 pts
+ *    A site with many hardening gaps still legitimately loses points down to
+ *    ~85 — we don't fake a perfect score.
  *
  *  - Detectors are not removed. Every detection still fires. We only change
  *    classification, severity, risk class, score impact, caps, and UI grouping.
@@ -522,12 +524,11 @@ export function runScoringEngine(findings: Finding[], ctx: ScoringContext): Engi
   }
 
   const totalPenaltyRaw = criticalSum + highSum + (hasVerifiedImpact ? mediumSum + hardeningSum + informationalSum : bcSum)
-  let vibeScore = Math.max(0, Math.min(100, Math.round(100 - totalPenaltyRaw)))
-
-  // FLOOR: when there is no verified impact, score cannot go below 75.
-  if (!hasVerifiedImpact) {
-    vibeScore = Math.max(vibeScore, 75)
-  }
+  // No artificial floor. The per-class caps above already bound the worst-case
+  // no-verified-impact penalty to <=15, which lands the score around 85. A
+  // site with many hardening gaps legitimately loses points; we don't fake a
+  // perfect score. The only reason a score drops below ~85 is verified impact.
+  const vibeScore = Math.max(0, Math.min(100, Math.round(100 - totalPenaltyRaw)))
 
   const groupCounts: Record<RiskClass, number> = {
     'critical-exploit': byClass['critical-exploit'].length,
@@ -583,8 +584,12 @@ export function applyEngine(findings: Finding[], ctx: ScoringContext): ApplyResu
   else if (inverted >= 15) aggregateBand = 'medium'
   else aggregateBand = 'low'
 
-  if (!hasVerifiedImpact && (aggregateBand === 'severe' || aggregateBand === 'high')) {
-    aggregateBand = 'medium'
+  // Without verified impact, the band is forced to `low`. The caps above
+  // bound the inverted score to ~15 (which is medium territory by raw
+  // numbers), but per spec a hardening-only profile must not look like an
+  // active risk to the user — so the band is clamped, not the score.
+  if (!hasVerifiedImpact) {
+    aggregateBand = 'low'
   }
 
   return { vibeScore, findings: enriched, groupCounts, hasVerifiedImpact, aggregateBand }

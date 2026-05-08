@@ -556,19 +556,21 @@ If none of these is true, the finding cannot be `critical-exploit` — regardles
 - Source maps, robots.txt, sitemap.xml, swagger.json, openapi.json, /.well-known/*, /status -> `informational`.
 - COOP / COEP / CORP / Permissions-Policy / Referrer-Policy missing -> `low-hardening`.
 
-### 5.9 Score caps (no verified impact = no Critical band)
+### 5.9 Impact-aware caps (no verified impact = no Critical band)
 
-When `hasVerifiedImpact === false`, these caps apply:
+When `hasVerifiedImpact === false`, these caps apply. Note: **there is no artificial vibeScore floor.** The per-class caps alone bound the worst-case penalty to ~15 (so the natural floor is ~85), and a site with many hardening gaps legitimately loses points down toward that — we don't fake a perfect score.
 
 | Cap | Value |
 |---|---|
-| `vibeScore` floor | 75 |
-| `aggregateBand` ceiling | `medium` (never `high` or `severe`) |
+| `aggregateBand` ceiling | `low` (never `medium` / `high` / `severe`) |
 | Hardening-only total penalty | <= 10 pts |
 | Informational-only total penalty | <= 1 pt |
-| Cookie/header/CSP-only total penalty | <= 15 pts |
+| Cookie/header/CSP-only combined penalty | <= 15 pts |
+| Effective natural floor (worst case, no verified impact) | ~85 |
 
-This is what makes apple.com / amazon.com profile-style scans return scores in the 80-95 range despite a fistful of CSP misconfigurations and missing modern headers — the only thing that breaks past the floor is a real, confirmed exploit.
+This is what makes apple.com / amazon.com profile-style scans return scores in the 85-95 range despite a fistful of CSP misconfigurations, missing modern headers, public 2xx APIs, and visible login pages. The only way the score breaks past ~85 is a verified exploit. The only way the band shows above `low` is a verified exploit.
+
+**The scanner distinguishes "could be improved" from "actively dangerous."** Passive frontend architecture patterns are not treated like confirmed exploits, and a confirmed exploit (one verified XSS, one usable secret, one expired cert) immediately lifts the caps and drives the score down honestly.
 
 ### 5.10 UI grouping (5-bucket model)
 

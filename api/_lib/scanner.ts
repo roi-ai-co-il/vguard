@@ -3621,10 +3621,10 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
   const scored = engineOut.findings
   const dynamicVibeScore = engineOut.vibeScore
   // Aggregate "risk number" still computed via legacy scorer for back-compat
-  // numeric field, but the *band* shown to the user comes from the engine
-  // (which clamps to <= medium when no verified impact exists).
-  const legacyAggregate = computeAggregateRisk(scored)
-  const aggregateRisk = engineOut.hasVerifiedImpact ? legacyAggregate : Math.min(legacyAggregate, 35)
+  // numeric field. The user-facing band comes from the engine (which clamps
+  // to `low` when no verified impact exists). We don't clamp the number — it
+  // stays honest for any consumer that wants the raw value.
+  const aggregateRisk = computeAggregateRisk(scored)
 
   const subdomains = await subdomainsP
   const attackSurface = buildAttackSurface({

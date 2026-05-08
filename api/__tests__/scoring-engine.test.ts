@@ -27,9 +27,8 @@ describe('strict critical gate — passive findings cannot be Critical alone', (
       baseCtx,
     )
     assert.notEqual(out.findings[0].riskClass, 'critical-exploit')
-    assert.ok(out.vibeScore >= 75, `vibeScore should stay >= 75, got ${out.vibeScore}`)
-    assert.notEqual(out.aggregateBand, 'severe')
-    assert.notEqual(out.aggregateBand, 'high')
+    assert.ok(out.vibeScore >= 85, `vibeScore should stay >= 85 (natural cap), got ${out.vibeScore}`)
+    assert.equal(out.aggregateBand, 'low')
   })
 
   it('Cookie missing Secure on non-auth cookie is NOT critical', () => {
@@ -39,7 +38,7 @@ describe('strict critical gate — passive findings cannot be Critical alone', (
       baseCtx,
     )
     assert.notEqual(out.findings[0].riskClass, 'critical-exploit')
-    assert.ok(out.vibeScore >= 75)
+    assert.ok(out.vibeScore >= 85)
   })
 
   it('DOM sink alone is informational/hardening only', () => {
@@ -49,7 +48,7 @@ describe('strict critical gate — passive findings cannot be Critical alone', (
       baseCtx,
     )
     assert.ok(['informational', 'low-hardening'].includes(out.findings[0].riskClass!))
-    assert.ok(out.vibeScore >= 75)
+    assert.ok(out.vibeScore >= 85)
   })
 
   it('Public 2xx API endpoint without sensitive content is informational', () => {
@@ -59,7 +58,7 @@ describe('strict critical gate — passive findings cannot be Critical alone', (
       baseCtx,
     )
     assert.equal(out.findings[0].riskClass, 'informational')
-    assert.ok(out.vibeScore >= 75)
+    assert.ok(out.vibeScore >= 85)
   })
 
   it('Frontend public client identifier (Firebase web SDK key) is informational', () => {
@@ -69,7 +68,7 @@ describe('strict critical gate — passive findings cannot be Critical alone', (
       baseCtx,
     )
     assert.equal(out.findings[0].riskClass, 'informational')
-    assert.ok(out.vibeScore >= 75)
+    assert.ok(out.vibeScore >= 85)
   })
 
   it('Visible admin login page is NOT critical', () => {
@@ -79,7 +78,7 @@ describe('strict critical gate — passive findings cannot be Critical alone', (
       baseCtx,
     )
     assert.equal(out.findings[0].riskClass, 'informational')
-    assert.ok(out.vibeScore >= 75)
+    assert.ok(out.vibeScore >= 85)
   })
 
   it('robots.txt / sitemap / openapi are informational', () => {
@@ -194,8 +193,7 @@ describe('score caps when no verified impact', () => {
     ]
     const out = applyEngine(findings, baseCtx)
     assert.ok(out.vibeScore >= 85, `expected vibeScore >= 85 with header/cookie-only mix, got ${out.vibeScore}`)
-    assert.notEqual(out.aggregateBand, 'severe')
-    assert.notEqual(out.aggregateBand, 'high')
+    assert.equal(out.aggregateBand, 'low')
   })
 
   it('No verified impact → aggregateBand never severe/high', () => {
@@ -203,8 +201,7 @@ describe('score caps when no verified impact', () => {
       f({ id: `headers-csp-weak-${i}`, severity: 'warn', category: 'headers' }),
     )
     const out = applyEngine(findings, baseCtx)
-    assert.notEqual(out.aggregateBand, 'severe')
-    assert.notEqual(out.aggregateBand, 'high')
+    assert.equal(out.aggregateBand, 'low')
   })
 })
 
@@ -244,9 +241,8 @@ describe('enterprise regression — apple.com / amazon.com profile must NOT scor
 
     const criticalCount = out.findings.filter((x) => x.riskClass === 'critical-exploit').length
     assert.equal(criticalCount, 0, `expected 0 critical, got ${criticalCount}`)
-    assert.ok(out.vibeScore >= 75, `expected vibeScore >= 75, got ${out.vibeScore}`)
-    assert.notEqual(out.aggregateBand, 'severe')
-    assert.notEqual(out.aggregateBand, 'high')
+    assert.ok(out.vibeScore >= 85, `expected vibeScore >= 85 (natural cap), got ${out.vibeScore}`)
+    assert.equal(out.aggregateBand, 'low')
     assert.equal(out.hasVerifiedImpact, false)
   })
 
@@ -276,9 +272,8 @@ describe('enterprise regression — apple.com / amazon.com profile must NOT scor
     const out = applyEngine(findings, baseCtx)
     const criticalCount = out.findings.filter((x) => x.riskClass === 'critical-exploit').length
     assert.equal(criticalCount, 0)
-    assert.ok(out.vibeScore >= 75, `expected vibeScore >= 75, got ${out.vibeScore}`)
-    assert.notEqual(out.aggregateBand, 'severe')
-    assert.notEqual(out.aggregateBand, 'high')
+    assert.ok(out.vibeScore >= 85, `expected vibeScore >= 85 (natural cap), got ${out.vibeScore}`)
+    assert.equal(out.aggregateBand, 'low')
   })
 
   it('amazon.com-like + ONE confirmed exploit → Critical surfaces, score drops below floor', () => {
