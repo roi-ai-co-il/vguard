@@ -284,13 +284,32 @@ export function extractTraits(finding: Finding, ctx: ScoringContext): FindingTra
   // in the `evidence` field. Otherwise legitimately bad scans land at 95.
   const detectorFlaggedCritical = finding.severity === 'critical'
 
+  // Only provider-specific secret detectors qualify as verifiedImpact.
+  // The AST-heuristic detector (`js-ast-hardcoded-creds`) finds
+  // "credential-shaped patterns" that include public app-store IDs,
+  // analytics tags, and media identifiers — too noisy to gate Critical on.
+  // Those still fire as findings; they just don't open the Critical class.
+  const isProviderSpecificSecret = ID(
+    id,
+    'secrets-anthropic',
+    'secrets-openai',
+    'secrets-stripe-secret',
+    'secrets-stripe-live',
+    'secrets-aws',
+    'secrets-google-api-key',
+    'secrets-github-pat',
+    'secrets-github-fine-grained',
+    'secrets-supabase-service-role',
+    'secrets-resend-api-key',
+    'secrets-slack-bot-token',
+  )
+
   const verifiedImpact =
     // Active probe with confirmed reflection / error / location follow
     activeProbeHit ||
-    // Server-side secret detected — trust the detector's severity. Public
-    // client identifiers (Firebase web SDK key, Stripe pk_*, supabase anon)
-    // are already excluded via knownPublicClientId.
-    (cat === 'secrets' && detectorFlaggedCritical && !knownPublicClientId) ||
+    // Server-side secret detected by a provider-specific regex (NOT the
+    // AST heuristic, which has too many false positives on public IDs).
+    (isProviderSpecificSecret && detectorFlaggedCritical && !knownPublicClientId) ||
     // .env / .git config / backup / aws creds / DB dump / firebase RTDB /
     // S3 ListBucket — when the detector escalated to critical it has
     // already validated the path returned a hit. 200-with-empty-body is
