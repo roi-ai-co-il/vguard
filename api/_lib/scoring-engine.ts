@@ -333,7 +333,23 @@ export function extractTraits(finding: Finding, ctx: ScoringContext): FindingTra
     // Subdomain takeover ready (NXDOMAIN target)
     ID(id, 'dns-subdomain-takeover-ready') ||
     // Mixed content with sensitive form action (POST creds over HTTP)
-    (cat === 'mixed-content' && (ID(id, 'mixed-content-form-credentials') || ID(id, 'mixed-content-form')))
+    (cat === 'mixed-content' && (ID(id, 'mixed-content-form-credentials') || ID(id, 'mixed-content-form'))) ||
+    // Vulnerable dependency with exploitable version evidence — the detector
+    // emits these only when the Server / X-Powered-By string matched a known
+    // CVE signature, OR an npm dep in a public bundle matched a CVE entry.
+    // Trust the detector when it commits to severity=critical.
+    (detectorFlaggedCritical && ID(id, 'deps-server-cve-', 'deps-npm-')) ||
+    // Dangerous CORS — `Access-Control-Allow-Origin: *` + `Allow-Credentials: true`
+    // is a spec violation that, when a server actually returns it, exposes
+    // any same-site cookies to any origin that loads a `<img>` / `fetch` from
+    // it. Detector emits severity=critical only when both headers are present
+    // on the same response — that's verified config.
+    (detectorFlaggedCritical && ID(id, 'cors-credentials-wildcard', 'cors-creds-wildcard')) ||
+    // Directory listing exposed (autoindex/directory listing) — observed at
+    // runtime by the path probe. Real attack surface (asset enumeration).
+    (detectorFlaggedCritical && ID(id, 'paths-directory-listing', 'paths-dir-listing')) ||
+    // Public write/delete confirmed (storage bucket public-write, etc.)
+    (detectorFlaggedCritical && ID(id, 'paths-supabase-storage-public-write', 'paths-s3-public-write'))
   void evidenceLooksSensitive // kept for future detectors; not used now
 
   return {
@@ -379,6 +395,17 @@ export function classifyRiskClass(
     traits.runtimeConfirmed &&
     (traits.exploitable || traits.sensitiveData || (traits.authImpact && finding.severity !== 'info'))
   ) {
+    return 'high-impact-misconfig'
+  }
+
+  // Auth/session cookies missing Secure/HttpOnly/SameSite are a direct session-theft
+  // surface — the detector observed the cookie name + missing flag from the
+  // Set-Cookie header itself, that IS observation. Per spec: "auth/session
+  // cookies missing Secure/HttpOnly = likely/needs-review". We elevate to
+  // high-impact so the score reflects real session compromise risk, while the
+  // confidence stays `likely` (no runtime exploit yet) — together they land
+  // the finding in `likely-risks` UI section.
+  if (finding.category === 'cookies' && traits.authCookie && finding.severity !== 'info') {
     return 'high-impact-misconfig'
   }
 
