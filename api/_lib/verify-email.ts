@@ -127,71 +127,133 @@ export async function sendVerificationFailure(
   const subject = `⚠ ${domain} verification failed — here's how to fix`
   const retryLink = 'https://v-guards.com/?url=' + encodeURIComponent(`https://${domain}/`)
 
-  // Per-method fix prompt — copy-paste actionable, not vague.
-  const fixSteps =
+  // Structured per-method fix guide. `kind: 'record'` blocks render as a
+  // copy-friendly code box; `kind: 'p'` is a paragraph; `kind: 'h'` is a
+  // section header with an emoji glyph.
+  type Block =
+    | { kind: 'p'; text: string }
+    | { kind: 'h'; emoji: string; text: string }
+    | { kind: 'record'; rows: Array<[string, string]> }
+    | { kind: 'cmd'; text: string }
+    | { kind: 'ul'; items: string[] }
+
+  const fixBlocks: Block[] =
     method === 'file'
       ? [
-          `Your verification method: file challenge.`,
-          `1. Create a file at this exact path on your site:`,
-          `   https://${domain}/.well-known/Vguard-verify.txt`,
-          `2. The file's contents must be EXACTLY this UUID (no whitespace, no line breaks, no extra text):`,
-          `   ${uuid}`,
-          `3. The file must return HTTP 200 with the UUID as the body. Verify with:`,
-          `   curl -s "https://${domain}/.well-known/Vguard-verify.txt"`,
-          `4. Common pitfalls:`,
-          `   • SPA routing returns index.html for unknown paths — add an explicit static rule for /.well-known/.`,
-          `   • Wrong line endings — make sure the file has no trailing \\n if your editor adds one.`,
-          `   • Wrong path case — Vguard-verify.txt is case-sensitive on Linux servers.`,
+          { kind: 'p', text: `We tried to fetch a verification file from your site but didn't find your code there. Don't worry — this is the most common method and it's a 1-minute fix.` },
+          { kind: 'h', emoji: '📌', text: 'Step 1 — Create a file with your code' },
+          { kind: 'p', text: `Create a plain-text file at this exact path on your site:` },
+          { kind: 'cmd', text: `https://${domain}/.well-known/Vguard-verify.txt` },
+          { kind: 'p', text: `The file's content must be EXACTLY this code, with no whitespace, line breaks, or extra characters:` },
+          { kind: 'cmd', text: uuid },
+          { kind: 'h', emoji: '✅', text: 'Step 2 — Confirm it\'s live' },
+          { kind: 'p', text: `Open the URL in your browser, or run this in a terminal:` },
+          { kind: 'cmd', text: `curl -s "https://${domain}/.well-known/Vguard-verify.txt"` },
+          { kind: 'p', text: `You should see your code returned. If you get HTML instead, your site is rewriting unknown paths to index.html — add an explicit static-file rule for /.well-known/ in your hosting config.` },
+          { kind: 'h', emoji: '🛟', text: 'Watch out for' },
+          { kind: 'ul', items: [
+            `Some editors add an invisible newline at end of file — make sure the file is exactly the code, nothing else.`,
+            `On Linux servers, file paths are case-sensitive: it's "Vguard-verify.txt" with a capital V.`,
+            `If your hosting platform requires a build step, redeploy after adding the file.`,
+          ] },
+          { kind: 'h', emoji: '🚀', text: 'Then click "Retry verification" below' },
         ]
       : method === 'dns'
         ? [
-            `Your verification method: DNS TXT record.`,
-            `1. Add this TXT record at your DNS provider:`,
-            `   Type:  TXT`,
-            `   Name:  _Vguard-verify.${domain}`,
-            `   Value: ${uuid}`,
-            `   TTL:   600`,
-            `2. Wait 30 seconds to 5 minutes for DNS propagation.`,
-            `3. Verify it's live with:`,
-            `   dig +short TXT _Vguard-verify.${domain}`,
-            `4. Common pitfalls:`,
-            `   • Some registrars auto-append the domain to the Name field — paste only "_Vguard-verify".`,
-            `   • Quotes around the value: most registrars want the bare UUID; some need the value in quotes. If propagation works for other TXT records, copy that style.`,
-            `   • Wildcard CAA at apex blocking the TXT — unrelated, but check if dig fails.`,
+            { kind: 'p', text: `We checked DNS for your verification code but didn't find it (or found a different one). Adding the right TXT record at your DNS provider takes about 2 minutes.` },
+            { kind: 'h', emoji: '📌', text: 'Step 1 — Add this TXT record at your DNS provider' },
+            { kind: 'record', rows: [
+              ['Type',  'TXT'],
+              ['Name',  `_Vguard-verify`],
+              ['Value', uuid],
+              ['TTL',   '600 (or your provider\'s default)'],
+            ] },
+            { kind: 'p', text: `Most providers have a "DNS" or "DNS Records" section in the dashboard for ${domain}. Use the prefix "_Vguard-verify" only — your provider auto-appends the rest of the domain.` },
+            { kind: 'h', emoji: '🌐', text: 'Where to do this (most common)' },
+            { kind: 'ul', items: [
+              `GoDaddy → dcc.godaddy.com → portfolio → ${domain} → DNS Records → Add → TXT`,
+              `Cloudflare → dash.cloudflare.com → ${domain} → DNS → Records → Add record → TXT`,
+              `Vercel DNS → vercel.com/dashboard → Domains → ${domain} → DNS → Add record`,
+              `Namecheap / IONOS / Google Domains — same pattern, look for "Add TXT record"`,
+            ] },
+            { kind: 'h', emoji: '⏱', text: 'Step 2 — Wait for DNS propagation' },
+            { kind: 'p', text: `Usually 30 seconds to 5 minutes. Confirm it's live by running:` },
+            { kind: 'cmd', text: `dig +short TXT _Vguard-verify.${domain}` },
+            { kind: 'p', text: `You should see your code returned in quotes. Or use a web tool: open https://www.whatsmydns.net/#TXT/_Vguard-verify.${domain} — it shows propagation across many regions.` },
+            { kind: 'h', emoji: '🛟', text: 'Watch out for' },
+            { kind: 'ul', items: [
+              `Don't paste the FULL "_Vguard-verify.${domain}" into the Name field — your provider adds the domain part automatically. Just "_Vguard-verify".`,
+              `Don't add quotes around the value yourself. The provider handles the quoting in the actual DNS response.`,
+              `If you already had a different verification code in DNS, you can either delete it and add this one, or click "Use this DNS code" in the V-Guards UI to adopt the existing one (faster — no propagation wait).`,
+            ] },
+            { kind: 'h', emoji: '🚀', text: 'Then click "Retry verification" below' },
           ]
         : [
-            `Your verification method: Vercel personal access token.`,
-            `1. Go to https://vercel.com/account/tokens — generate a new token with FULL ACCESS scope.`,
-            `2. Make sure you're signed in with the Vercel account that ACTUALLY owns ${domain}. If the domain is on a Vercel TEAM, the token must be created by a member of that team.`,
-            `3. Paste the fresh token into the Vguard verification form.`,
-            `4. Vguard will call /v9/projects/<id>/domains and look for ${domain} aliased to one of your projects.`,
-            `5. Common pitfalls:`,
-            `   • Token from the wrong account (personal vs team).`,
-            `   • Token expired or revoked — check the token list at vercel.com/account/tokens.`,
-            `   • ${domain} is not actually bound to a Vercel project — verify in the Vercel dashboard before retrying.`,
+            { kind: 'p', text: `Vercel didn't recognize the token, OR the token works but ${domain} isn't on the same Vercel account. Three things to check:` },
+            { kind: 'h', emoji: '📌', text: 'Step 1 — Generate a fresh token' },
+            { kind: 'ul', items: [
+              `Open https://vercel.com/account/tokens`,
+              `Click "Create" → name it "V-Guards verify"`,
+              `Scope: "Full Access" (we use it once and discard — never stored)`,
+              `Expiration: 1 day is fine`,
+              `Copy the token immediately (Vercel shows it once)`,
+            ] },
+            { kind: 'h', emoji: '🌐', text: 'Step 2 — Make sure the account owns the domain' },
+            { kind: 'p', text: `Open https://vercel.com/dashboard and find ${domain} under one of your projects' "Domains" tab. If you don't see it:` },
+            { kind: 'ul', items: [
+              `It might be on a different Vercel account (personal vs team) — switch accounts at top-left and check.`,
+              `It might be on Vercel but not yet bound to any project — bind it first under Settings → Domains.`,
+              `If ${domain} isn't on Vercel at all, use the file-challenge or DNS TXT method instead.`,
+            ] },
+            { kind: 'h', emoji: '🚀', text: 'Step 3 — Paste the fresh token and click Verify' },
+            { kind: 'p', text: `V-Guards will call Vercel's /v9/projects API once with your token, look for ${domain} as a project alias, then discard the token. We never log it, never store it.` },
           ]
 
+  const blockToText = (b: Block): string => {
+    if (b.kind === 'p') return b.text
+    if (b.kind === 'h') return `\n${b.emoji} ${b.text}`
+    if (b.kind === 'cmd') return `    ${b.text}`
+    if (b.kind === 'ul') return b.items.map((i) => `  • ${i}`).join('\n')
+    if (b.kind === 'record') return b.rows.map(([k, v]) => `    ${k.padEnd(8)} ${v}`).join('\n')
+    return ''
+  }
   const text =
     `Verification of ${domain} failed.\n\n` +
     `Method:  ${methodLabel}\n` +
     `Reason:  ${reason}\n` +
     `Time:    ${new Date().toISOString()}\n\n` +
     `How to fix:\n\n` +
-    fixSteps.join('\n') +
+    fixBlocks.map(blockToText).join('\n') +
     `\n\nWhen you're ready, retry verification: ${retryLink}\n\n` +
     `Need help? Reply to this email or contact infovguards@gmail.com.\n\n` +
     `— V-Guards`
 
-  const fixHtmlList = fixSteps
-    .map((s) => {
-      const trimmed = s.trim()
-      if (trimmed === '') return ''
-      // Indent lines starting with a digit-and-dot OR with a unicode bullet — preserve as bullets
-      if (/^[•◦●]/.test(trimmed)) return `<li style="margin:6px 0;color:#444">${escapeHtml(trimmed.replace(/^[•◦●]\s*/, ''))}</li>`
-      if (/^\d+\./.test(trimmed)) return `<p style="margin:14px 0 6px;font-weight:600;color:#111;font-size:14px">${escapeHtml(trimmed)}</p>`
-      return `<p style="margin:6px 0;color:#444;font-size:13px">${escapeHtml(trimmed)}</p>`
-    })
-    .join('')
+  const blockToHtml = (b: Block): string => {
+    if (b.kind === 'p') {
+      return `<p style="margin:8px 0;color:#374151;font-size:14px;line-height:1.6">${escapeHtml(b.text)}</p>`
+    }
+    if (b.kind === 'h') {
+      return `<h3 style="margin:18px 0 8px;color:#111;font-size:14px;font-weight:700;display:flex;align-items:center;gap:6px"><span style="font-size:16px">${b.emoji}</span> ${escapeHtml(b.text)}</h3>`
+    }
+    if (b.kind === 'cmd') {
+      return `<div style="background:#0f172a;color:#a3e9f4;font-family:ui-monospace,SF Mono,Consolas,monospace;font-size:13px;padding:12px 14px;border-radius:6px;margin:6px 0 10px;word-break:break-all;line-height:1.4">${escapeHtml(b.text)}</div>`
+    }
+    if (b.kind === 'ul') {
+      const lis = b.items.map((i) => `<li style="margin:6px 0;color:#374151;font-size:13px;line-height:1.5">${escapeHtml(i)}</li>`).join('')
+      return `<ul style="margin:6px 0 10px 22px;padding:0">${lis}</ul>`
+    }
+    if (b.kind === 'record') {
+      const rows = b.rows
+        .map(
+          ([k, v]) =>
+            `<tr><td style="padding:8px 14px;color:#9ca3af;font-size:11px;text-transform:uppercase;letter-spacing:0.05em;font-weight:700;width:80px;border-bottom:1px solid #1e293b">${escapeHtml(k)}</td><td style="padding:8px 14px;color:#a3e9f4;font-family:ui-monospace,SF Mono,Consolas,monospace;font-size:13px;word-break:break-all;border-bottom:1px solid #1e293b">${escapeHtml(v)}</td></tr>`,
+        )
+        .join('')
+      return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;background:#0f172a;border-radius:8px;margin:8px 0 10px;border-collapse:collapse;overflow:hidden">${rows}</table>`
+    }
+    return ''
+  }
+  const fixHtmlList = fixBlocks.map(blockToHtml).join('')
 
   const html = `
 <div style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#111;max-width:600px;line-height:1.5;margin:0 auto">
@@ -234,8 +296,8 @@ export async function sendVerificationFailure(
 
     <!-- How to fix block -->
     <div style="padding:20px 24px;border-top:1px solid #f3f4f6">
-      <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:#06b6d4;font-weight:600;margin-bottom:10px">How to fix</div>
-      <div>${fixHtmlList.replace(/(<li[^>]*>.*?<\/li>(\s*<li[^>]*>.*?<\/li>)*)/g, '<ul style="margin:6px 0 6px 22px;padding:0">$1</ul>')}</div>
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:#06b6d4;font-weight:700;margin-bottom:14px">How to fix</div>
+      <div>${fixHtmlList}</div>
     </div>
 
     <!-- CTA -->
