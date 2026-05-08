@@ -735,6 +735,33 @@ export function ScanForm() {
   const abortRef = useRef<AbortController | null>(null)
   const stage2AbortRef = useRef<AbortController | null>(null)
   const apiDoneRef = useRef(false)
+  // Set from `?deepscan=1` query param (e.g. when user clicks "Run deep scan"
+  // CTA in their verify-success email). After Stage 1 result lands, the
+  // NextStagesPanel auto-opens its Stage 3 modal — server-side cache in
+  // vs_verified_domains keeps them verified for 30d so it's one click to deep.
+  const autoOpenStage3Ref = useRef(false)
+  const autoSubmitDoneRef = useRef(false)
+
+  // On mount, read `?url=` and `?deepscan=1` from the URL (entry point from
+  // emails / external links / V-Guards itself's rescan link). Prefill the
+  // form and auto-submit so the user lands on the result page directly.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (autoSubmitDoneRef.current) return
+    const params = new URLSearchParams(window.location.search)
+    const incomingUrl = params.get('url')
+    const wantDeep = params.get('deepscan') === '1'
+    if (wantDeep) autoOpenStage3Ref.current = true
+    if (!incomingUrl) return
+    autoSubmitDoneRef.current = true
+    setUrl(incomingUrl)
+    // Defer one tick so the input renders the prefilled URL before the
+    // scan kicks in (better visual feedback for the user).
+    setTimeout(() => {
+      const form = document.querySelector('form[aria-label="Scan your app for security issues"]') as HTMLFormElement | null
+      form?.requestSubmit()
+    }, 80)
+  }, [])
 
   // Step progression is now driven by the real /api/scan-stream NDJSON events.
   // Each `phase` event from the server bumps stepIdx; no fake timer needed.
@@ -1417,6 +1444,7 @@ export function ScanForm() {
                 stage2FindingCount={stage2.findings.filter((f) => f.severity !== 'ok').length}
                 stage3Done={result.stage === 3}
                 onDeepScanComplete={(deep) => setResult(deep)}
+                autoOpenStage3={autoOpenStage3Ref.current}
               />
             </div>
           </motion.div>

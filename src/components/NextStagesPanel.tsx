@@ -12,6 +12,12 @@ interface NextStagesPanelProps {
   /** True after a verified Stage 3 deep scan completes. */
   stage3Done?: boolean
   onDeepScanComplete?: (result: ScanResult) => void
+  /**
+   * Auto-open the Stage 3 modal as soon as the panel mounts. Set by ScanForm
+   * when the page was reached via the verify-success email's "Run deep scan"
+   * CTA (carries `?deepscan=1`). One-shot: panel resets the flag after open.
+   */
+  autoOpenStage3?: boolean
 }
 
 interface ServerScanFinding {
@@ -24,9 +30,18 @@ interface ServerScanFinding {
   fixPrompt: string
 }
 
-export function NextStagesPanel({ scannedUrl, stage2Status, stage2FindingCount, stage3Done, onDeepScanComplete }: NextStagesPanelProps) {
+export function NextStagesPanel({ scannedUrl, stage2Status, stage2FindingCount, stage3Done, onDeepScanComplete, autoOpenStage3 }: NextStagesPanelProps) {
   const [stage2Open, setStage2Open] = useState(false)
   const [stage3Open, setStage3Open] = useState(false)
+
+  // One-shot auto-open from `?deepscan=1` (email-CTA entry).
+  const autoOpenedRef = useRef(false)
+  useEffect(() => {
+    if (autoOpenStage3 && !autoOpenedRef.current) {
+      autoOpenedRef.current = true
+      setStage3Open(true)
+    }
+  }, [autoOpenStage3])
 
   let domain = ''
   try {

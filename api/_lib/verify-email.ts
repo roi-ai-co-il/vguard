@@ -35,7 +35,14 @@ export async function sendVerificationConfirmation(
     method === 'file' ? 'file challenge' : method === 'dns' ? 'DNS TXT record' : 'Vercel token'
   const subject = `✓ ${domain} is verified on V-Guards`
 
-  const dashboardLink = 'https://v-guards.com/?url=' + encodeURIComponent(`https://${domain}/`)
+  // Deep-scan link: lands on V-Guards homepage with the scanned URL pre-filled +
+  // a `deepscan=1` flag. The frontend reads the flag, runs Stage 1 automatically,
+  // and on completion auto-opens Stage 3 (already verified server-side via the
+  // 30-day cache in vs_verified_domains) — one click runs the deep scan.
+  const dashboardLink =
+    'https://v-guards.com/?url=' +
+    encodeURIComponent(`https://${domain}/`) +
+    '&deepscan=1'
   const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
     .toISOString()
     .slice(0, 10)
@@ -46,36 +53,75 @@ export async function sendVerificationConfirmation(
     `Method:    ${methodLabel}\n` +
     `Verified:  ${new Date().toISOString()}\n` +
     `Expires:   ${expiresAt}\n\n` +
-    `You can now run a Stage 3 deep scan on ${domain} — that includes:\n` +
-    `  • Supabase RLS testing\n` +
-    `  • Storage bucket write-probe\n` +
-    `  • Aggressive XSS / SQLi payloads\n` +
-    `  • Path traversal probing\n` +
-    `  • AI prompt-injection canaries\n` +
-    `  • IDOR testing (with optional JWT)\n\n` +
-    `Run a deep scan: ${dashboardLink}\n\n` +
+    `You can now run a Stage 3 deep scan on ${domain} — including Supabase RLS testing, storage bucket probes, aggressive XSS / SQLi payloads, path traversal, AI prompt-injection canaries, and IDOR testing.\n\n` +
+    `Run deep scan: ${dashboardLink}\n\n` +
     `Verification expires after 30 days. You can re-verify any time.\n\n` +
     `— V-Guards`
 
   const html = `
-<div style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#111;max-width:600px;line-height:1.5">
-  <div style="background:#09090b;color:#22d3ee;padding:18px 24px;border-radius:8px 8px 0 0;font-family:ui-monospace,SF Mono,Consolas,monospace;display:flex;align-items:center;gap:10px">
-    <img src="https://v-guards.com/logo-200.png" alt="V-Guards" width="28" height="28" style="display:inline-block;vertical-align:middle;margin-right:8px;border-radius:6px" />
-    <strong style="vertical-align:middle">V-Guards</strong>
-    <span style="vertical-align:middle"> · ownership verified ✓</span>
-  </div>
-  <div style="border:1px solid #eee;border-top:none;padding:24px;border-radius:0 0 8px 8px">
-    <p style="margin:0 0 16px;font-size:16px"><strong>${escapeHtml(domain)}</strong> is now verified.</p>
-    <table style="border-collapse:collapse;font-size:14px;margin-bottom:20px">
-      <tr><td style="padding:4px 16px 4px 0;color:#666">Method</td><td>${escapeHtml(methodLabel)}</td></tr>
-      <tr><td style="padding:4px 16px 4px 0;color:#666">Verified</td><td>${new Date().toISOString()}</td></tr>
-      <tr><td style="padding:4px 16px 4px 0;color:#666">Expires</td><td>${expiresAt}</td></tr>
+<div style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#111;max-width:600px;line-height:1.5;margin:0 auto">
+  <!-- Header -->
+  <div style="background:#09090b;color:#22d3ee;padding:20px 24px;border-radius:10px 10px 0 0;font-family:ui-monospace,SF Mono,Consolas,monospace">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%">
+      <tr>
+        <td style="vertical-align:middle;width:44px"><img src="https://v-guards.com/logo-200.png" alt="V-Guards" width="32" height="32" style="display:block;border-radius:7px" /></td>
+        <td style="vertical-align:middle;padding-left:12px;white-space:nowrap">
+          <strong style="color:#fff;font-size:15px;white-space:nowrap">V&#8209;Guards</strong>
+          <span style="color:#888;margin:0 6px">·</span>
+          <span style="color:#22d3ee;font-size:14px">ownership verified ✓</span>
+        </td>
+      </tr>
     </table>
-    <p style="margin:0 0 12px">You can now run a <strong>Stage 3 deep scan</strong> on ${escapeHtml(domain)} — including Supabase RLS testing, storage bucket probes, aggressive XSS / SQLi payloads, path traversal, AI prompt-injection canaries, and IDOR testing.</p>
-    <p style="margin:20px 0 0">
-      <a href="${dashboardLink}" style="display:inline-block;background:#22d3ee;color:#09090b;text-decoration:none;padding:10px 20px;border-radius:6px;font-weight:600">Run deep scan →</a>
-    </p>
-    <p style="margin:24px 0 0;color:#888;font-size:12px">Verification expires after 30 days. You can re-verify any time at <a href="https://v-guards.com" style="color:#06b6d4">v-guards.com</a>.</p>
+  </div>
+
+  <div style="border:1px solid #e5e7eb;border-top:none;padding:0;border-radius:0 0 10px 10px">
+    <!-- Hero summary -->
+    <div style="padding:24px 24px 8px">
+      <p style="margin:0 0 4px;font-size:16px;color:#111"><strong>${escapeHtml(domain)}</strong> is now verified.</p>
+      <p style="margin:0;color:#666;font-size:13px">Stage 3 deep scan is unlocked — the button below takes you straight to it.</p>
+    </div>
+
+    <!-- Method block -->
+    <div style="padding:14px 24px;border-top:1px solid #f3f4f6">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:#9ca3af;font-weight:600;margin-bottom:4px">Method</div>
+      <div style="font-size:14px;color:#111">${escapeHtml(methodLabel)}</div>
+    </div>
+
+    <!-- Verified block -->
+    <div style="padding:14px 24px;border-top:1px solid #f3f4f6">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:#9ca3af;font-weight:600;margin-bottom:4px">Verified</div>
+      <div style="font-size:13px;color:#444;font-family:ui-monospace,SF Mono,Consolas,monospace">${new Date().toISOString()}</div>
+    </div>
+
+    <!-- Expires block -->
+    <div style="padding:14px 24px;border-top:1px solid #f3f4f6">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:#9ca3af;font-weight:600;margin-bottom:4px">Expires</div>
+      <div style="font-size:14px;color:#111">${expiresAt} <span style="color:#9ca3af;font-size:12px;margin-left:6px">(30 days — re-verify any time)</span></div>
+    </div>
+
+    <!-- What's unlocked block -->
+    <div style="padding:18px 24px;border-top:1px solid #f3f4f6;background:#ecfeff">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:#06b6d4;font-weight:700;margin-bottom:10px">What you unlocked</div>
+      <p style="margin:0 0 10px;color:#0f172a;font-size:14px;line-height:1.6">You can now run a <strong>Stage 3 deep scan</strong> on <strong>${escapeHtml(domain)}</strong> — including:</p>
+      <ul style="margin:8px 0 0 22px;padding:0;color:#0f172a;font-size:13px;line-height:1.7">
+        <li>Supabase RLS testing</li>
+        <li>Storage bucket probes</li>
+        <li>Aggressive XSS / SQLi payloads</li>
+        <li>Path traversal</li>
+        <li>AI prompt-injection canaries</li>
+        <li>IDOR testing</li>
+      </ul>
+    </div>
+
+    <!-- CTA -->
+    <div style="padding:20px 24px;text-align:left">
+      <a href="${dashboardLink}" style="display:inline-block;background:#22d3ee;color:#09090b;text-decoration:none;padding:14px 28px;border-radius:8px;font-weight:700;font-size:15px">Run deep scan →</a>
+    </div>
+
+    <!-- Footer -->
+    <div style="padding:16px 24px;border-top:1px solid #f3f4f6;background:#fafafa;border-radius:0 0 10px 10px">
+      <p style="margin:0;color:#6b7280;font-size:12px">Need help? Reply to this email or contact <a href="mailto:infovguards@gmail.com" style="color:#06b6d4;text-decoration:none">infovguards@gmail.com</a>.</p>
+    </div>
   </div>
 </div>`.trim()
 
@@ -261,9 +307,11 @@ export async function sendVerificationFailure(
   <div style="background:#09090b;color:#ff6b6b;padding:20px 24px;border-radius:10px 10px 0 0;font-family:ui-monospace,SF Mono,Consolas,monospace">
     <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%">
       <tr>
-        <td style="vertical-align:middle;width:40px"><img src="https://v-guards.com/logo-200.png" alt="V-Guards" width="32" height="32" style="display:block;border-radius:7px" /></td>
-        <td style="vertical-align:middle;padding-left:12px">
-          <div style="font-size:15px"><strong style="color:#fff">V-Guards</strong> <span style="color:#888">·</span> <span style="color:#ff6b6b">verification failed ⚠</span></div>
+        <td style="vertical-align:middle;width:44px"><img src="https://v-guards.com/logo-200.png" alt="V-Guards" width="32" height="32" style="display:block;border-radius:7px" /></td>
+        <td style="vertical-align:middle;padding-left:12px;white-space:nowrap">
+          <strong style="color:#fff;font-size:15px;white-space:nowrap">V&#8209;Guards</strong>
+          <span style="color:#888;margin:0 6px">·</span>
+          <span style="color:#ff6b6b;font-size:14px">verification failed ⚠</span>
         </td>
       </tr>
     </table>
