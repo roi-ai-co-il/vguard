@@ -26,6 +26,8 @@ import {
   Mail,
   ArrowRightLeft,
   Loader2,
+  ChevronDown,
+  ChevronUp,
   type LucideIcon,
 } from 'lucide-react'
 import { VibeScoreGauge } from '@/components/ui/vibe-score-gauge'
@@ -800,6 +802,9 @@ export function ScanForm() {
     | { kind: 'group'; value: UiGroup }
     | { kind: 'category'; value: Category }
   const [findingFilter, setFindingFilter] = useState<FindingFilter>({ kind: 'all' })
+  // Findings list is collapsed by default — the score gauge + action bar
+  // are the primary view; users opt-in to the long detail list.
+  const [showFindings, setShowFindings] = useState(false)
   const [livePhaseLabel, setLivePhaseLabel] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const stage2AbortRef = useRef<AbortController | null>(null)
@@ -899,6 +904,7 @@ export function ScanForm() {
     setStepIdx(0)
     setErrorMsg('')
     setFindingFilter({ kind: 'all' })
+    setShowFindings(false)
     setResult(null)
     setStage2(STAGE2_INITIAL)
     stage2AbortRef.current?.abort()
@@ -1035,6 +1041,7 @@ export function ScanForm() {
     setErrorMsg('')
     setScanError(null)
     setFindingFilter({ kind: 'all' })
+    setShowFindings(false)
     setResult(null)
     apiDoneRef.current = false
     setState('idle')
@@ -1434,13 +1441,38 @@ export function ScanForm() {
               </div>
             </div>
 
-            {stage2.status === 'running' && (
+            {/* Toggle — collapsed by default. Clicking reveals the full
+                findings list (filter chips + cards). When the list is open,
+                the same control collapses it again. */}
+            <div className="px-4 sm:px-6 py-3 border-b border-(--color-border) bg-(--color-bg) flex items-center justify-center">
+              <button
+                type="button"
+                onClick={() => setShowFindings((v) => !v)}
+                aria-expanded={showFindings}
+                aria-controls="vguard-findings-detail"
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-(--color-surface-elevated) hover:bg-(--color-surface) border border-(--color-border) hover:border-(--color-accent-border) text-(--color-fg) hover:text-(--color-accent) font-mono text-xs font-semibold transition-colors cursor-pointer min-h-[40px]"
+              >
+                {showFindings ? (
+                  <>
+                    <ChevronUp size={14} strokeWidth={2.5} aria-hidden="true" />
+                    Hide all findings
+                  </>
+                ) : (
+                  <>
+                    <ChevronDown size={14} strokeWidth={2.5} aria-hidden="true" />
+                    Show all {mergedFindings.length} finding{mergedFindings.length === 1 ? '' : 's'}
+                  </>
+                )}
+              </button>
+            </div>
+
+            {showFindings && stage2.status === 'running' && (
               <div className="px-6 py-3 border-b border-(--color-border) bg-(--color-bg) flex items-center gap-2 font-mono text-[11px] text-(--color-fg-muted)">
                 <Loader2 size={13} strokeWidth={2.5} className="animate-spin text-(--color-warning)" aria-hidden="true" />
                 <span>Stage 2 in progress · launching a real headless browser to catch what only loads at runtime…</span>
               </div>
             )}
-            {stage2.status === 'done' && stage2.findings.filter((f) => f.severity !== 'ok').length > 0 && (
+            {showFindings && stage2.status === 'done' && stage2.findings.filter((f) => f.severity !== 'ok').length > 0 && (
               <div className="px-6 py-3 border-b border-(--color-border) bg-(--color-bg) flex items-center gap-2 font-mono text-[11px] text-(--color-fg-muted)">
                 <Check size={13} strokeWidth={3} className="text-(--color-accent)" aria-hidden="true" />
                 <span>
@@ -1452,8 +1484,8 @@ export function ScanForm() {
               </div>
             )}
 
-            {/* Filter chips — present severities first, then categories. Counts shown so users see how the filter narrows the list. */}
-            {mergedFindings.length > 1 && (
+            {/* Filter chips — present uiGroups first, then categories. Counts shown so users see how the filter narrows the list. */}
+            {showFindings && mergedFindings.length > 1 && (
               <div className="px-4 sm:px-6 py-3 border-b border-(--color-border) bg-(--color-bg) flex items-center gap-1.5 flex-wrap">
                 <FilterChip
                   label="All"
@@ -1495,30 +1527,33 @@ export function ScanForm() {
               </div>
             )}
 
-            <motion.ul
-              initial="hidden"
-              animate="show"
-              variants={{
-                hidden: {},
-                show: { transition: { staggerChildren: 0.05, delayChildren: 0.1 } },
-              }}
-              className="bg-(--color-surface)"
-            >
-              {visibleFindings.length === 0 ? (
-                <li className="px-6 py-10 text-center text-(--color-fg-muted) text-sm">
-                  No findings match this filter.{' '}
-                  <button
-                    type="button"
-                    onClick={() => setFindingFilter({ kind: 'all' })}
-                    className="text-(--color-accent) hover:underline cursor-pointer"
-                  >
-                    Show all
-                  </button>
-                </li>
-              ) : (
-                visibleFindings.map((f) => <FindingCard key={f.id} finding={f} />)
-              )}
-            </motion.ul>
+            {showFindings && (
+              <motion.ul
+                id="vguard-findings-detail"
+                initial="hidden"
+                animate="show"
+                variants={{
+                  hidden: {},
+                  show: { transition: { staggerChildren: 0.05, delayChildren: 0.1 } },
+                }}
+                className="bg-(--color-surface)"
+              >
+                {visibleFindings.length === 0 ? (
+                  <li className="px-6 py-10 text-center text-(--color-fg-muted) text-sm">
+                    No findings match this filter.{' '}
+                    <button
+                      type="button"
+                      onClick={() => setFindingFilter({ kind: 'all' })}
+                      className="text-(--color-accent) hover:underline cursor-pointer"
+                    >
+                      Show all
+                    </button>
+                  </li>
+                ) : (
+                  visibleFindings.map((f) => <FindingCard key={f.id} finding={f} />)
+                )}
+              </motion.ul>
+            )}
 
             <div className="px-6 py-5 border-t border-(--color-border) bg-(--color-bg) flex items-center justify-between gap-4 flex-wrap">
               <div className="flex items-center gap-2 flex-wrap">
