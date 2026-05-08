@@ -1032,6 +1032,13 @@ export function ScanForm() {
       })
   }
 
+  // When `reset()` flips state to idle, the result panel must finish its
+  // AnimatePresence exit (~300ms) BEFORE the idle form mounts. Doing the
+  // scroll inside reset() therefore fires too early. We track "the user
+  // just clicked Try another URL" with this ref and let a useEffect scroll
+  // when the form actually mounts.
+  const wantScrollToFormRef = useRef(false)
+
   function reset() {
     abortRef.current?.abort()
     stage2AbortRef.current?.abort()
@@ -1044,23 +1051,43 @@ export function ScanForm() {
     setShowFindings(false)
     setResult(null)
     apiDoneRef.current = false
+    wantScrollToFormRef.current = true
     setState('idle')
-    // Scroll the user back to the URL input so they don't have to scroll up
-    // manually after a long report. Defer one frame so the idle form has
-    // mounted before we scroll + focus.
-    if (typeof window !== 'undefined') {
-      requestAnimationFrame(() => {
-        const form = document.querySelector<HTMLElement>(
-          'form[aria-label="Scan your app for security issues"]',
-        )
-        if (form) {
-          form.scrollIntoView({ behavior: 'smooth', block: 'center' })
-          const input = form.querySelector<HTMLInputElement>('input[type="url"], input[type="text"]')
-          input?.focus({ preventScroll: true })
-        }
-      })
-    }
   }
+
+  // Watches state transitions to `idle` and, when reset() asked for it,
+  // scrolls the URL input into view + focuses it. Polls briefly because
+  // the form's mount happens after AnimatePresence's exit animation, which
+  // is non-deterministic from this side.
+  useEffect(() => {
+    if (state !== 'idle' || !wantScrollToFormRef.current) return
+    let cancelled = false
+    const start = Date.now()
+    function tryScroll() {
+      if (cancelled) return
+      const form = document.querySelector<HTMLElement>(
+        'form[aria-label="Scan your app for security issues"]',
+      )
+      if (form) {
+        form.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        const input = form.querySelector<HTMLInputElement>(
+          'input[type="url"], input[type="text"]',
+        )
+        input?.focus({ preventScroll: true })
+        wantScrollToFormRef.current = false
+        return
+      }
+      if (Date.now() - start < 1500) {
+        setTimeout(tryScroll, 60)
+      } else {
+        wantScrollToFormRef.current = false
+      }
+    }
+    tryScroll()
+    return () => {
+      cancelled = true
+    }
+  }, [state])
 
 
   const inputClass =
