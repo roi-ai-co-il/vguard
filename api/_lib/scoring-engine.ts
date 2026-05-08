@@ -277,17 +277,35 @@ export function extractTraits(finding: Finding, ctx: ScoringContext): FindingTra
   // STRICT VERIFIED-IMPACT GATE — the only way a finding becomes critical.
   // -------------------------------------------------------------------------
 
+  // The detectors already filter false positives and decide severity. The
+  // scoring engine should TRUST the detector when it commits to a critical
+  // severity on a class of findings that is real-world dangerous, instead
+  // of demanding additional evidence patterns the detector may not surface
+  // in the `evidence` field. Otherwise legitimately bad scans land at 95.
+  const detectorFlaggedCritical = finding.severity === 'critical'
+
   const verifiedImpact =
-    // Active probe with confirmed reflection / error
+    // Active probe with confirmed reflection / error / location follow
     activeProbeHit ||
-    // Server-side secret CONFIRMED usable (Supabase service role JWT, Stripe sk_live_, AWS, Anthropic/OpenAI/GitHub) AND not a client identifier
-    (secretPattern && highAbuseLikelihood && !knownPublicClientId) ||
-    // .env / .git / backup file with sensitive content (not just empty 200)
-    ((ID(id, 'paths-env', 'paths-git', 'paths-backup', 'paths-aws-credentials')) && evidenceLooksSensitive(ev)) ||
+    // Server-side secret detected — trust the detector's severity. Public
+    // client identifiers (Firebase web SDK key, Stripe pk_*, supabase anon)
+    // are already excluded via knownPublicClientId.
+    (cat === 'secrets' && detectorFlaggedCritical && !knownPublicClientId) ||
+    // .env / .git config / backup / aws creds / DB dump / firebase RTDB /
+    // S3 ListBucket — when the detector escalated to critical it has
+    // already validated the path returned a hit. 200-with-empty-body is
+    // demoted by the detector itself, so trusting `severity:critical` here
+    // is safe and matches Royi's spec "exposed .env/.git with real sensitive data".
+    (detectorFlaggedCritical && ID(id, 'paths-env', 'paths-git', 'paths-aws-credentials',
+        'paths-database-sql', 'paths-backup', 'paths-firebase-rtdb-root', 'paths-s3-list',
+        'paths-supabase-storage-public', 'paths-firebase-storage-public', 'paths-phpinfo')) ||
+    // Source maps publicly accessible — the detector emits this only when
+    // the .map file actually returned 200 with map contents (not 404).
+    ID(id, 'sourcemaps-exposed') ||
     // Plain-HTTP traffic on what should be HTTPS (real downgrade surface)
     (!ctx.httpsActive && cat === 'tls' && publicExposure) ||
     // TLS broken in a way that allows real downgrade (expired, weak version <1.2)
-    ID(id, 'tls-cert-expired', 'tls-old-version', 'tls-weak-cipher-real') ||
+    ID(id, 'tls-cert-expired', 'tls-old-version', 'tls-weak-cipher', 'tls-weak-cipher-real') ||
     // Stage 3 confirmations
     ID(id, 'stage3-rls-broken', 'stage3-storage-public-write', 'stage3-admin-unauth-data',
           'stage3-mass-assignment', 'stage3-idor', 'stage3-path-traversal') ||
@@ -296,7 +314,8 @@ export function extractTraits(finding: Finding, ctx: ScoringContext): FindingTra
     // Subdomain takeover ready (NXDOMAIN target)
     ID(id, 'dns-subdomain-takeover-ready') ||
     // Mixed content with sensitive form action (POST creds over HTTP)
-    (cat === 'mixed-content' && ID(id, 'mixed-content-form-credentials'))
+    (cat === 'mixed-content' && (ID(id, 'mixed-content-form-credentials') || ID(id, 'mixed-content-form')))
+  void evidenceLooksSensitive // kept for future detectors; not used now
 
   return {
     exploitable,
@@ -505,29 +524,35 @@ export function runScoringEngine(findings: Finding[], ctx: ScoringContext): Engi
   const highSum = diminishingSum(byClass['high-impact-misconfig'])
   const mediumSum = diminishingSum(byClass['medium-weakness'])
 
-  // STRICT CAPS (per spec):
-  //   Hardening-only total  <= 10
-  //   Informational total   <= 1
-  //   Cookie/header/CSP-only total <= 15
+  // CAPS (per spec, refined):
+  //   Hardening-only total  <= 10  (always)
+  //   Informational total   <=  1  (always)
+  //   Cookie/header/CSP-ONLY combined cap <= 15 — applied ONLY when EVERY
+  //     non-ok finding sits in {headers, cookies, html} categories AND there
+  //     is no verified impact. A scan with diverse categories (DNS, email,
+  //     auth, paths, ai, deps, tls) gets to subtract real points; a scan
+  //     that is purely "missing some headers" tops out at 15 off.
   const hardeningSumRaw = diminishingSum(byClass['low-hardening'])
   const hardeningSum = Math.min(hardeningSumRaw, 10)
   const informationalSumRaw = diminishingSum(byClass.informational)
   const informationalSum = Math.min(informationalSumRaw, 1)
 
-  // The "cookie/header/CSP-only" cap applies to medium+low+info findings whose
-  // category is purely browser-side hardening (no real exploit). Compute over
-  // the medium-weakness pool when no verified impact exists.
-  let bcSum = mediumSum + hardeningSum + informationalSum
   const hasVerifiedImpact = scored.some((s) => s.traits.verifiedImpact)
-  if (!hasVerifiedImpact) {
-    bcSum = Math.min(bcSum, 15)
+  const HARDENING_CATS = new Set(['headers', 'cookies', 'html'])
+  const allHardeningOnlyCats = scored
+    .filter((s) => s.finding.severity !== 'ok')
+    .every((s) => HARDENING_CATS.has(s.finding.category as string))
+
+  let mediumLowInfo = mediumSum + hardeningSum + informationalSum
+  if (!hasVerifiedImpact && allHardeningOnlyCats) {
+    mediumLowInfo = Math.min(mediumLowInfo, 15)
   }
 
-  const totalPenaltyRaw = criticalSum + highSum + (hasVerifiedImpact ? mediumSum + hardeningSum + informationalSum : bcSum)
-  // No artificial floor. The per-class caps above already bound the worst-case
-  // no-verified-impact penalty to <=15, which lands the score around 85. A
-  // site with many hardening gaps legitimately loses points; we don't fake a
-  // perfect score. The only reason a score drops below ~85 is verified impact.
+  const totalPenaltyRaw = criticalSum + highSum + mediumLowInfo
+  // No artificial floor. Real findings legitimately reduce score. A site
+  // with diverse hardening + auth-cookie + DNS + email-auth gaps but no
+  // verified exploit will land in the 70-85 range, which reflects "could
+  // be improved" without falsely declaring an active risk.
   const vibeScore = Math.max(0, Math.min(100, Math.round(100 - totalPenaltyRaw)))
 
   const groupCounts: Record<RiskClass, number> = {
@@ -584,12 +609,12 @@ export function applyEngine(findings: Finding[], ctx: ScoringContext): ApplyResu
   else if (inverted >= 15) aggregateBand = 'medium'
   else aggregateBand = 'low'
 
-  // Without verified impact, the band is forced to `low`. The caps above
-  // bound the inverted score to ~15 (which is medium territory by raw
-  // numbers), but per spec a hardening-only profile must not look like an
-  // active risk to the user — so the band is clamped, not the score.
-  if (!hasVerifiedImpact) {
-    aggregateBand = 'low'
+  // Without verified impact, the band can still be `medium` to reflect
+  // real cumulative pressure (auth cookies, DNSSEC missing, weak SPF,
+  // etc.) — but it can never escalate to `high` or `severe`. Those bands
+  // require a verified exploit / leak / bypass.
+  if (!hasVerifiedImpact && (aggregateBand === 'severe' || aggregateBand === 'high')) {
+    aggregateBand = 'medium'
   }
 
   return { vibeScore, findings: enriched, groupCounts, hasVerifiedImpact, aggregateBand }
