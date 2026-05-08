@@ -3684,6 +3684,13 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
       fixPrompt: '',
       riskScore: 0,
       riskBand: 'low',
+      // Synthetic finding pushed AFTER the engine runs — tag it so the UI
+      // doesn't fall back to severity-based grouping (would land it in
+      // hardening-recommendations otherwise; informational is more honest
+      // since "WAF present" is a defense, not a finding).
+      riskClass: 'informational',
+      confidence: 'informational',
+      uiGroup: 'informational-observations',
     })
     // Re-roll totals to reflect the new info finding so the score panel matches.
     totals.info += 1

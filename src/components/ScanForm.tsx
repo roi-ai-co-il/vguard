@@ -1038,6 +1038,21 @@ export function ScanForm() {
     setResult(null)
     apiDoneRef.current = false
     setState('idle')
+    // Scroll the user back to the URL input so they don't have to scroll up
+    // manually after a long report. Defer one frame so the idle form has
+    // mounted before we scroll + focus.
+    if (typeof window !== 'undefined') {
+      requestAnimationFrame(() => {
+        const form = document.querySelector<HTMLElement>(
+          'form[aria-label="Scan your app for security issues"]',
+        )
+        if (form) {
+          form.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          const input = form.querySelector<HTMLInputElement>('input[type="url"], input[type="text"]')
+          input?.focus({ preventScroll: true })
+        }
+      })
+    }
   }
 
 
