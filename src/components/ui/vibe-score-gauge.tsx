@@ -1,22 +1,39 @@
 import { motion, useReducedMotion } from 'framer-motion'
 import { cn } from '@/lib/utils'
 
+export type AggregateBand = 'low' | 'medium' | 'high' | 'severe'
+
 export interface VibeScoreGaugeProps {
   score: number
+  /**
+   * Authoritative band from the scoring engine. When provided, the gauge
+   * color + label come from the band — NOT from the score number. This is
+   * how a passive-only profile (apple.com etc.) shows green/Healthy at
+   * vibeScore=85 instead of yellow/At-risk.
+   */
+  band?: AggregateBand
   className?: string
   size?: number
 }
 
-function severityForScore(score: number) {
-  if (score < 50) return { color: 'var(--color-danger)', label: 'Critical', tone: 'critical' as const }
-  if (score < 75) return { color: 'var(--color-warning)', label: 'At risk', tone: 'warn' as const }
-  return { color: 'var(--color-ok)', label: 'Healthy', tone: 'ok' as const }
+function severityForBand(band: AggregateBand) {
+  if (band === 'severe') return { color: 'var(--color-danger)', label: 'Critical' }
+  if (band === 'high') return { color: 'var(--color-danger)', label: 'High risk' }
+  if (band === 'medium') return { color: 'var(--color-warning)', label: 'Needs review' }
+  return { color: 'var(--color-ok)', label: 'Healthy' }
 }
 
-export function VibeScoreGauge({ score, className, size = 220 }: VibeScoreGaugeProps) {
+// Fallback only — used when no band is passed (legacy callers).
+function severityForScore(score: number) {
+  if (score < 50) return { color: 'var(--color-danger)', label: 'Critical' }
+  if (score < 75) return { color: 'var(--color-warning)', label: 'At risk' }
+  return { color: 'var(--color-ok)', label: 'Healthy' }
+}
+
+export function VibeScoreGauge({ score, band, className, size = 220 }: VibeScoreGaugeProps) {
   const reduceMotion = useReducedMotion() ?? false
   const clamped = Math.max(0, Math.min(100, Math.round(score)))
-  const severity = severityForScore(clamped)
+  const severity = band ? severityForBand(band) : severityForScore(clamped)
 
   const stroke = 14
   const r = (size - stroke) / 2

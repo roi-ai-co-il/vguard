@@ -28,6 +28,30 @@ interface ServerScanFinding {
   description: string
   evidence: string
   fixPrompt: string
+  /** Engine-final UI grouping (from /api/scan-browser-assisted). */
+  uiGroup?:
+    | 'confirmed-vulnerabilities'
+    | 'likely-risks'
+    | 'needs-review'
+    | 'hardening-recommendations'
+    | 'informational-observations'
+}
+
+// Engine-final classification — same logic as ScanForm. Detector severity
+// is internal; what the user sees is the engine's final group.
+type StageFindingLike = { severity?: string; uiGroup?: string }
+function uiGroupBadge(f: StageFindingLike): { label: string; color: string; border: string } {
+  const g = f.uiGroup ?? (
+    f.severity === 'ok' ? 'informational-observations' :
+    f.severity === 'info' ? 'informational-observations' :
+    f.severity === 'warn' ? 'hardening-recommendations' :
+    'needs-review'
+  )
+  if (g === 'confirmed-vulnerabilities') return { label: 'confirmed', color: 'var(--color-danger)', border: 'var(--color-danger)' }
+  if (g === 'likely-risks') return { label: 'likely risk', color: 'var(--color-warning)', border: 'var(--color-warning)' }
+  if (g === 'needs-review') return { label: 'review', color: 'var(--color-warning)', border: 'var(--color-warning)' }
+  if (g === 'hardening-recommendations') return { label: 'hardening', color: 'var(--color-fg-muted)', border: 'var(--color-border)' }
+  return { label: 'info', color: 'var(--color-fg-dim)', border: 'var(--color-border)' }
 }
 
 export function NextStagesPanel({ scannedUrl, stage2Status, stage2FindingCount, stage3Done, onDeepScanComplete, autoOpenStage3 }: NextStagesPanelProps) {
@@ -228,6 +252,12 @@ interface Stage2Finding {
   description: string
   evidence: string
   fixPrompt: string
+  uiGroup?:
+    | 'confirmed-vulnerabilities'
+    | 'likely-risks'
+    | 'needs-review'
+    | 'hardening-recommendations'
+    | 'informational-observations'
 }
 
 interface Stage2ResultsResponse {
@@ -497,29 +527,17 @@ export function Stage2Modal({ open, onClose }: { open: boolean; onClose: () => v
                   className="rounded-md bg-(--color-bg) border border-(--color-border) px-3 py-2"
                 >
                   <div className="flex items-center gap-2 mb-0.5 font-mono text-[10px] tracking-widest uppercase">
-                    <span
-                      className="px-1.5 py-0.5 rounded border"
-                      style={{
-                        color:
-                          f.severity === 'critical'
-                            ? 'var(--color-danger)'
-                            : f.severity === 'warn'
-                              ? 'var(--color-warning)'
-                              : f.severity === 'ok'
-                                ? 'var(--color-ok)'
-                                : 'var(--color-fg-muted)',
-                        borderColor:
-                          f.severity === 'critical'
-                            ? 'var(--color-danger)'
-                            : f.severity === 'warn'
-                              ? 'var(--color-warning)'
-                              : f.severity === 'ok'
-                                ? 'var(--color-ok)'
-                                : 'var(--color-border)',
-                      }}
-                    >
-                      {f.severity === 'info' ? 'improve' : f.severity}
-                    </span>
+                    {(() => {
+                      const b = uiGroupBadge(f)
+                      return (
+                        <span
+                          className="px-1.5 py-0.5 rounded border"
+                          style={{ color: b.color, borderColor: b.border }}
+                        >
+                          {b.label}
+                        </span>
+                      )
+                    })()}
                   </div>
                   <h4 className="text-sm font-semibold text-(--color-fg) leading-snug">{f.title}</h4>
                   <p className="mt-1 text-xs text-(--color-fg-muted) leading-relaxed">{f.description}</p>
@@ -617,29 +635,17 @@ export function Stage2Modal({ open, onClose }: { open: boolean; onClose: () => v
                     className="rounded-md bg-(--color-bg) border border-(--color-border) px-4 py-3"
                   >
                     <div className="flex items-center gap-2 mb-1 font-mono text-[10px] tracking-widest uppercase">
-                      <span
-                        className="px-2 py-0.5 rounded border"
-                        style={{
-                          color:
-                            f.severity === 'critical'
-                              ? 'var(--color-danger)'
-                              : f.severity === 'warn'
-                                ? 'var(--color-warning)'
-                                : f.severity === 'ok'
-                                  ? 'var(--color-ok)'
-                                  : 'var(--color-fg-muted)',
-                          borderColor:
-                            f.severity === 'critical'
-                              ? 'var(--color-danger)'
-                              : f.severity === 'warn'
-                                ? 'var(--color-warning)'
-                                : f.severity === 'ok'
-                                  ? 'var(--color-ok)'
-                                  : 'var(--color-border)',
-                        }}
-                      >
-                        {f.severity}
-                      </span>
+                      {(() => {
+                        const b = uiGroupBadge(f)
+                        return (
+                          <span
+                            className="px-2 py-0.5 rounded border"
+                            style={{ color: b.color, borderColor: b.border }}
+                          >
+                            {b.label}
+                          </span>
+                        )
+                      })()}
                       <span className="text-(--color-fg-dim)">{f.category}</span>
                     </div>
                     <h4 className="text-sm font-semibold text-(--color-fg) leading-snug">

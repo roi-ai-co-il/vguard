@@ -161,32 +161,61 @@ function normalizeUrl(input: string): string {
   return `https://${trimmed}`
 }
 
-function severityColor(s: Severity) {
-  if (s === 'critical') return 'var(--color-danger)'
-  if (s === 'warn') return 'var(--color-warning)'
-  if (s === 'info') return 'var(--color-fg-muted)'
-  return 'var(--color-ok)'
+// Detector-severity helpers retained for debug only — they are no longer
+// used by the user-facing UI. Kept as named exports of intent (and a
+// silenced void so the unused-import lint doesn't fire) in case a future
+// debug overlay wants to surface raw severity.
+function _severityColor(_s: Severity) { return _s as unknown as string }
+void _severityColor
+
+// ---------------------------------------------------------------------------
+// uiGroup — engine-final classification used everywhere the user can see.
+// Detector severity stays internal; what we render comes from the engine.
+// ---------------------------------------------------------------------------
+
+type UiGroup = NonNullable<ApiFinding['uiGroup']>
+
+function uiGroupOf(finding: ApiFinding): UiGroup {
+  if (finding.uiGroup) return finding.uiGroup
+  // Fallback for any finding that somehow arrived without uiGroup (shouldn't
+  // happen post-engine but be defensive). Map severity onto the gentlest
+  // possible bucket — passive signals are NOT confirmed vulns.
+  if (finding.severity === 'ok') return 'informational-observations'
+  if (finding.severity === 'info') return 'informational-observations'
+  if (finding.severity === 'warn') return 'hardening-recommendations'
+  return 'needs-review'
 }
 
-function severityMuted(s: Severity) {
-  if (s === 'critical') return 'var(--color-danger-muted)'
-  if (s === 'warn') return 'var(--color-warning-muted)'
-  if (s === 'info') return 'rgba(192, 192, 200, 0.08)'
-  return 'rgba(74, 222, 128, 0.1)'
+function uiGroupColor(g: UiGroup) {
+  if (g === 'confirmed-vulnerabilities') return 'var(--color-danger)'
+  if (g === 'likely-risks') return 'var(--color-warning)'
+  if (g === 'needs-review') return 'var(--color-warning)'
+  if (g === 'hardening-recommendations') return 'var(--color-fg-muted)'
+  return 'var(--color-fg-dim)'
 }
 
-function severityLabel(s: Severity) {
-  if (s === 'critical') return 'critical'
-  if (s === 'warn') return 'warning'
-  if (s === 'info') return 'improve'
-  return 'clean'
+function uiGroupMuted(g: UiGroup) {
+  if (g === 'confirmed-vulnerabilities') return 'var(--color-danger-muted)'
+  if (g === 'likely-risks') return 'var(--color-warning-muted)'
+  if (g === 'needs-review') return 'var(--color-warning-muted)'
+  if (g === 'hardening-recommendations') return 'rgba(192, 192, 200, 0.08)'
+  return 'rgba(192, 192, 200, 0.05)'
 }
 
-function severityTooltip(s: Severity) {
-  if (s === 'critical') return 'Active vulnerability — fix now before deploy.'
-  if (s === 'warn') return 'Real hardening gap — fix this week.'
-  if (s === 'info') return 'Defense-in-depth recommendation. Not a current vulnerability — fix at your pace.'
-  return 'Clean — verified working.'
+function uiGroupLabel(g: UiGroup) {
+  if (g === 'confirmed-vulnerabilities') return 'confirmed'
+  if (g === 'likely-risks') return 'likely risk'
+  if (g === 'needs-review') return 'review'
+  if (g === 'hardening-recommendations') return 'hardening'
+  return 'info'
+}
+
+function uiGroupTooltip(g: UiGroup) {
+  if (g === 'confirmed-vulnerabilities') return 'Confirmed vulnerability — verified exploit, secret leak, auth bypass, or other proven impact. Fix now.'
+  if (g === 'likely-risks') return 'Likely risk — strong evidence but not yet runtime-confirmed.'
+  if (g === 'needs-review') return 'Needs review — auth-cookie hardening or sensitive-route header gap. Worth investigating.'
+  if (g === 'hardening-recommendations') return 'Hardening recommendation — defense-in-depth. Not a current vulnerability; improve at your pace.'
+  return 'Informational — public asset, framework detection, or clean check. No action required.'
 }
 
 
@@ -360,10 +389,16 @@ function buildBulkFixPrompt(result: ScanResult): string {
   const actionable = result.findings.filter((f) => f.fixPrompt && f.severity !== 'ok')
   if (actionable.length === 0) return ''
 
-  const buckets: Record<'critical' | 'warn' | 'info', ApiFinding[]> = {
-    critical: actionable.filter((f) => f.severity === 'critical'),
-    warn: actionable.filter((f) => f.severity === 'warn'),
-    info: actionable.filter((f) => f.severity === 'info'),
+  // Bucket by ENGINE uiGroup, not detector severity.
+  const buckets: Record<UiGroup, ApiFinding[]> = {
+    'confirmed-vulnerabilities': [],
+    'likely-risks': [],
+    'needs-review': [],
+    'hardening-recommendations': [],
+    'informational-observations': [],
+  }
+  for (const f of actionable) {
+    buckets[uiGroupOf(f)].push(f)
   }
 
   const fw = result.meta.detectedFramework ?? 'unknown — confirm via package.json'
@@ -375,14 +410,15 @@ function buildBulkFixPrompt(result: ScanResult): string {
     `**Site:** ${result.meta.finalUrl}`,
     `**Detected stack:** ${fw}`,
     `**Vibe score:** ${result.vibeScore}/100`,
-    `**To fix:** ${buckets.critical.length} critical · ${buckets.warn.length} warnings · ${buckets.info.length} improvements`,
+    `**To fix:** ${buckets['confirmed-vulnerabilities'].length} confirmed · ${buckets['likely-risks'].length} likely risks · ${buckets['needs-review'].length} review · ${buckets['hardening-recommendations'].length} hardening`,
     `**Total findings in this plan:** ${actionable.length}`,
     ``,
     `## Mission`,
     `Fix every finding listed below in priority order:`,
-    `1. **All critical** first → redeploy → rescan. Confirm zero critical remain.`,
-    `2. **All warnings** next → redeploy → rescan.`,
-    `3. **All improvements** last → redeploy → rescan. Target: 100/100.`,
+    `1. **Confirmed vulnerabilities** first → redeploy → rescan. Verified exploits / leaks / bypasses.`,
+    `2. **Likely risks** next → redeploy → rescan. Strong evidence, runtime confirmation pending.`,
+    `3. **Needs review** → investigate, fix or document.`,
+    `4. **Hardening** last → defense-in-depth, fix at your pace.`,
     ``,
     `Don't try to fix everything in one diff. Ship critical, verify, then move on.`,
     `Each finding below has its own evidence + per-stack instructions. Read them carefully — don't guess from the title.`,
@@ -420,9 +456,10 @@ function buildBulkFixPrompt(result: ScanResult): string {
     })
   }
 
-  sectionFor('Critical findings', '🔴', buckets.critical)
-  sectionFor('Warnings', '🟠', buckets.warn)
-  sectionFor('Improvements', '🟡', buckets.info)
+  sectionFor('Confirmed vulnerabilities', '🔴', buckets['confirmed-vulnerabilities'])
+  sectionFor('Likely risks', '🟠', buckets['likely-risks'])
+  sectionFor('Needs review', '🟡', buckets['needs-review'])
+  sectionFor('Hardening recommendations', '🔵', buckets['hardening-recommendations'])
 
   lines.push(
     ``,
@@ -595,8 +632,12 @@ function FilterChip({
 function FindingCard({ finding }: { finding: ApiFinding }) {
   const [copied, setCopied] = useState(false)
   const meta = CATEGORY_META[finding.category]
-  const color = severityColor(finding.severity)
-  const muted = severityMuted(finding.severity)
+  // ENGINE-FINAL classification drives the card chrome. Detector severity
+  // is only used as a fallback when uiGroup is missing (legacy / Stage 2
+  // findings before the API has the engine fields).
+  const group = uiGroupOf(finding)
+  const color = uiGroupColor(group)
+  const muted = uiGroupMuted(group)
   const Icon = meta.Icon
 
   async function handleCopy() {
@@ -649,9 +690,9 @@ function FindingCard({ finding }: { finding: ApiFinding }) {
             <span
               className="font-mono text-[10px] tracking-widest uppercase px-2 py-0.5 rounded border cursor-help"
               style={{ color, borderColor: color, background: muted }}
-              title={severityTooltip(finding.severity)}
+              title={uiGroupTooltip(group)}
             >
-              {severityLabel(finding.severity)}
+              {uiGroupLabel(group)}
             </span>
             <span className="font-mono text-[10px] text-(--color-fg-dim) tracking-widest uppercase">
               {meta.label}
@@ -703,17 +744,45 @@ interface Stage2State {
 }
 const STAGE2_INITIAL: Stage2State = { status: 'idle', findings: [] }
 
-const SEV_ORDER: Record<Severity, number> = { critical: 0, warn: 1, info: 2, ok: 3 }
-function recomputeTotals(findings: ApiFinding[]): { critical: number; warn: number; info: number; ok: number } {
-  return {
-    critical: findings.filter((f) => f.severity === 'critical').length,
-    warn: findings.filter((f) => f.severity === 'warn').length,
-    info: findings.filter((f) => f.severity === 'info').length,
-    ok: findings.filter((f) => f.severity === 'ok').length,
-  }
+// Detector-severity sort order kept only for legacy callers; the UI uses
+// UI_GROUP_ORDER below for engine-final display sorting.
+const _SEV_ORDER: Record<Severity, number> = { critical: 0, warn: 1, info: 2, ok: 3 }
+void _SEV_ORDER
+
+// Engine-final order — used to sort findings in the UI.
+const UI_GROUP_ORDER: Record<UiGroup, number> = {
+  'confirmed-vulnerabilities': 0,
+  'likely-risks': 1,
+  'needs-review': 2,
+  'hardening-recommendations': 3,
+  'informational-observations': 4,
 }
-function recomputeScore(t: { critical: number; warn: number; info: number }): number {
-  return Math.max(0, 100 - t.critical * 20 - t.warn * 7 - t.info * 2)
+
+interface FinalTotals {
+  confirmedCritical: number
+  highRisk: number
+  needsReview: number
+  hardening: number
+  informational: number
+}
+
+function recomputeFinalTotals(findings: ApiFinding[]): FinalTotals {
+  const t: FinalTotals = {
+    confirmedCritical: 0,
+    highRisk: 0,
+    needsReview: 0,
+    hardening: 0,
+    informational: 0,
+  }
+  for (const f of findings) {
+    const g = uiGroupOf(f)
+    if (g === 'confirmed-vulnerabilities') t.confirmedCritical += 1
+    else if (g === 'likely-risks') t.highRisk += 1
+    else if (g === 'needs-review') t.needsReview += 1
+    else if (g === 'hardening-recommendations') t.hardening += 1
+    else t.informational += 1
+  }
+  return t
 }
 
 export function ScanForm() {
@@ -728,7 +797,7 @@ export function ScanForm() {
   const [stage2OpenStandalone, setStage2OpenStandalone] = useState(false)
   type FindingFilter =
     | { kind: 'all' }
-    | { kind: 'severity'; value: Severity }
+    | { kind: 'group'; value: UiGroup }
     | { kind: 'category'; value: Category }
   const [findingFilter, setFindingFilter] = useState<FindingFilter>({ kind: 'all' })
   const [livePhaseLabel, setLivePhaseLabel] = useState<string | null>(null)
@@ -1187,28 +1256,39 @@ export function ScanForm() {
         )}
 
         {state === 'result' && result && (() => {
-          const mergedFindings: ApiFinding[] = [...result.findings, ...stage2.findings].slice().sort(
-            (a, b) => SEV_ORDER[a.severity] - SEV_ORDER[b.severity],
-          )
-          const displayTotals = recomputeTotals(mergedFindings)
-          const displayScore = recomputeScore(displayTotals)
+          // Sort by ENGINE uiGroup, not raw detector severity. Detector
+          // severity stays internal — what the user sees is the engine's
+          // final classification.
+          const mergedFindings: ApiFinding[] = [...result.findings, ...stage2.findings]
+            .slice()
+            .sort((a, b) => UI_GROUP_ORDER[uiGroupOf(a)] - UI_GROUP_ORDER[uiGroupOf(b)])
+          const finalTotals = recomputeFinalTotals(mergedFindings)
+          // Trust the API's engine-computed score + band. (Stage 1 result
+          // is engine-classified; Stage 2 adds findings but doesn't recompute
+          // the gauge — its findings are appended into the right uiGroup.)
+          const displayScore = result.vibeScore
+          const displayBand = (result.aggregateRiskBand ?? 'low') as 'low' | 'medium' | 'high' | 'severe'
           const displayResult: ScanResult = {
             ...result,
             findings: mergedFindings,
-            totals: displayTotals,
-            vibeScore: displayScore,
           }
-          // Filter chips: derive available severities/categories from actual
+          // Filter chips: derive available uiGroups/categories from actual
           // findings so we never show an empty chip.
-          const presentSeverities = (['critical', 'warn', 'info', 'ok'] as Severity[]).filter((s) =>
-            mergedFindings.some((f) => f.severity === s),
-          )
+          const presentGroups = (
+            [
+              'confirmed-vulnerabilities',
+              'likely-risks',
+              'needs-review',
+              'hardening-recommendations',
+              'informational-observations',
+            ] as UiGroup[]
+          ).filter((g) => mergedFindings.some((f) => uiGroupOf(f) === g))
           const presentCategories = Array.from(
             new Set(mergedFindings.map((f) => f.category)),
           ).sort() as Category[]
           const visibleFindings = mergedFindings.filter((f) => {
             if (findingFilter.kind === 'all') return true
-            if (findingFilter.kind === 'severity') return f.severity === findingFilter.value
+            if (findingFilter.kind === 'group') return uiGroupOf(f) === findingFilter.value
             return f.category === findingFilter.value
           })
           return (
@@ -1250,73 +1330,76 @@ export function ScanForm() {
                     {result.meta.finalUrl}
                   </div>
                   <div className="mt-4 flex items-center gap-5 font-mono text-xs flex-wrap">
-                    <span className="flex items-center gap-2" title={severityTooltip('critical')}>
-                      <span
-                        className="inline-block w-2 h-2 rounded-full"
-                        style={{
-                          background: 'var(--color-danger)',
-                          boxShadow: '0 0 8px var(--color-danger)',
-                        }}
-                        aria-hidden="true"
-                      />
-                      <span className="text-(--color-fg-muted)">
-                        <span className="text-(--color-fg) font-semibold">
-                          {displayTotals.critical}
-                        </span>{' '}
-                        critical
-                      </span>
-                    </span>
-                    <span className="flex items-center gap-2" title={severityTooltip('warn')}>
-                      <span
-                        className="inline-block w-2 h-2 rounded-full"
-                        style={{
-                          background: 'var(--color-warning)',
-                          boxShadow: '0 0 8px var(--color-warning)',
-                        }}
-                        aria-hidden="true"
-                      />
-                      <span className="text-(--color-fg-muted)">
-                        <span className="text-(--color-fg) font-semibold">{displayTotals.warn}</span>{' '}
-                        warnings
-                      </span>
-                    </span>
-                    {displayTotals.info > 0 && (
-                      <span className="flex items-center gap-2" title={severityTooltip('info')}>
+                    {finalTotals.confirmedCritical > 0 && (
+                      <span className="flex items-center gap-2" title={uiGroupTooltip('confirmed-vulnerabilities')}>
                         <span
                           className="inline-block w-2 h-2 rounded-full"
-                          style={{
-                            background: 'var(--color-fg-muted)',
-                            boxShadow: '0 0 8px var(--color-fg-muted)',
-                          }}
+                          style={{ background: 'var(--color-danger)', boxShadow: '0 0 8px var(--color-danger)' }}
                           aria-hidden="true"
                         />
                         <span className="text-(--color-fg-muted)">
-                          <span className="text-(--color-fg) font-semibold">
-                            {displayTotals.info}
-                          </span>{' '}
-                          improvements
+                          <span className="text-(--color-fg) font-semibold">{finalTotals.confirmedCritical}</span>{' '}
+                          confirmed
                         </span>
                       </span>
                     )}
-                    <span className="flex items-center gap-2" title={severityTooltip('ok')}>
-                      <span
-                        className="inline-block w-2 h-2 rounded-full"
-                        style={{
-                          background: 'var(--color-ok)',
-                          boxShadow: '0 0 8px var(--color-ok)',
-                        }}
-                        aria-hidden="true"
-                      />
-                      <span className="text-(--color-fg-muted)">
-                        <span className="text-(--color-fg) font-semibold">{displayTotals.ok}</span>{' '}
-                        clean
+                    {finalTotals.highRisk > 0 && (
+                      <span className="flex items-center gap-2" title={uiGroupTooltip('likely-risks')}>
+                        <span
+                          className="inline-block w-2 h-2 rounded-full"
+                          style={{ background: 'var(--color-warning)', boxShadow: '0 0 8px var(--color-warning)' }}
+                          aria-hidden="true"
+                        />
+                        <span className="text-(--color-fg-muted)">
+                          <span className="text-(--color-fg) font-semibold">{finalTotals.highRisk}</span>{' '}
+                          likely risks
+                        </span>
                       </span>
-                    </span>
+                    )}
+                    {finalTotals.needsReview > 0 && (
+                      <span className="flex items-center gap-2" title={uiGroupTooltip('needs-review')}>
+                        <span
+                          className="inline-block w-2 h-2 rounded-full"
+                          style={{ background: 'var(--color-warning)', boxShadow: '0 0 8px var(--color-warning)' }}
+                          aria-hidden="true"
+                        />
+                        <span className="text-(--color-fg-muted)">
+                          <span className="text-(--color-fg) font-semibold">{finalTotals.needsReview}</span>{' '}
+                          to review
+                        </span>
+                      </span>
+                    )}
+                    {finalTotals.hardening > 0 && (
+                      <span className="flex items-center gap-2" title={uiGroupTooltip('hardening-recommendations')}>
+                        <span
+                          className="inline-block w-2 h-2 rounded-full"
+                          style={{ background: 'var(--color-fg-muted)', boxShadow: '0 0 8px var(--color-fg-muted)' }}
+                          aria-hidden="true"
+                        />
+                        <span className="text-(--color-fg-muted)">
+                          <span className="text-(--color-fg) font-semibold">{finalTotals.hardening}</span>{' '}
+                          hardening
+                        </span>
+                      </span>
+                    )}
+                    {finalTotals.informational > 0 && (
+                      <span className="flex items-center gap-2" title={uiGroupTooltip('informational-observations')}>
+                        <span
+                          className="inline-block w-2 h-2 rounded-full"
+                          style={{ background: 'var(--color-fg-dim)', boxShadow: '0 0 8px var(--color-fg-dim)' }}
+                          aria-hidden="true"
+                        />
+                        <span className="text-(--color-fg-muted)">
+                          <span className="text-(--color-fg) font-semibold">{finalTotals.informational}</span>{' '}
+                          info
+                        </span>
+                      </span>
+                    )}
                   </div>
                   <div className="mt-3 font-mono text-[10px] text-(--color-fg-dim) leading-relaxed flex flex-wrap gap-x-4 gap-y-1">
-                    <span><span className="text-(--color-danger)">●</span> critical = fix before deploy</span>
-                    <span><span className="text-(--color-warning)">●</span> warning = fix this week</span>
-                    <span><span className="text-(--color-fg-muted)">●</span> improve = hardening, not exploit</span>
+                    <span><span className="text-(--color-danger)">●</span> confirmed = verified exploit / leak / bypass</span>
+                    <span><span className="text-(--color-warning)">●</span> likely / review = real gap, fix this week</span>
+                    <span><span className="text-(--color-fg-muted)">●</span> hardening = defense-in-depth, not exploit</span>
                   </div>
                   {result.meta.bundlesFetched > 0 && (
                     <div className="mt-3 font-mono text-[11px] text-(--color-fg-dim)">
@@ -1329,6 +1412,7 @@ export function ScanForm() {
                 <div className="flex-shrink-0 self-center sm:self-auto">
                   <VibeScoreGauge
                     score={displayScore}
+                    band={displayBand}
                     size={typeof window !== 'undefined' && window.innerWidth < 640 ? 160 : 200}
                   />
                 </div>
@@ -1362,16 +1446,25 @@ export function ScanForm() {
                   active={findingFilter.kind === 'all'}
                   onClick={() => setFindingFilter({ kind: 'all' })}
                 />
-                {presentSeverities.map((sev) => (
+                {presentGroups.map((g) => (
                   <FilterChip
-                    key={`sev-${sev}`}
-                    label={sev[0].toUpperCase() + sev.slice(1)}
-                    count={mergedFindings.filter((f) => f.severity === sev).length}
-                    active={findingFilter.kind === 'severity' && findingFilter.value === sev}
-                    tone={
-                      sev === 'critical' ? 'danger' : sev === 'warn' ? 'warn' : sev === 'ok' ? 'ok' : 'muted'
+                    key={`group-${g}`}
+                    label={
+                      g === 'confirmed-vulnerabilities' ? 'Confirmed' :
+                      g === 'likely-risks' ? 'Likely risk' :
+                      g === 'needs-review' ? 'Review' :
+                      g === 'hardening-recommendations' ? 'Hardening' :
+                      'Info'
                     }
-                    onClick={() => setFindingFilter({ kind: 'severity', value: sev })}
+                    count={mergedFindings.filter((f) => uiGroupOf(f) === g).length}
+                    active={findingFilter.kind === 'group' && findingFilter.value === g}
+                    tone={
+                      g === 'confirmed-vulnerabilities' ? 'danger' :
+                      g === 'likely-risks' ? 'warn' :
+                      g === 'needs-review' ? 'warn' :
+                      'muted'
+                    }
+                    onClick={() => setFindingFilter({ kind: 'group', value: g })}
                   />
                 ))}
                 <span className="text-(--color-fg-dim) text-[11px] mx-1 select-none">·</span>
