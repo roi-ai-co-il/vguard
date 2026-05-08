@@ -59,10 +59,17 @@ export interface Finding {
   /** Confidence the finding is real and actionable. */
   confidence?: 'confirmed' | 'likely' | 'informational'
   /**
-   * Coarse UI section for grouped report rendering:
-   *   security-risks | hardening-improvements | informational.
+   * Coarse UI section for grouped report rendering. New 5-bucket model
+   * (2026-05-08 v2 strict-Critical-gate):
+   *   confirmed-vulnerabilities | likely-risks | needs-review |
+   *   hardening-recommendations | informational-observations
    */
-  uiGroup?: 'security-risks' | 'hardening-improvements' | 'informational'
+  uiGroup?:
+    | 'confirmed-vulnerabilities'
+    | 'likely-risks'
+    | 'needs-review'
+    | 'hardening-recommendations'
+    | 'informational-observations'
 }
 
 /**

@@ -1,30 +1,36 @@
 /**
- * Vguard — Dynamic risk-based scoring engine (2026-05-08).
+ * Vguard — Dynamic risk-based scoring engine.
  *
- * Replaces the static `scoreFromTotals` (-20/-7/-2 per finding) and the
- * per-id prefix-override table in `risk-scorer.ts`.
+ * 2026-05-08 v2: strict-Critical-gate rewrite.
  *
- * Design goals (per Royi's spec):
- *   1. No hardcoded per-finding weights. Every finding is classified by the
- *      *traits* we extract from it (id, category, evidence, description,
- *      severity, route context, stage). Adding a new detector never requires
- *      touching this file.
- *   2. Risk is a function of: exploitability, auth-impact, public exposure,
- *      sensitive-data leak, browser attack surface, runtime-confirmed,
- *      defense-in-depth-only, and real-world abuse likelihood.
- *   3. Runtime-confirmed (Stage 2/3) findings outweigh passive (Stage 1)
- *      hits at the same severity.
- *   4. Advanced hardening headers (COOP/COEP/CORP/Permissions-Policy) are
- *      low-impact unless paired with an exploit.
- *   5. CSP context-aware: a CSP with `'unsafe-inline'` is materially worse
- *      than a CSP that's just "missing some directives".
- *   6. Diminishing returns: 10 minor hardening misses cannot dwarf one
- *      true critical.
- *   7. Vibe score reflects realistic risk posture. A site with no real
- *      exploitable issues but missing some hardening headers should score
- *      80–95, not 30.
- *   8. Confidence levels: confirmed (active probe hit / runtime), likely
- *      (passive evidence), informational (defense-in-depth observation).
+ * Core principle: PASSIVE SIGNALS ARE NOT VERIFIED VULNERABILITIES.
+ *
+ * The previous engine treated CSP weakness, missing headers, cookies without
+ * Secure, DOM sinks, public 2xx APIs, frontend tokens, and visible admin login
+ * pages as `critical` and tanked the score. That punished enterprise sites
+ * (apple.com, amazon.com) for normal frontend architecture.
+ *
+ * The new model:
+ *  - A finding may be `critical-exploit` ONLY with verified impact:
+ *      verified exploit, sensitive data exposed, auth bypass confirmed, usable
+ *      server-side secret, confirmed SQLi error, confirmed reflected XSS in
+ *      unsafe context, public write/delete confirmed, .env/.git with REAL
+ *      sensitive content, weak TLS allowing real downgrade, expired cert.
+ *  - Everything else — CSP weakness, unsafe-inline, missing headers, cookies
+ *    without Secure on non-auth, DOM sinks without taint flow, public APIs
+ *    returning 2xx, public client identifiers, visible admin login forms,
+ *    source maps, robots.txt, COOP/COEP/CORP/Permissions-Policy — is
+ *    `hardening` or `informational`.
+ *
+ *  - Hard score caps when no verified impact:
+ *      vibeScore floor = 75
+ *      aggregateRiskBand cannot be `severe` or `high` (capped at `medium`)
+ *      Hardening-only total penalty: <= 10 pts
+ *      Informational-only total penalty: <= 1 pt
+ *      Cookie/header/CSP-only total penalty: <= 15 pts
+ *
+ *  - Detectors are not removed. Every detection still fires. We only change
+ *    classification, severity, risk class, score impact, caps, and UI grouping.
  *
  * Pure module — no I/O, browser-safe.
  */
@@ -46,41 +52,64 @@ export type Confidence = 'confirmed' | 'likely' | 'informational'
 
 export type RouteContext = 'sensitive' | 'public' | 'unknown'
 
+/**
+ * Coarse UI section. Five buckets so the report can clearly separate
+ * "fix now" from "tighten when you have time" from "FYI".
+ */
+export type UiGroup =
+  | 'confirmed-vulnerabilities'
+  | 'likely-risks'
+  | 'needs-review'
+  | 'hardening-recommendations'
+  | 'informational-observations'
+
 export interface ScoringContext {
   routeContext: RouteContext
-  /** True when CSP is present but contains `'unsafe-inline'` / `'unsafe-eval'`. */
   cspHasUnsafe?: boolean
-  /** True when the site is HTTPS at all (plain HTTP escalates everything). */
+  /** True when the site is HTTPS (plain HTTP escalates everything). */
   httpsActive: boolean
   /** Stage of the scan that produced these findings. Stage 2/3 raise confidence. */
   stage: 1 | 2 | 3
 }
 
 export interface FindingTraits {
-  /** Active probe hit OR runtime-observed (e.g. SQLi error, reflected XSS, RLS leak). */
+  /** Active probe hit OR runtime-observed. */
   exploitable: boolean
-  /** Leaks credentials, tokens, or sensitive data once obtained. */
-  secretLeak: boolean
+  /** Looks like a credential/token pattern (NOT auto-meaning "leak"). */
+  secretPattern: boolean
   /** Affects auth/authorization/RLS/admin surface. */
   authImpact: boolean
-  /** Sits on a publicly reachable URL (no creds required to hit). */
+  /** Sits on a publicly reachable URL. */
   publicExposure: boolean
-  /** Could leak PII, financial data, or session state. */
+  /** Could leak PII/financial/session state once exploited. */
   sensitiveData: boolean
   /** Increases browser-side attack surface (XSS, clickjack, mixed content). */
   browserSurface: boolean
-  /** Confirmed at runtime in Stage 2/3 (vs inferred from passive scan). */
+  /** Confirmed at runtime in Stage 2/3. */
   runtimeConfirmed: boolean
-  /** Pure defense-in-depth — no exploit alone, only hurts when paired with one. */
+  /** Pure defense-in-depth — no exploit alone. */
   defenseInDepthOnly: boolean
   /** A CSP/header *misconfiguration* (e.g. unsafe-inline) rather than absence. */
   configurationFlaw: boolean
-  /** Evidence indicates a high real-world abuse rate (env files, .git, source maps). */
+  /** Real-world abuse rate is high (env files, .git, source maps with code). */
   highAbuseLikelihood: boolean
+  /**
+   * STRICT GATE for `critical-exploit`. True only when there's *verified*
+   * impact: exploit confirmed, sensitive data observed in evidence, auth
+   * bypass demonstrated, usable server-side secret detected, etc.
+   */
+  verifiedImpact: boolean
+  /**
+   * The finding represents a known-public asset (client ID, public API key,
+   * public 2xx endpoint, login page, robots.txt, sitemap). Demotes to info.
+   */
+  knownPublicAsset: boolean
+  /** Cookie context: is it actually an auth/session cookie? */
+  authCookie: boolean
 }
 
 // ---------------------------------------------------------------------------
-// Trait extraction — pattern-driven, not a finding-by-finding table
+// Helpers
 // ---------------------------------------------------------------------------
 
 const ID = (s: string, ...ps: string[]) => ps.some((p) => s.startsWith(p) || s.includes(p))
@@ -102,6 +131,52 @@ function isAdvancedHardeningHeader(id: string, evidence: string, description: st
   return ADVANCED_HARDENING_TOKENS.some((t) => hay.includes(t))
 }
 
+const SENSITIVE_BODY_PATTERNS = [
+  /-----BEGIN [A-Z ]+ PRIVATE KEY-----/i,
+  /\bDB_PASSWORD\b|\bDATABASE_URL\b|\bSECRET_KEY\b|\bAPI_KEY\b/,
+  /\b(?:ssn|credit_card|card_number|iban|cvv|cvc)\b/i,
+  /\bpassword\s*[:=]/i,
+  /\bauthorization\s*:\s*bearer\b/i,
+]
+
+function evidenceLooksSensitive(evidence: string): boolean {
+  if (!evidence) return false
+  return SENSITIVE_BODY_PATTERNS.some((re) => re.test(evidence))
+}
+
+const PUBLIC_CLIENT_ID_TOKENS = [
+  'client_id',
+  'clientid',
+  'public_key',
+  'publishable_key',
+  'pk_live_',
+  'pk_test_',
+  'next_public_',
+  'vite_',
+  'react_app_',
+  'expo_public_',
+  'analytics',
+  'gtag',
+  'gtm',
+  'mapbox',
+  'google_maps_api',
+  'sentry_dsn',
+  'recaptcha_site_key',
+  'turnstile_site_key',
+  'hcaptcha_site_key',
+  'firebase_api_key', // public web SDK key — NOT a secret
+  'supabase_anon_key',
+]
+
+function looksLikePublicClientIdentifier(id: string, evidence: string, description: string): boolean {
+  const hay = `${id} ${evidence} ${description}`.toLowerCase()
+  return PUBLIC_CLIENT_ID_TOKENS.some((t) => hay.includes(t))
+}
+
+// ---------------------------------------------------------------------------
+// Trait extraction — pattern-driven
+// ---------------------------------------------------------------------------
+
 export function extractTraits(finding: Finding, ctx: ScoringContext): FindingTraits {
   const id = finding.id || ''
   const cat = finding.category
@@ -113,16 +188,30 @@ export function extractTraits(finding: Finding, ctx: ScoringContext): FindingTra
   const isStage3 = id.startsWith('stage3-') || id.startsWith('deep-')
   const runtimeConfirmed = isStage2 || isStage3 || ctx.stage > 1
 
-  const exploitable =
-    ID(id, 'paths-xss', 'paths-sqli', 'paths-open-redirect', 'paths-traversal', 'paths-ssrf') ||
-    ID(id, 'auth-signup-supabase-open', 'rls-anon-select', 'auth-idor') ||
-    ID(id, 'paths-firebase-rtdb-root', 'paths-supabase-storage-public', 'paths-s3-listbucket') ||
-    cat === 'auth-disclosure'
+  // Active-probe hits ARE exploitable evidence.
+  const activeProbeHit = ID(id, 'paths-xss-reflected', 'paths-sqli', 'paths-open-redirect', 'paths-traversal', 'paths-ssrf')
+  const exploitable = activeProbeHit || (runtimeConfirmed && (cat === 'auth-disclosure' || ID(id, 'rls-anon-select', 'auth-idor')))
 
-  const secretLeak =
+  // Pattern-only — does NOT mean "leak". Frontend public client IDs match
+  // many of these patterns (Firebase web SDK key, Supabase anon JWT, Stripe pk_*).
+  const secretPattern =
     cat === 'secrets' ||
     ID(id, 'paths-env', 'paths-git', 'paths-aws-credentials', 'paths-database-sql', 'paths-backup', 'sourcemaps-exposed') ||
     ID(id, 'stage2-localstorage-auth-tokens')
+
+  // Public client identifiers / publishable keys — these LOOK like secrets
+  // but are intended to ship to the browser.
+  const knownPublicClientId = looksLikePublicClientIdentifier(id, ev, desc)
+  // A "known-public asset" is anything the user can already hit on the public
+  // web by design: robots/sitemap, login page, public swagger, public 2xx APIs,
+  // or a client identifier that is publishable by spec.
+  const knownPublicAsset =
+    knownPublicClientId ||
+    ID(id, 'paths-robots', 'paths-sitemap', 'paths-swagger', 'paths-openapi', 'paths-api-docs', 'paths-graphql', 'paths-status', 'paths-well-known') ||
+    // visible admin login page (200/302 to login, no admin content seen)
+    ID(id, 'paths-admin-login-visible') ||
+    // first-party API returned 2xx but no sensitive content was extracted
+    ID(id, 'stage2-public-api-2xx', 'paths-api-public-2xx')
 
   const authImpact =
     cat === 'auth' ||
@@ -131,15 +220,18 @@ export function extractTraits(finding: Finding, ctx: ScoringContext): FindingTra
     cat === 'auth-disclosure' ||
     ID(id, 'auth-', 'rls-', 'idor-', 'jwt-')
 
-  const publicExposure =
-    // anything we found on the public web by default is publicly exposed
-    cat !== 'meta' && finding.severity !== 'ok'
+  const publicExposure = cat !== 'meta' && finding.severity !== 'ok'
+
+  // Auth-named cookies only — analytics/preference cookies don't count.
+  const authCookie =
+    /(\b|_)(sess|session|auth|token|jwt|sid|csrf|xsrf|access_token|refresh_token)\b/i.test(ev) ||
+    /(\b|_)(sess|session|auth|token|jwt|sid|csrf|xsrf|access_token|refresh_token)\b/i.test(desc)
 
   const sensitiveData =
-    secretLeak ||
-    ID(id, 'cookies-not-httponly', 'cookies-no-secure', 'cookies-no-samesite') ||
-    ID(id, 'stage2-cookie-not-httponly', 'stage2-localstorage-auth-tokens') ||
-    ID(id, 'paths-firebase-rtdb', 'paths-supabase-storage', 'paths-s3-list', 'paths-backup')
+    (secretPattern && !knownPublicClientId) ||
+    (cat === 'cookies' && authCookie) ||
+    ID(id, 'paths-firebase-rtdb-root') ||
+    ID(id, 'paths-supabase-storage-public-list', 'paths-s3-list')
 
   const browserSurface =
     cat === 'headers' ||
@@ -148,22 +240,24 @@ export function extractTraits(finding: Finding, ctx: ScoringContext): FindingTra
     cat === 'html' ||
     ID(id, 'paths-xss', 'cookies-')
 
-  // Defense-in-depth-only:
-  //  - advanced hardening headers (COOP/COEP/CORP/Permissions-Policy/Referrer-Policy)
-  //  - DNS hardening that doesn't cause exploits alone (DNSSEC, CAA)
-  //  - DMARC monitor-only, SPF soft-fail
-  //  - X-Content-Type-Options absent (nosniff)
-  //  - HSTS missing on HTTPS site (downgrade is the exploit, not the absence)
   const defenseInDepthOnly =
     !exploitable &&
-    !secretLeak &&
+    !sensitiveData &&
     sev !== 'critical' &&
     (
       isAdvancedHardeningHeader(id, ev, desc) ||
-      ID(id, 'headers-no-x-content-type', 'headers-no-hsts', 'headers-no-x-frame-options') ||
+      // Per the new strict policy, a missing X-Frame-Options/HSTS/CSP/etc on
+      // a non-auth surface is hardening, not exploit.
+      ID(id, 'headers-no-x-content-type', 'headers-no-hsts', 'headers-no-x-frame-options',
+            'headers-csp-missing', 'headers-csp-weak', 'headers-csp-unsafe-inline',
+            'headers-csp-unsafe-eval', 'headers-csp-wildcard',
+            'headers-csp-no-base-uri', 'headers-csp-no-frame-ancestors', 'headers-csp-no-form-action') ||
+      ID(id, 'cookies-no-secure', 'cookies-no-samesite') ||
+      ID(id, 'dom-sink-innerhtml', 'dom-sink-outerhtml', 'dom-sink-insertadjacent', 'dom-sink-document-write') ||
       ID(id, 'dns-no-caa', 'dns-no-dnssec') ||
       ID(id, 'email-dmarc-monitor', 'email-spf-softfail') ||
-      ID(id, 'integrity-no-sri', 'meta-')
+      ID(id, 'integrity-no-sri') ||
+      ID(id, 'meta-')
     )
 
   const configurationFlaw =
@@ -174,12 +268,37 @@ export function extractTraits(finding: Finding, ctx: ScoringContext): FindingTra
 
   const highAbuseLikelihood =
     ID(id, 'paths-env', 'paths-git', 'paths-aws-credentials', 'sourcemaps-exposed') ||
-    ID(id, 'secrets-stripe', 'secrets-aws', 'secrets-supabase-service-role', 'secrets-anthropic', 'secrets-openai') ||
-    ID(id, 'paths-xss', 'paths-sqli')
+    ID(id, 'secrets-stripe-secret', 'secrets-aws', 'secrets-supabase-service-role', 'secrets-anthropic', 'secrets-openai') ||
+    ID(id, 'paths-xss-reflected', 'paths-sqli')
+
+  // -------------------------------------------------------------------------
+  // STRICT VERIFIED-IMPACT GATE — the only way a finding becomes critical.
+  // -------------------------------------------------------------------------
+
+  const verifiedImpact =
+    // Active probe with confirmed reflection / error
+    activeProbeHit ||
+    // Server-side secret CONFIRMED usable (Supabase service role JWT, Stripe sk_live_, AWS, Anthropic/OpenAI/GitHub) AND not a client identifier
+    (secretPattern && highAbuseLikelihood && !knownPublicClientId) ||
+    // .env / .git / backup file with sensitive content (not just empty 200)
+    ((ID(id, 'paths-env', 'paths-git', 'paths-backup', 'paths-aws-credentials')) && evidenceLooksSensitive(ev)) ||
+    // Plain-HTTP traffic on what should be HTTPS (real downgrade surface)
+    (!ctx.httpsActive && cat === 'tls' && publicExposure) ||
+    // TLS broken in a way that allows real downgrade (expired, weak version <1.2)
+    ID(id, 'tls-cert-expired', 'tls-old-version', 'tls-weak-cipher-real') ||
+    // Stage 3 confirmations
+    ID(id, 'stage3-rls-broken', 'stage3-storage-public-write', 'stage3-admin-unauth-data',
+          'stage3-mass-assignment', 'stage3-idor', 'stage3-path-traversal') ||
+    // Auth bypass confirmed at runtime
+    (authImpact && runtimeConfirmed && ID(id, 'auth-bypass-confirmed', 'rls-anon-select')) ||
+    // Subdomain takeover ready (NXDOMAIN target)
+    ID(id, 'dns-subdomain-takeover-ready') ||
+    // Mixed content with sensitive form action (POST creds over HTTP)
+    (cat === 'mixed-content' && ID(id, 'mixed-content-form-credentials'))
 
   return {
     exploitable,
-    secretLeak,
+    secretPattern,
     authImpact,
     publicExposure,
     sensitiveData,
@@ -188,11 +307,14 @@ export function extractTraits(finding: Finding, ctx: ScoringContext): FindingTra
     defenseInDepthOnly,
     configurationFlaw,
     highAbuseLikelihood,
+    verifiedImpact,
+    knownPublicAsset,
+    authCookie,
   }
 }
 
 // ---------------------------------------------------------------------------
-// Classification → risk class + confidence
+// Classification
 // ---------------------------------------------------------------------------
 
 export function classifyRiskClass(
@@ -202,32 +324,42 @@ export function classifyRiskClass(
 ): RiskClass {
   if (finding.severity === 'ok') return 'informational'
 
-  // Critical-exploit: confirmed exploit OR live secret OR plain-HTTP traffic.
-  if (
-    (traits.exploitable && (traits.runtimeConfirmed || traits.highAbuseLikelihood)) ||
-    (traits.secretLeak && traits.highAbuseLikelihood) ||
-    (!ctx.httpsActive && traits.publicExposure && finding.category === 'tls')
-  ) {
+  // Known-public assets are always informational regardless of declared severity.
+  if (traits.knownPublicAsset && !traits.verifiedImpact) {
+    return 'informational'
+  }
+
+  // STRICT GATE: critical-exploit requires verifiedImpact.
+  if (traits.verifiedImpact) {
     return 'critical-exploit'
   }
 
-  // High-impact-misconfig: auth/RLS/secrets/sensitive-data leaks discovered
-  // passively, plus serious config flaws like CSP with unsafe-inline.
+  // High-impact-misconfig — only on real impact signals, not configFlaw alone.
   if (
-    traits.secretLeak ||
-    (traits.authImpact && finding.severity !== 'info') ||
-    (traits.configurationFlaw && traits.browserSurface) ||
-    traits.exploitable
+    traits.runtimeConfirmed &&
+    (traits.exploitable || traits.sensitiveData || (traits.authImpact && finding.severity !== 'info'))
   ) {
     return 'high-impact-misconfig'
   }
 
-  // Defense-in-depth-only → low-hardening regardless of declared severity.
+  // Medium-weakness — defense-in-depth on truly sensitive surface, OR auth-cookie hardening.
   if (traits.defenseInDepthOnly) {
-    return ctx.routeContext === 'sensitive' ? 'medium-weakness' : 'low-hardening'
+    if (ctx.routeContext === 'sensitive' && traits.browserSurface) return 'medium-weakness'
+    if (finding.category === 'cookies' && traits.authCookie) return 'medium-weakness'
+    return 'low-hardening'
   }
 
-  // Medium: real weaknesses (missing headers on auth surface, weak TLS, etc.)
+  // Auth-impact passive (no runtime) — at most medium.
+  if (traits.authImpact && finding.severity !== 'info') {
+    return 'medium-weakness'
+  }
+
+  // Configuration flaws on browser surface (CSP unsafe-inline etc) without
+  // verified exploit path — capped at low-hardening per the new policy.
+  if (traits.configurationFlaw && traits.browserSurface) {
+    return 'low-hardening'
+  }
+
   if (finding.severity === 'critical' || finding.severity === 'warn') {
     return 'medium-weakness'
   }
@@ -240,11 +372,22 @@ export function classifyConfidence(
   traits: FindingTraits,
 ): Confidence {
   if (finding.severity === 'ok') return 'informational'
+  if (traits.verifiedImpact) return 'confirmed'
   if (traits.runtimeConfirmed) return 'confirmed'
-  if (traits.exploitable && traits.highAbuseLikelihood) return 'confirmed'
+  if (traits.knownPublicAsset) return 'informational'
   if (traits.defenseInDepthOnly) return 'informational'
   if (finding.severity === 'info') return 'informational'
   return 'likely'
+}
+
+export function uiGroupFor(finding: Finding, riskClass: RiskClass, traits: FindingTraits): UiGroup {
+  if (finding.severity === 'ok') return 'informational-observations'
+  if (traits.verifiedImpact) return 'confirmed-vulnerabilities'
+  if (riskClass === 'critical-exploit') return 'confirmed-vulnerabilities' // shouldn't happen given gate, but safe
+  if (riskClass === 'high-impact-misconfig') return 'likely-risks'
+  if (riskClass === 'medium-weakness') return 'needs-review'
+  if (riskClass === 'low-hardening') return 'hardening-recommendations'
+  return 'informational-observations'
 }
 
 // ---------------------------------------------------------------------------
@@ -253,10 +396,10 @@ export function classifyConfidence(
 
 const CLASS_BASE: Record<RiskClass, number> = {
   'critical-exploit': 9.0,
-  'high-impact-misconfig': 7.0,
-  'medium-weakness': 4.5,
-  'low-hardening': 1.5,
-  informational: 0.5,
+  'high-impact-misconfig': 6.0,
+  'medium-weakness': 3.5,
+  'low-hardening': 1.2,
+  informational: 0.4,
 }
 
 const CONFIDENCE_MULTIPLIER: Record<Confidence, number> = {
@@ -275,39 +418,27 @@ export function computeFindingRisk(
   if (finding.severity === 'ok') return 0
   let raw = CLASS_BASE[riskClass] * CONFIDENCE_MULTIPLIER[confidence]
 
-  // Trait amplifiers (each small; large effects come from class, not stacking)
-  if (traits.runtimeConfirmed) raw += 0.6
-  if (traits.highAbuseLikelihood) raw += 0.4
-  if (traits.configurationFlaw && traits.browserSurface) raw += 0.5
-  if (traits.authImpact && ctx.routeContext === 'sensitive') raw += 0.5
-  if (traits.sensitiveData && ctx.routeContext === 'sensitive') raw += 0.3
-  // Damping: pure defense-in-depth on a marketing page is genuinely low-impact
+  if (traits.runtimeConfirmed && traits.verifiedImpact) raw += 0.6
+  if (traits.highAbuseLikelihood && traits.verifiedImpact) raw += 0.4
+  if (traits.authImpact && ctx.routeContext === 'sensitive') raw += 0.3
+  if (traits.sensitiveData && ctx.routeContext === 'sensitive') raw += 0.2
   if (traits.defenseInDepthOnly && ctx.routeContext === 'public') raw -= 0.5
 
   return Math.round(Math.max(0, Math.min(10, raw)) * 10) / 10
 }
 
 // ---------------------------------------------------------------------------
-// Aggregate vibe score (0–100, higher is better) — diminishing returns
+// Aggregate vibe score — diminishing returns + STRICT CAPS
 // ---------------------------------------------------------------------------
 
 const CLASS_DAMAGE: Record<RiskClass, number> = {
-  'critical-exploit': 35,
-  'high-impact-misconfig': 18,
-  'medium-weakness': 6,
-  'low-hardening': 1.5,
-  informational: 0.2,
+  'critical-exploit': 30,
+  'high-impact-misconfig': 12,
+  'medium-weakness': 4,
+  'low-hardening': 1.0,
+  informational: 0.15,
 }
 
-/**
- * Diminishing-returns aggregator. Sort penalties descending, apply each at
- * a decaying weight (1.0, 0.55, 0.35, 0.22, 0.14, …). The first hit lands
- * full-strength; each subsequent finding contributes less.
- *
- * Why: 10 missing-COOP findings shouldn't drown out 1 leaked Stripe key.
- * The decay also means a wall of low-hardening misses tops out around
- * ~5 points off the score — realistic for "site is fine, just not hardened".
- */
 function diminishingSum(penalties: number[]): number {
   const sorted = [...penalties].sort((a, b) => b - a)
   let total = 0
@@ -319,21 +450,28 @@ function diminishingSum(penalties: number[]): number {
   return total
 }
 
+export function bandForRiskScore(score: number): NonNullable<Finding['riskBand']> {
+  if (score >= 8) return 'severe'
+  if (score >= 6) return 'high'
+  if (score >= 3) return 'medium'
+  return 'low'
+}
+
 export interface ScoredFinding {
   finding: Finding
   traits: FindingTraits
   riskClass: RiskClass
   confidence: Confidence
   riskScore: number
-  /** The damage this finding contributed to the vibe-score subtraction. */
   scoreImpact: number
 }
 
 export interface EngineOutput {
   vibeScore: number
   scored: ScoredFinding[]
-  /** Counts grouped by the new risk classes (not by old severity). */
   groupCounts: Record<RiskClass, number>
+  /** True iff at least one finding has verifiedImpact — drives caps. */
+  hasVerifiedImpact: boolean
 }
 
 export function runScoringEngine(findings: Finding[], ctx: ScoringContext): EngineOutput {
@@ -342,7 +480,6 @@ export function runScoringEngine(findings: Finding[], ctx: ScoringContext): Engi
     const riskClass = classifyRiskClass(f, traits, ctx)
     const confidence = classifyConfidence(f, traits)
     const riskScore = computeFindingRisk(f, traits, riskClass, confidence, ctx)
-    // Score impact uses class-damage scaled by confidence and risk.
     const baseDamage = CLASS_DAMAGE[riskClass]
     const impact =
       f.severity === 'ok'
@@ -351,8 +488,6 @@ export function runScoringEngine(findings: Finding[], ctx: ScoringContext): Engi
     return { finding: f, traits, riskClass, confidence, riskScore, scoreImpact: impact }
   })
 
-  // Per-class diminishing returns: each class deducts independently so a
-  // single critical-exploit always outweighs a swarm of low-hardening misses.
   const byClass: Record<RiskClass, number[]> = {
     'critical-exploit': [],
     'high-impact-misconfig': [],
@@ -364,14 +499,35 @@ export function runScoringEngine(findings: Finding[], ctx: ScoringContext): Engi
     if (s.finding.severity !== 'ok') byClass[s.riskClass].push(s.scoreImpact)
   }
 
-  const totalPenalty =
-    diminishingSum(byClass['critical-exploit']) +
-    diminishingSum(byClass['high-impact-misconfig']) +
-    diminishingSum(byClass['medium-weakness']) +
-    diminishingSum(byClass['low-hardening']) +
-    diminishingSum(byClass.informational)
+  const criticalSum = diminishingSum(byClass['critical-exploit'])
+  const highSum = diminishingSum(byClass['high-impact-misconfig'])
+  const mediumSum = diminishingSum(byClass['medium-weakness'])
 
-  const vibeScore = Math.max(0, Math.min(100, Math.round(100 - totalPenalty)))
+  // STRICT CAPS (per spec):
+  //   Hardening-only total  <= 10
+  //   Informational total   <= 1
+  //   Cookie/header/CSP-only total <= 15
+  const hardeningSumRaw = diminishingSum(byClass['low-hardening'])
+  const hardeningSum = Math.min(hardeningSumRaw, 10)
+  const informationalSumRaw = diminishingSum(byClass.informational)
+  const informationalSum = Math.min(informationalSumRaw, 1)
+
+  // The "cookie/header/CSP-only" cap applies to medium+low+info findings whose
+  // category is purely browser-side hardening (no real exploit). Compute over
+  // the medium-weakness pool when no verified impact exists.
+  let bcSum = mediumSum + hardeningSum + informationalSum
+  const hasVerifiedImpact = scored.some((s) => s.traits.verifiedImpact)
+  if (!hasVerifiedImpact) {
+    bcSum = Math.min(bcSum, 15)
+  }
+
+  const totalPenaltyRaw = criticalSum + highSum + (hasVerifiedImpact ? mediumSum + hardeningSum + informationalSum : bcSum)
+  let vibeScore = Math.max(0, Math.min(100, Math.round(100 - totalPenaltyRaw)))
+
+  // FLOOR: when there is no verified impact, score cannot go below 75.
+  if (!hasVerifiedImpact) {
+    vibeScore = Math.max(vibeScore, 75)
+  }
 
   const groupCounts: Record<RiskClass, number> = {
     'critical-exploit': byClass['critical-exploit'].length,
@@ -381,34 +537,12 @@ export function runScoringEngine(findings: Finding[], ctx: ScoringContext): Engi
     informational: byClass.informational.length,
   }
 
-  return { vibeScore, scored, groupCounts }
+  return { vibeScore, scored, groupCounts, hasVerifiedImpact }
 }
 
 // ---------------------------------------------------------------------------
-// Severity → riskBand mapping (kept stable for existing UI)
+// Apply
 // ---------------------------------------------------------------------------
-
-export function bandForRiskScore(score: number): NonNullable<Finding['riskBand']> {
-  if (score >= 8) return 'severe'
-  if (score >= 6) return 'high'
-  if (score >= 3) return 'medium'
-  return 'low'
-}
-
-/**
- * Apply engine results onto the original findings array (returns a fresh
- * array). Sets `riskScore` + `riskBand` and adds the new fields if the
- * Finding interface gains them later. Also returns a high-level group
- * for UI grouping (Security Risks / Hardening Improvements / Informational).
- */
-export type UiGroup = 'security-risks' | 'hardening-improvements' | 'informational'
-
-export function uiGroupFor(rc: RiskClass, sev: Severity): UiGroup {
-  if (sev === 'ok') return 'informational'
-  if (rc === 'critical-exploit' || rc === 'high-impact-misconfig') return 'security-risks'
-  if (rc === 'medium-weakness' || rc === 'low-hardening') return 'hardening-improvements'
-  return 'informational'
-}
 
 export interface EnrichedFinding extends Finding {
   riskClass?: RiskClass
@@ -416,20 +550,44 @@ export interface EnrichedFinding extends Finding {
   uiGroup?: UiGroup
 }
 
-export function applyEngine(
-  findings: Finding[],
-  ctx: ScoringContext,
-): { vibeScore: number; findings: EnrichedFinding[]; groupCounts: Record<RiskClass, number> } {
-  const { vibeScore, scored, groupCounts } = runScoringEngine(findings, ctx)
+export interface ApplyResult {
+  vibeScore: number
+  findings: EnrichedFinding[]
+  groupCounts: Record<RiskClass, number>
+  hasVerifiedImpact: boolean
+  /**
+   * Aggregate band — clamped to <= medium when there's no verified impact.
+   * "low" = 0–14, "medium" = 15–35, "high" = 36–60, "severe" = 61+.
+   */
+  aggregateBand: 'low' | 'medium' | 'high' | 'severe'
+}
+
+export function applyEngine(findings: Finding[], ctx: ScoringContext): ApplyResult {
+  const { vibeScore, scored, groupCounts, hasVerifiedImpact } = runScoringEngine(findings, ctx)
+
   const enriched: EnrichedFinding[] = scored.map((s) => ({
     ...s.finding,
     riskScore: s.riskScore,
     riskBand: bandForRiskScore(s.riskScore),
     riskClass: s.riskClass,
     confidence: s.confidence,
-    uiGroup: uiGroupFor(s.riskClass, s.finding.severity),
+    uiGroup: uiGroupFor(s.finding, s.riskClass, s.traits),
   }))
-  return { vibeScore, findings: enriched, groupCounts }
+
+  // Aggregate band reads off the inverse of vibeScore but clamps to medium
+  // when there's no verified impact (per spec).
+  const inverted = 100 - vibeScore
+  let aggregateBand: ApplyResult['aggregateBand']
+  if (inverted >= 61) aggregateBand = 'severe'
+  else if (inverted >= 36) aggregateBand = 'high'
+  else if (inverted >= 15) aggregateBand = 'medium'
+  else aggregateBand = 'low'
+
+  if (!hasVerifiedImpact && (aggregateBand === 'severe' || aggregateBand === 'high')) {
+    aggregateBand = 'medium'
+  }
+
+  return { vibeScore, findings: enriched, groupCounts, hasVerifiedImpact, aggregateBand }
 }
 
 // Helper for callers that don't want to touch ScoringContext directly.
@@ -439,7 +597,6 @@ export function defaultContext(opts: {
   cspHasUnsafe?: boolean
   stage?: 1 | 2 | 3
 }): ScoringContext {
-  // Lightweight route classifier (kept here so engine has zero runtime deps).
   const p = (opts.pathname || '/').toLowerCase()
   const sensitive =
     /\/(?:admin|login|signin|sign-in|signup|register|account|profile|settings|billing|payments?|checkout|cart|order|invoice|subscription|pay|wallet|kyc|verify|verification|onboarding|reset|forgot|password|2fa|mfa|otp|auth|oauth|sso|api\/auth|api\/admin|api\/internal|dashboard|backoffice|cms|wp-admin)\b/i.test(p)
