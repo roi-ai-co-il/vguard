@@ -505,6 +505,8 @@ export default function App() {
             <a href="/terms" className="hover:text-(--color-fg-muted) transition-colors">Terms</a>
             <a href="/privacy" className="hover:text-(--color-fg-muted) transition-colors">Privacy</a>
             <a href="/accessibility" className="hover:text-(--color-fg-muted) transition-colors">Accessibility</a>
+            <span className="opacity-40">·</span>
+            <a href="https://roiai.co.il" target="_blank" rel="noopener noreferrer" className="hover:text-(--color-accent) transition-colors text-(--color-accent)/70">Built by ROI AI</a>
           </div>
         </div>
       </footer>
