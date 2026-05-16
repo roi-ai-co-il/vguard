@@ -314,3 +314,117 @@ describe('UI grouping', () => {
     assert.notEqual(csp!.uiGroup, 'confirmed-vulnerabilities')
   })
 })
+
+// ----------------------------------------------------------------------------
+// Final-spec regression tests (4 canonical scenarios from the rebuild brief)
+// ----------------------------------------------------------------------------
+
+describe('final-spec regressions — calm for noise, strict for real risk, honest for weak posture', () => {
+  it('SCENARIO 1 — apple-like enterprise frontend: no Critical, low band, score 85+', () => {
+    const findings: Finding[] = [
+      f({ id: 'headers-csp-weak-script-src', severity: 'critical', category: 'headers',
+          evidence: "script-src 'self' 'unsafe-inline'" }),
+      f({ id: 'headers-csp-no-frame-ancestors', severity: 'warn', category: 'headers' }),
+      f({ id: 'paths-api-public-2xx', severity: 'warn', category: 'paths',
+          evidence: 'GET /api/locale 200 OK' }),
+      f({ id: 'paths-api-public-2xx', severity: 'warn', category: 'paths',
+          evidence: 'GET /api/nav 200 OK' }),
+      f({ id: 'dom-sink-innerhtml', severity: 'warn', category: 'html' }),
+      f({ id: 'cookies-no-secure', severity: 'warn', category: 'cookies',
+          evidence: 'analytics_id=abc; preferences=dark' }),
+      f({ id: 'secrets-google-maps-api', severity: 'critical', category: 'secrets',
+          evidence: 'google_maps_api_key=AIzaSy...public' }),
+      f({ id: 'secrets-firebase-api-key', severity: 'critical', category: 'secrets',
+          evidence: 'firebase_api_key=AIzaSy...public' }),
+      f({ id: 'paths-admin-login-visible', severity: 'critical', category: 'paths',
+          evidence: '/account/sign-in -> 200 login form' }),
+      f({ id: 'headers-cross-origin-opener-policy', severity: 'info', category: 'headers' }),
+      f({ id: 'paths-robots', severity: 'info', category: 'paths' }),
+    ]
+    const out = applyEngine(findings, baseCtx)
+    const criticalCount = out.findings.filter((x) => x.riskClass === 'critical-exploit').length
+    assert.equal(criticalCount, 0, `expected 0 Critical, got ${criticalCount}`)
+    assert.ok(out.vibeScore >= 85, `expected >= 85, got ${out.vibeScore}`)
+    assert.equal(out.aggregateBand, 'low')
+    assert.equal(out.hasVerifiedImpact, false)
+  })
+
+  it('SCENARIO 2 — clean simple site: 90+', () => {
+    const findings: Finding[] = [
+      f({ id: 'tls-active', severity: 'ok', category: 'tls', evidence: 'TLSv1.3' }),
+      f({ id: 'headers-csp-present', severity: 'ok', category: 'headers' }),
+      f({ id: 'secrets-clean', severity: 'ok', category: 'secrets' }),
+      f({ id: 'headers-cross-origin-opener-policy', severity: 'info', category: 'headers' }),
+      f({ id: 'paths-robots', severity: 'info', category: 'paths' }),
+    ]
+    const out = applyEngine(findings, baseCtx)
+    assert.ok(out.vibeScore >= 90, `expected >= 90 on clean site, got ${out.vibeScore}`)
+    assert.equal(out.aggregateBand, 'low')
+    assert.equal(out.hasVerifiedImpact, false)
+  })
+
+  it('SCENARIO 3a — weak posture, no exploit: hardening + auth cookies + swagger → 55-78, not Healthy', () => {
+    // Per spec: missing HSTS/CSP/XFO + insecure AUTH cookies + exposed swagger.
+    // No verified exploit. Score should land in 55-78 — neither alarming
+    // (no Critical) nor falsely Healthy.
+    const findings: Finding[] = [
+      f({ id: 'headers-no-hsts', severity: 'warn', category: 'headers' }),
+      f({ id: 'headers-csp-missing', severity: 'warn', category: 'headers' }),
+      f({ id: 'headers-no-x-frame-options', severity: 'warn', category: 'headers' }),
+      f({ id: 'headers-no-x-content-type', severity: 'warn', category: 'headers' }),
+      // Differentiator vs amazon-like: AUTH cookies, not analytics.
+      f({ id: 'cookies-no-secure', severity: 'warn', category: 'cookies',
+          evidence: 'session=eyJ...; Path=/' }),
+      f({ id: 'cookies-no-httponly', severity: 'warn', category: 'cookies',
+          evidence: 'auth_token=eyJ...; Path=/' }),
+      f({ id: 'cookies-no-samesite', severity: 'warn', category: 'cookies',
+          evidence: 'jwt=eyJ...; Path=/' }),
+      // API surface exposure on production (info, but signals weak hygiene)
+      f({ id: 'paths-swagger', severity: 'info', category: 'paths',
+          evidence: 'GET /swagger/v1 200 OK' }),
+    ]
+    const out = applyEngine(findings, baseCtx)
+    const criticalCount = out.findings.filter((x) => x.riskClass === 'critical-exploit').length
+    assert.equal(criticalCount, 0, `weak posture without exploit shouldn't show Critical, got ${criticalCount}`)
+    assert.ok(out.vibeScore < 85, `expected weak posture < 85, got ${out.vibeScore}`)
+    assert.ok(out.vibeScore >= 50, `weak posture shouldn't crash below 50 without exploit, got ${out.vibeScore}`)
+  })
+
+  it('SCENARIO 3b — weak site WITH confirmed CVE + dangerous CORS: Critical surfaces, score < 65', () => {
+    const findings: Finding[] = [
+      f({ id: 'headers-no-hsts', severity: 'warn', category: 'headers' }),
+      f({ id: 'headers-csp-missing', severity: 'warn', category: 'headers' }),
+      f({ id: 'cookies-no-secure', severity: 'warn', category: 'cookies',
+          evidence: 'session=eyJ...; Path=/' }),
+      // Vulnerable dep — detector emitted critical, must surface as Critical
+      f({ id: 'deps-server-cve-CVE-2023-XXXXX', severity: 'critical', category: 'deps',
+          evidence: 'Server: nginx/1.14.0\nMatched CVE: CVE-2023-XXXXX' }),
+      // Dangerous CORS — credentialed wildcard, detector flagged critical
+      f({ id: 'cors-credentials-wildcard', severity: 'critical', category: 'headers',
+          evidence: 'Access-Control-Allow-Origin: *\nAccess-Control-Allow-Credentials: true' }),
+    ]
+    const out = applyEngine(findings, baseCtx)
+    const criticalCount = out.findings.filter((x) => x.riskClass === 'critical-exploit').length
+    assert.ok(criticalCount >= 1, `expected >=1 Critical (CVE / CORS-creds), got ${criticalCount}`)
+    assert.equal(out.hasVerifiedImpact, true)
+    assert.ok(out.vibeScore < 65, `expected score < 65, got ${out.vibeScore}`)
+  })
+
+  it('SCENARIO 4 — confirmed exploit (SQLi + leaked .env): score < 50, severe band', () => {
+    const findings: Finding[] = [
+      f({ id: 'paths-sqli', severity: 'critical', category: 'paths',
+          evidence: "param=id triggered: ERROR: syntax error at or near \"'\"" }),
+      f({ id: 'paths-env', severity: 'critical', category: 'paths',
+          evidence: 'DB_PASSWORD=super-secret\nSTRIPE_SECRET_KEY=sk_live_xxx' }),
+      f({ id: 'secrets-stripe-secret', severity: 'critical', category: 'secrets',
+          evidence: 'sk_live_a1b2c3d4...redacted' }),
+      f({ id: 'paths-admin-login-visible', severity: 'info', category: 'paths' }),
+    ]
+    const out = applyEngine(findings, baseCtx)
+    const criticalCount = out.findings.filter((x) => x.riskClass === 'critical-exploit').length
+    assert.ok(criticalCount >= 2, `expected multiple Critical on real exploits, got ${criticalCount}`)
+    assert.equal(out.hasVerifiedImpact, true)
+    assert.ok(out.vibeScore < 50, `confirmed exploit should drop score below 50, got ${out.vibeScore}`)
+    assert.ok(['high', 'severe'].includes(out.aggregateBand), `expected high/severe band, got ${out.aggregateBand}`)
+  })
+})
