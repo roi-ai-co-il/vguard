@@ -1,11 +1,13 @@
 /**
  * Vguard — Risk scorer.
  *
- * Maps each Finding to a CVSS-style 0.0–10.0 score so the UI can rank
- * "fix-first" within the same severity bucket. Severity alone is too coarse:
- * a missing X-Frame-Options on a marketing site (warn) and a leaked Stripe
- * live secret (critical) are both important, but the latter is *much* more
- * urgent. Risk score makes that explicit.
+ * @deprecated 2026-05-09 — superseded by `scoring-engine.ts` + `scoring-policy.ts`.
+ *  The dynamic engine is the single source of truth for the user-visible
+ *  `vibeScore`, `riskClass`, `confidence`, `uiGroup`, and `aggregateRiskBand`.
+ *  The functions here are kept ONLY so that the per-finding `riskScore` /
+ *  `riskBand` numeric fields stay populated for back-compat consumers (the
+ *  engine overwrites them right after, with its own numbers). Do not consume
+ *  any output from this module for new product features.
  *
  * Pure function — no I/O, no Node-only imports — so it can run in any runtime.
  */

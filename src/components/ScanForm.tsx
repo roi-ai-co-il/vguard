@@ -32,6 +32,7 @@ import {
 } from 'lucide-react'
 import { VibeScoreGauge } from '@/components/ui/vibe-score-gauge'
 import { NextStagesPanel, Stage2Modal } from '@/components/NextStagesPanel'
+import { applyEngine, defaultContext } from '../../api/_lib/scoring-engine'
 import type {
   Category,
   Finding as ApiFinding,
@@ -1308,15 +1309,33 @@ export function ScanForm() {
           // Sort by ENGINE uiGroup, not raw detector severity. Detector
           // severity stays internal — what the user sees is the engine's
           // final classification.
-          const mergedFindings: ApiFinding[] = [...result.findings, ...stage2.findings]
-            .slice()
-            .sort((a, b) => UI_GROUP_ORDER[uiGroupOf(a)] - UI_GROUP_ORDER[uiGroupOf(b)])
+          // Re-run the engine over the merged Stage 1 + Stage 2 union so the
+          // user-visible vibeScore and band reflect everything Stage 2 added.
+          // If Stage 2 hasn't run, this is a no-op vs. Stage 1's result.
+          let mergedFindings: ApiFinding[]
+          let displayScore: number
+          let displayBand: 'low' | 'medium' | 'high' | 'severe'
+          if (stage2.findings.length > 0) {
+            let pathname = '/'
+            try { pathname = new URL(result.meta.finalUrl).pathname } catch { /* keep */ }
+            const engineOut = applyEngine(
+              [...result.findings, ...stage2.findings] as ApiFinding[],
+              defaultContext({
+                pathname,
+                isHttps: result.meta.finalUrl.startsWith('https://'),
+                stage: 2,
+              }),
+            )
+            mergedFindings = engineOut.findings as ApiFinding[]
+            displayScore = engineOut.vibeScore
+            displayBand = engineOut.aggregateBand
+          } else {
+            mergedFindings = result.findings.slice()
+            displayScore = result.vibeScore
+            displayBand = (result.aggregateRiskBand ?? 'low') as 'low' | 'medium' | 'high' | 'severe'
+          }
+          mergedFindings.sort((a, b) => UI_GROUP_ORDER[uiGroupOf(a)] - UI_GROUP_ORDER[uiGroupOf(b)])
           const finalTotals = recomputeFinalTotals(mergedFindings)
-          // Trust the API's engine-computed score + band. (Stage 1 result
-          // is engine-classified; Stage 2 adds findings but doesn't recompute
-          // the gauge — its findings are appended into the right uiGroup.)
-          const displayScore = result.vibeScore
-          const displayBand = (result.aggregateRiskBand ?? 'low') as 'low' | 'medium' | 'high' | 'severe'
           const displayResult: ScanResult = {
             ...result,
             findings: mergedFindings,

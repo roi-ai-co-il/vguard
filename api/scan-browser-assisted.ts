@@ -15,6 +15,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import type { Finding } from '../src/lib/scanner-types.js'
 import { enrichFindings } from './_lib/fix-prompt-composer.js'
 import { applyRisk, classifyRouteContext } from './_lib/risk-scorer.js'
+import { applyEngine, defaultContext } from './_lib/scoring-engine.js'
 import { logAuditEvent, fireAndForget } from './_lib/audit-log.js'
 
 export const config = {
@@ -781,7 +782,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     } catch {
       // workerData.finalUrl invalid — keep 'unknown'
     }
-    const scored = applyRisk(enriched, routeContext)
+    const legacyScored = applyRisk(enriched, routeContext)
+    // Stage 2 — run the scoring engine on Stage 2 findings with stage:2
+    // context so each finding ships with the right riskClass / uiGroup /
+    // confidence. The merged vibeScore is recomputed client-side over the
+    // union of Stage 1 + Stage 2 (see ScanForm.tsx).
+    let stage2Pathname = '/'
+    try {
+      stage2Pathname = new URL(workerData.finalUrl).pathname
+    } catch {
+      /* keep '/' */
+    }
+    const stage2Engine = applyEngine(
+      legacyScored,
+      defaultContext({
+        pathname: stage2Pathname,
+        isHttps: workerData.finalUrl.startsWith('https://'),
+        stage: 2,
+      }),
+    )
+    const scored = stage2Engine.findings
     const liveApiMap = buildLiveApiMap(workerData)
     fireAndForget(
       logAuditEvent(req, {

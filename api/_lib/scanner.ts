@@ -9,6 +9,7 @@ import type { Finding, ScanResponse, Severity } from '../../src/lib/scanner-type
 import { enrichFindings } from './fix-prompt-composer.js'
 import { aggregateBand, applyRisk, classifyRouteContext, computeAggregateRisk } from './risk-scorer.js'
 import { applyEngine, defaultContext } from './scoring-engine.js'
+import { evidenceContainsRealSecret, isSpaShellBody } from './scoring-policy.ts'
 import { buildAttackSurface, discoverSubdomainsFromCT } from './attack-surface.js'
 import { analyzeBundles as analyzeBundlesAst } from './js-ast.js'
 
@@ -2421,19 +2422,52 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
             PROBE_TIMEOUT_MS,
           )
           if (smResp.ok) {
-            const sample = (await smResp.text()).slice(0, 256)
+            // Read up to 256 KB of the map for content-aware classification.
+            const body = (await smResp.text()).slice(0, 262144)
+            const sample = body.slice(0, 256)
             const looksLikeMap = sample.includes('"version"') && sample.includes('"sources"')
             if (looksLikeMap) {
-              findings.push({
-                id: `sourcemap-${fileSlug}`,
-                severity: 'warn',
-                category: 'sourcemaps',
-                title: 'Production source map is publicly served',
-                description:
-                  'Source maps reveal your full original source code, comments, and any secrets that were inlined at build time. They should not ship to production.',
-                evidence: `GET ${mapUrl} → ${smResp.status} OK (sourcemap)`,
-                fixPrompt: `In vite.config.ts (or next.config.ts) set "build.sourcemap: false" for production. If you need source maps for error tracking (Sentry / Vercel), use "hidden-source-map" so the .map is generated for upload but no sourceMappingURL comment is appended to the JS — making the .map unreachable from the browser. Then redeploy and confirm ${mapUrl} returns 404.`,
-              })
+              const hasSecret = evidenceContainsRealSecret(body)
+              const hasInternalPaths =
+                /\/Users\//.test(body) ||
+                /\/home\//.test(body) ||
+                /C:\\\\Users\\\\/.test(body) ||
+                /\.internal\b/.test(body) ||
+                /ip-10-\d+-\d+-\d+/.test(body)
+              if (hasSecret) {
+                findings.push({
+                  id: 'sourcemaps-exposed-with-secrets',
+                  severity: 'critical',
+                  category: 'sourcemaps',
+                  title: 'Source map contains real secret material',
+                  description:
+                    'A publicly accessible source map was found AND its body contains a real secret pattern (PEM key, DB password, provider live key, or service-role token). Rotate the secret immediately and remove the map.',
+                  evidence: `GET ${mapUrl} → ${smResp.status}\nSensitive pattern matched inside .map body (redacted)`,
+                  fixPrompt: `1) Rotate every secret in the leaked map at its issuing service. 2) In vite.config.ts / next.config.ts set "build.sourcemap: false" (or use "hidden-source-map" so the .map is generated but not referenced). 3) Redeploy and confirm ${mapUrl} → 404. 4) Audit your bundler config to make sure secrets are NOT inlined at build time — read from server env at runtime only.`,
+                })
+              } else if (hasInternalPaths) {
+                findings.push({
+                  id: 'sourcemaps-exposed-with-internal-paths',
+                  severity: 'warn',
+                  category: 'sourcemaps',
+                  title: 'Source map exposes internal paths / hostnames',
+                  description:
+                    'A public source map was found. No live secrets in it, but it leaks original file paths (e.g. /Users/, /home/, internal AWS hostnames). That gives attackers your full module tree for further recon.',
+                  evidence: `GET ${mapUrl} → ${smResp.status}`,
+                  fixPrompt: `In vite.config.ts / next.config.ts set "build.sourcemap: false" for production, or use "hidden-source-map" if you need maps for Sentry. Redeploy and confirm ${mapUrl} → 404.`,
+                })
+              } else {
+                findings.push({
+                  id: 'sourcemaps-exposed',
+                  severity: 'info',
+                  category: 'sourcemaps',
+                  title: 'Production source map is publicly served',
+                  description:
+                    'Source maps reveal your original source code. Worth removing for production, but no secrets / internal paths were observed in this map.',
+                  evidence: `GET ${mapUrl} → ${smResp.status} OK (sourcemap)`,
+                  fixPrompt: `In vite.config.ts (or next.config.ts) set "build.sourcemap: false" for production. If you need source maps for error tracking (Sentry / Vercel), use "hidden-source-map" so the .map is generated for upload but no sourceMappingURL comment is appended to the JS. Then redeploy and confirm ${mapUrl} returns 404.`,
+                })
+              }
             }
           }
         } catch {
@@ -2443,31 +2477,98 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
     }
   }
 
-  // === PATH PROBES (in parallel) ===
+  // === PATH PROBES (in parallel, body-aware) ===
+  // For each probed path: fetch up to 8KB of body, then classify:
+  //   1) status != 200 → no finding (login redirects handled elsewhere).
+  //   2) body empty (<8 bytes) → `info` paths-X-empty-200 (suspicious, demoted).
+  //   3) body matches main HTML SPA shell → `info` paths-X-spa-shell-200 (FP).
+  //   4) body matches a real-secret pattern → `critical` (the configured severity).
+  //   5) otherwise → severity downgraded to `warn` for `critical`-configured
+  //      probes (200 with non-shell body, no sensitive patterns: needs review).
+  const sensitivePathIds = new Set([
+    '/.env',
+    '/.env.production',
+    '/.env.local',
+    '/.git/HEAD',
+    '/.aws/credentials',
+    '/backup.zip',
+    '/backup.sql',
+    '/database.sql',
+    '/dump.sql',
+    '/config.json',
+  ])
   const probeResults = await Promise.allSettled(
     PATHS_TO_PROBE.map(async (probe) => {
       const probeUrl = new URL(probe.path, finalUrl).toString()
       const r = await fetchWithTimeout(probeUrl, { method: 'GET' }, PROBE_TIMEOUT_MS)
       if (!r.ok) return null
-      const sample = (await r.text()).slice(0, 256).toLowerCase()
-      const looksLikeIndex = sample.includes('<!doctype') || sample.includes('<html')
-      if (looksLikeIndex) return null
-      return { probe, status: r.status, statusText: r.statusText, probeUrl }
+      const body = (await r.text()).slice(0, 8192)
+      return { probe, status: r.status, statusText: r.statusText, probeUrl, body }
     }),
   )
   for (const res of probeResults) {
-    if (res.status === 'fulfilled' && res.value) {
-      const { probe, status, statusText, probeUrl } = res.value
+    if (res.status !== 'fulfilled' || !res.value) continue
+    const { probe, status, statusText, probeUrl, body } = res.value
+    const idBase = `path-${probe.path.replaceAll('/', '-').replaceAll('.', '-')}`
+
+    // (2) Empty or tiny body.
+    if (body.length < 8) {
+      findings.push({
+        id: `${idBase}-empty-200`,
+        severity: 'info',
+        category: 'paths',
+        title: `${probe.label} returned an empty 200`,
+        description: `${probe.path} responded 200 but the body was empty. Suspicious but inconclusive — could be a misconfigured rewrite. Confirm with curl.`,
+        evidence: `GET ${probeUrl} → ${status} (${body.length} bytes)`,
+        fixPrompt: `Confirm ${probe.path} is intentionally exposed or properly 404'd. curl -I ${probeUrl}`,
+      })
+      continue
+    }
+    // (3) SPA shell suppression.
+    if (isSpaShellBody(body, html)) {
+      findings.push({
+        id: `${idBase}-spa-shell-200`,
+        severity: 'info',
+        category: 'paths',
+        title: `${probe.label} returned the SPA shell`,
+        description: `${probe.path} responds 200 but the body is the SPA's index.html. Not an exposure — the SPA's router will surface its own 404 client-side.`,
+        evidence: `GET ${probeUrl} → 200 (SPA shell, ${body.length} bytes)`,
+        fixPrompt: `Optional: add a server-side rewrite that returns 404 for /\\.env*, /\\.git/*, /backup.*, /\\.aws/* so probes don't even reach the SPA fallback.`,
+      })
+      continue
+    }
+    // (4) Real-secret match → keep configured critical severity, redact.
+    const isSensitivePath = sensitivePathIds.has(probe.path)
+    if (isSensitivePath && evidenceContainsRealSecret(body)) {
+      // Redact: first 8 + last 4 chars of the longest credential-shaped line.
+      const lines = body.split(/\r?\n/).filter((l) => l.length >= 12 && l.length <= 240)
+      const sample = lines.find((l) => evidenceContainsRealSecret(l)) || lines[0] || ''
+      const redacted =
+        sample.length > 16 ? `${sample.slice(0, 8)}…${sample.slice(-4)}` : '***redacted***'
       findings.push({
         id: `path-${probe.path.replaceAll('/', '-').replaceAll('.', '-')}`,
-        severity: probe.severity,
+        severity: 'critical',
         category: 'paths',
-        title: `${probe.label} is reachable at ${probe.path}`,
-        description: `${probe.path} responds with ${status} and is not the SPA fallback. Files like this should never be public.`,
-        evidence: `GET ${probeUrl} → ${status} ${statusText}`,
-        fixPrompt: `Make sure ${probe.path} is not being deployed. Confirm .gitignore excludes it and your deploy output (public/, dist/, .next/, etc.) does not contain it. Add a rewrite rule that returns 404 for ${probe.path} and similar paths (/.env*, /.git/*, /.DS_Store, *.bak, *.swp, *~). On Vercel put this in vercel.json under "redirects". Redeploy and verify with: curl -I ${probeUrl}`,
+        title: `${probe.label} is reachable at ${probe.path} (contains real secrets)`,
+        description: `${probe.path} responds 200 with a body containing a real secret pattern (DB password, PEM key, provider live key, or service-role token). Treat all secrets in this file as compromised — rotate now.`,
+        evidence: `GET ${probeUrl} → ${status} ${statusText}\nMatched redacted: ${redacted}`,
+        fixPrompt: `1) Rotate every secret in ${probe.path} at its issuing service. 2) Remove ${probe.path} from deploy output (Vercel: add to .vercelignore; Next.js: ensure not under public/). 3) Add a 404 rewrite for /\\.env*, /\\.git/*, /backup.*. 4) curl -I ${probeUrl} → expect 404.`,
       })
+      continue
     }
+    // (5) Non-shell body, no sensitive pattern: downgrade `critical` to `warn`.
+    const finalSeverity: Severity = probe.severity === 'critical' ? 'warn' : probe.severity
+    findings.push({
+      id: probe.severity === 'critical'
+        ? `path-${probe.path.replaceAll('/', '-').replaceAll('.', '-')}-exposed-needs-review`
+        : `path-${probe.path.replaceAll('/', '-').replaceAll('.', '-')}`,
+      severity: finalSeverity,
+      category: 'paths',
+      title: `${probe.label} is reachable at ${probe.path}`,
+      description: `${probe.path} responds with ${status}. ${probe.severity === 'critical' ? 'Body is not the SPA shell but no real secret patterns matched — needs manual review to confirm exposure.' : 'Files like this should never be public.'}`,
+      evidence: `GET ${probeUrl} → ${status} ${statusText} (${body.length} bytes)`,
+      fixPrompt: `Make sure ${probe.path} is not being deployed. Confirm .gitignore excludes it and your deploy output (public/, dist/, .next/, etc.) does not contain it. Add a rewrite rule that returns 404 for ${probe.path} and similar paths (/.env*, /.git/*, /.DS_Store, *.bak, *.swp, *~). On Vercel put this in vercel.json under "redirects". Redeploy and verify with: curl -I ${probeUrl}`,
+    })
   }
 
   // === HTML HYGIENE (inline scripts, on* handlers, target=_blank) ===
@@ -3227,10 +3328,13 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
     if (astResult.hardcodedCredentials.length > 0) {
       findings.push({
         id: 'js-ast-hardcoded-creds',
-        severity: 'critical',
+        // Heuristic — NOT a confirmed leak. Many matches are public app-store
+        // IDs, analytics tags, or build-time placeholders. Surface as `warn`
+        // + "needs review" so the user investigates without panicking.
+        severity: 'warn',
         category: 'secrets',
-        title: `${astResult.hardcodedCredentials.length} hardcoded credential${astResult.hardcodedCredentials.length === 1 ? '' : 's'} in object literals`,
-        description: `AST parse found object-literal patterns where a credential-shaped key (apiKey, secret, token, password, etc.) is bound to a credential-shaped string value in your shipped JS. Regex-based scanners miss these because the value alone may not match a known provider; the structure (key + secret-shaped value) is what gives them away. Whatever this token is, it's now public.`,
+        title: `${astResult.hardcodedCredentials.length} credential-shaped pattern${astResult.hardcodedCredentials.length === 1 ? '' : 's'} (needs review)`,
+        description: `Heuristic — these are patterns shaped like credentials; verify against your codebase before treating as a real leak. AST parse found object literals where a credential-shaped key (apiKey, secret, token, password, etc.) is bound to a string value. Many real-world matches are publishable client IDs (Stripe pk_, analytics tag, app-store ID). Whichever way each entry goes — public publishable key or real server-side leak — confirm before rotating.`,
         evidence: astResult.hardcodedCredentials
           .slice(0, 6)
           .map((c) => `{ ${c.keyName}: "${c.valueSample}" }`)
