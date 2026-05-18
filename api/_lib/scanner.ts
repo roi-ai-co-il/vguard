@@ -1583,11 +1583,32 @@ function isSpaShellResponse(
   return body.slice(0, 256) === fp.head
 }
 
+/** Heuristic classification of an admin-probe body. */
+type AdminBodyKind = 'login-page' | 'dashboard' | 'unknown'
+
+function classifyAdminBody(body: string): AdminBodyKind {
+  if (!body) return 'unknown'
+  const b = body.toLowerCase()
+  const hasPasswordInput = /<input[^>]*type\s*=\s*["']password["']/.test(b)
+  const hasLoginAction = /<form[^>]*action\s*=\s*["'][^"']*\b(?:login|signin|sign[-_]in|auth)\b/.test(b)
+  const hasLoginCopy = /\b(?:sign in|log in|login|password|enter your (?:email|password))\b/.test(b)
+  if (hasPasswordInput || hasLoginAction || (hasLoginCopy && /password/.test(b))) {
+    return 'login-page'
+  }
+  // Dashboard markers: tables/grids of data, admin-nav, "dashboard"/"users"/"orders" copy, no password field
+  const dashboardKeywords =
+    /\b(?:dashboard|admin panel|administration|manage users|user list|orders|invoices|tenants|sites|projects|create new|delete|edit row)\b/.test(b)
+  const hasTable = /<(?:table|tbody|thead|tr|td)\b/.test(b) || /role\s*=\s*["']grid["']/.test(b)
+  const hasAdminNav = /<nav[\s\S]{0,200}\b(?:admin|dashboard|users|settings|tenants)\b/i.test(b)
+  if ((dashboardKeywords && hasTable) || hasAdminNav) return 'dashboard'
+  return 'unknown'
+}
+
 async function discoverAndProbeAdminRoutes(
   bundleText: string,
   html: string,
   origin: string,
-): Promise<{ path: string; status: number; contentLength: number | null; isSpaShell: boolean }[]> {
+): Promise<{ path: string; status: number; contentLength: number | null; isSpaShell: boolean; bodyKind: AdminBodyKind }[]> {
   const homepageFp = makeHomepageFingerprint(html)
   const candidates = new Set<string>()
   // Pattern 1: react-router style — `<Route path="/admin/...">` or path:"/admin..."
@@ -1650,11 +1671,13 @@ async function discoverAndProbeAdminRoutes(
           body = ''
         }
         const isSpaShell = body.length > 0 && isSpaShellResponse(body, homepageFp)
+        const bodyKind: AdminBodyKind = isSpaShell ? 'unknown' : classifyAdminBody(body)
         return {
           path,
           status: r.status,
           contentLength: Number.isFinite(contentLength) ? contentLength : null,
           isSpaShell,
+          bodyKind,
         }
       } catch {
         return null
@@ -1662,7 +1685,7 @@ async function discoverAndProbeAdminRoutes(
     }),
   )
   return results.filter(
-    (x): x is { path: string; status: number; contentLength: number | null; isSpaShell: boolean } =>
+    (x): x is { path: string; status: number; contentLength: number | null; isSpaShell: boolean; bodyKind: AdminBodyKind } =>
       x !== null,
   )
 }
@@ -3424,48 +3447,81 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
     bundleTextAll,
     html,
     url.origin,
-  ).catch(() => [] as { path: string; status: number; contentLength: number | null; isSpaShell: boolean }[])
-  const publicAdminRoutes = adminProbeResults.filter(
+  ).catch(() => [] as { path: string; status: number; contentLength: number | null; isSpaShell: boolean; bodyKind: AdminBodyKind }[])
+  // Split the 200-responses into three buckets by body content:
+  //   dashboard       → real admin data/actions reachable unauth  (critical)
+  //   login-page      → admin URL exists but auth-gated visibly   (informational)
+  //   unknown / shell → can't tell or SPA shell — needs review    (warn)
+  const probed200 = adminProbeResults.filter(
     (r) =>
       r.status === 200 &&
-      // Filter out tiny responses that are clearly redirects-via-HTML or
-      // generic 200 OK error pages: typically real admin pages return >1KB
-      // of HTML/JSON. Anything under 200 bytes is almost always a stub.
       (r.contentLength === null || r.contentLength >= 200) &&
-      // Filter out SPA shells. Vite + React, Next.js static export, Vue Router
-      // history-mode fallback, and similar setups serve the SAME index.html
-      // for every path — admin auth is enforced client-side after the shell
-      // mounts. Reporting the shell as "admin returned 200 unauth" is a false
-      // positive: no privileged data crossed the wire, just the bootstrap HTML.
       !r.isSpaShell,
   )
-  if (publicAdminRoutes.length > 0) {
+  const dashboardRoutes = probed200.filter((r) => r.bodyKind === 'dashboard')
+  const loginPageRoutes = probed200.filter((r) => r.bodyKind === 'login-page')
+  const needsReviewRoutes = probed200.filter((r) => r.bodyKind === 'unknown')
+  const protectedRoutes = adminProbeResults.filter(
+    (r) => r.status === 401 || r.status === 403 || (r.status >= 300 && r.status < 400),
+  )
+
+  if (dashboardRoutes.length > 0) {
     findings.push({
-      id: 'paths-admin-route-public',
+      id: 'paths-admin-unauth-data',
       severity: 'critical',
       category: 'auth',
-      title: `${publicAdminRoutes.length} admin route${
-        publicAdminRoutes.length === 1 ? '' : 's'
-      } from your bundle returned 200 without auth`,
-      description: `We discovered admin/internal routes referenced in your shipped JS, then sent unauthenticated GET requests to them. Some returned HTTP 200 — meaning anyone on the internet, with no login, can reach pages your code treats as privileged. This is broken access control: the canonical OWASP A1 (#1 most exploited class in 2021).`,
-      evidence: publicAdminRoutes
+      title: `${dashboardRoutes.length} admin dashboard${
+        dashboardRoutes.length === 1 ? '' : 's'
+      } reachable without auth`,
+      description: `We discovered admin/internal routes in your shipped JS, then sent unauthenticated GET requests. Some returned HTTP 200 with body content that looks like a real admin dashboard (tables / admin nav / management actions — no password field). This is broken access control: anyone on the internet can reach pages your code treats as privileged.`,
+      evidence: dashboardRoutes
         .map((r) => `${r.path} → HTTP ${r.status}${r.contentLength !== null ? ` (${r.contentLength}B)` : ''}`)
         .join('\n'),
-      fixPrompt: `For each route above: confirm it's actually meant to be admin-only. If yes, add a server-side auth gate at the route boundary (Next.js middleware on /admin/* / pages with getServerSession; Supabase RLS on the API the page calls; custom JWT verification). The check must run BEFORE the route handler — client-side auth (e.g. "redirect if no localStorage token") is bypassable in 5 seconds with curl. Re-run this scan after fixing — the route should now return 401/403/redirect-to-login.`,
+      fixPrompt: `For each route above: add a server-side auth gate at the route boundary (Next.js middleware on /admin/* / getServerSession; Supabase RLS on the API the page calls; custom JWT verification). The check must run BEFORE the route handler — client-side auth (e.g. "redirect if no localStorage token") is bypassable with curl in 5 seconds. Re-run this scan after fixing — the route should now return 401/403/redirect-to-login.`,
     })
-  } else if (adminProbeResults.length > 0) {
-    // Discovered candidates but they're all gated correctly — emit OK marker.
+  }
+  if (loginPageRoutes.length > 0) {
     findings.push({
-      id: 'paths-admin-route-clean',
+      id: 'paths-admin-login-visible',
+      severity: 'info',
+      category: 'auth',
+      title: `${loginPageRoutes.length} admin login page${
+        loginPageRoutes.length === 1 ? '' : 's'
+      } visible to the public`,
+      description: `Admin routes referenced by your bundle return a login form to unauthenticated requests. This is the intended behavior — the URL is reachable but no privileged data is exposed without credentials. Listed for awareness so you can decide whether the URL itself should be moved behind a less-guessable subpath.`,
+      evidence: loginPageRoutes
+        .map((r) => `${r.path} → HTTP ${r.status} (login form)`)
+        .join('\n'),
+      fixPrompt: `If you'd rather not advertise the admin URL: rename it to a long random subpath (e.g. /admin → /a_${Math.random().toString(36).slice(2, 10)}) and update your bundle/redirects accordingly. This is "security by obscurity" — it does not replace the server-side auth gate, but it does dampen automated discovery.`,
+    })
+  }
+  if (needsReviewRoutes.length > 0) {
+    findings.push({
+      id: 'paths-admin-needs-review',
+      severity: 'warn',
+      category: 'auth',
+      title: `${needsReviewRoutes.length} admin route${
+        needsReviewRoutes.length === 1 ? '' : 's'
+      } returned 200 — body content inconclusive`,
+      description: `We probed admin routes referenced by your bundle. These returned HTTP 200 with non-SPA-shell bodies but we couldn't confidently classify them as dashboard or login page. Open each URL in a private browser tab without logging in — if you see privileged content, treat as a critical access-control issue.`,
+      evidence: needsReviewRoutes
+        .map((r) => `${r.path} → HTTP ${r.status}${r.contentLength !== null ? ` (${r.contentLength}B)` : ''}`)
+        .join('\n'),
+      fixPrompt: `Manually verify each route above: open in an incognito window with no cookies. If you see admin data → apply the server-side auth gate fix (see paths-admin-unauth-data). If you see a login screen → no action needed (this is paths-admin-login-visible behavior). If you see something else (e.g. a marketing page that just happens to live at /admin) — keep as-is.`,
+    })
+  }
+  if (protectedRoutes.length > 0 && dashboardRoutes.length === 0 && loginPageRoutes.length === 0 && needsReviewRoutes.length === 0) {
+    findings.push({
+      id: 'paths-admin-protected',
       severity: 'ok',
       category: 'auth',
-      title: `${adminProbeResults.length} admin route${
-        adminProbeResults.length === 1 ? '' : 's'
+      title: `${protectedRoutes.length} admin route${
+        protectedRoutes.length === 1 ? '' : 's'
       } discovered in bundle, all gated`,
-      description: `We extracted ${adminProbeResults.length} admin/internal route path${
-        adminProbeResults.length === 1 ? '' : 's'
-      } from your shipped JS, then probed each without auth. None returned 200 — your access control is enforced at the route level, not just in the UI.`,
-      evidence: adminProbeResults
+      description: `We extracted ${protectedRoutes.length} admin/internal route path${
+        protectedRoutes.length === 1 ? '' : 's'
+      } from your shipped JS and probed each without auth. None returned 200 with real content — your access control is enforced at the route boundary, not just in the UI.`,
+      evidence: protectedRoutes
         .map((r) => `${r.path} → HTTP ${r.status}`)
         .slice(0, 8)
         .join('\n'),

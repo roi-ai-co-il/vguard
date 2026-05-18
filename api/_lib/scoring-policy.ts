@@ -51,7 +51,10 @@ export const CLASS_BASE: Record<RiskClass, number> = {
 
 /** Aggregate score-penalty per first-hit per risk class. */
 export const CLASS_DAMAGE: Record<RiskClass, number> = {
-  'critical-exploit': 30,
+  // 35 (not 30) so a single confirmed critical lands the score below 60
+  // per Royi's spec. With CONFIDENCE_MULT.confirmed=1.0 and an avg
+  // riskScore→penalty multiplier of ~1.3, one critical ≈ 45 pts off → ~55.
+  'critical-exploit': 35,
   'high-impact-misconfig': 15,
   'medium-weakness': 6,
   'low-hardening': 1.5,

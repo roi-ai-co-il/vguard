@@ -513,7 +513,7 @@ describe('scoring-policy overhaul — 20 scenarios', () => {
           evidence: 'DB_PASSWORD=super-secret\nSTRIPE_SECRET_KEY=sk_live_xxxxxxxxxxxxxxxx' }),
     ], baseCtx)
     assert.equal(out.findings[0].uiGroup, 'confirmed-vulnerabilities')
-    assert.ok(out.vibeScore < 65, `got ${out.vibeScore}`)
+    assert.ok(out.vibeScore < 60, `got ${out.vibeScore}`)
   })
 
   it('9. Admin path returns login page → not critical', () => {
@@ -529,7 +529,7 @@ describe('scoring-policy overhaul — 20 scenarios', () => {
           evidence: '/admin → 200, dashboard table visible' }),
     ], baseCtx)
     assert.equal(out.findings[0].riskClass, 'critical-exploit')
-    assert.ok(out.vibeScore < 65, `got ${out.vibeScore}`)
+    assert.ok(out.vibeScore < 60, `got ${out.vibeScore}`)
   })
 
   it('11. Supabase anon key in bundle → informational', () => {
@@ -547,7 +547,7 @@ describe('scoring-policy overhaul — 20 scenarios', () => {
           evidence: 'role=service_role, eyJ...' }),
     ], baseCtx)
     assert.equal(out.findings[0].riskClass, 'critical-exploit')
-    assert.ok(out.vibeScore < 65, `got ${out.vibeScore}`)
+    assert.ok(out.vibeScore < 60, `got ${out.vibeScore}`)
   })
 
   it('13. Reflected XSS confirmed → confirmed-vuln', () => {
