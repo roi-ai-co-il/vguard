@@ -50,6 +50,14 @@ interface BrowserScanBody {
    * to produce stack-specific instructions (e.g. vercel.json vs next.config.ts).
    */
   framework?: string
+  /**
+   * Optional Stage 1 findings. When provided, the endpoint merges Stage 1 +
+   * Stage 2 findings, re-runs the scoring engine over the union, and returns
+   * an updated vibeScore + aggregateRiskBand so non-browser clients (CLI,
+   * GitHub Action, MCP) get a fully-merged result without doing the math
+   * themselves.
+   */
+  stage1Findings?: Finding[]
 }
 
 interface WorkerCookie {
@@ -732,6 +740,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const body = (req.body && typeof req.body === 'object' ? req.body : {}) as BrowserScanBody
   const url = (body.url ?? '').trim()
   const framework = typeof body.framework === 'string' ? body.framework.trim() || null : null
+  const stage1Findings = Array.isArray(body.stage1Findings) ? body.stage1Findings : []
   if (!url) {
     return res.status(400).json({ ok: false, error: { code: 'invalid_url', message: 'Missing url.' } })
   }
@@ -802,6 +811,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }),
     )
     const scored = stage2Engine.findings
+
+    // Merged-engine result: when the caller passed Stage 1 findings, run
+    // applyEngine over the UNION so the returned vibeScore + aggregateBand
+    // reflect both stages. CLI / GitHub Action / MCP callers consume this
+    // directly; the UI ignores it and does its own merge.
+    let merged: ReturnType<typeof applyEngine> | null = null
+    if (stage1Findings.length > 0) {
+      merged = applyEngine(
+        [...stage1Findings, ...scored],
+        defaultContext({
+          pathname: stage2Pathname,
+          isHttps: workerData.finalUrl.startsWith('https://'),
+          stage: 2,
+        }),
+      )
+    }
     const liveApiMap = buildLiveApiMap(workerData)
     fireAndForget(
       logAuditEvent(req, {
@@ -828,6 +853,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       findings: scored,
       routeContext,
       liveApiMap,
+      // Present only when caller sent stage1Findings — gives CLI / GHA / MCP
+      // a fully merged result without rebuilding the engine client-side.
+      merged: merged
+        ? {
+            vibeScore: merged.vibeScore,
+            aggregateRiskBand: merged.aggregateBand,
+            hasVerifiedImpact: merged.hasVerifiedImpact,
+            findings: merged.findings,
+            groupCounts: merged.groupCounts,
+          }
+        : undefined,
     })
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'unknown error'
