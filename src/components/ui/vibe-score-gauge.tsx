@@ -1,10 +1,13 @@
 import { motion, useReducedMotion } from 'framer-motion'
 import { cn } from '@/lib/utils'
+import type { Grade } from '@/lib/scanner-types'
 
 export type AggregateBand = 'low' | 'medium' | 'high' | 'severe'
 
 export interface VibeScoreGaugeProps {
   score: number
+  /** Letter grade (A+ … F) shown as a chip next to the band label. */
+  grade?: Grade
   /**
    * Authoritative band from the scoring engine. When provided, the gauge
    * color + label come from the band — NOT from the score number. This is
@@ -30,7 +33,7 @@ function severityForScore(score: number) {
   return { color: 'var(--color-ok)', label: 'Healthy' }
 }
 
-export function VibeScoreGauge({ score, band, className, size = 220 }: VibeScoreGaugeProps) {
+export function VibeScoreGauge({ score, grade, band, className, size = 220 }: VibeScoreGaugeProps) {
   const reduceMotion = useReducedMotion() ?? false
   const clamped = Math.max(0, Math.min(100, Math.round(score)))
   const severity = band ? severityForBand(band) : severityForScore(clamped)
@@ -213,22 +216,37 @@ export function VibeScoreGauge({ score, band, className, size = 220 }: VibeScore
             /100
           </span>
         </motion.div>
+        {/* Grade + status as one cohesive pill with its own surface — reads
+            cleanly and never looks like it's sitting on the gauge arc. */}
         <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: reduceMotion ? 0 : 1.2, duration: 0.4 }}
-          className="mt-1 inline-flex items-center gap-1.5 font-mono text-[11px] tracking-widest uppercase"
-          style={{ color: severity.color }}
+          initial={{ opacity: 0, scale: 0.92 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ delay: reduceMotion ? 0 : 1.2, duration: 0.4, ease: 'backOut' }}
+          className="mt-2 inline-flex items-center gap-2 rounded-full pl-1.5 pr-3 py-1"
+          style={{
+            color: severity.color,
+            background: `color-mix(in oklab, ${severity.color} 14%, var(--color-bg))`,
+            border: `1px solid color-mix(in oklab, ${severity.color} 32%, transparent)`,
+            boxShadow: `0 2px 12px -6px ${severity.color}`,
+          }}
         >
-          <span
-            className="inline-block w-1.5 h-1.5 rounded-full"
-            style={{
-              background: severity.color,
-              boxShadow: `0 0 10px ${severity.color}`,
-            }}
-            aria-hidden="true"
-          />
-          {severity.label}
+          {grade && (
+            <span
+              className="inline-flex items-center justify-center rounded-full font-bold leading-none"
+              style={{
+                background: severity.color,
+                color: 'var(--color-bg)',
+                width: 20,
+                height: 20,
+                fontSize: 12,
+              }}
+            >
+              {grade}
+            </span>
+          )}
+          <span className="font-mono text-[10px] tracking-widest uppercase font-medium">
+            {severity.label}
+          </span>
         </motion.div>
       </div>
     </div>

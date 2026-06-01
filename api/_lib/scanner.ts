@@ -9,6 +9,8 @@ import type { Finding, ScanResponse, Severity } from '../../src/lib/scanner-type
 import { enrichFindings } from './fix-prompt-composer.js'
 import { aggregateBand, applyRisk, classifyRouteContext, computeAggregateRisk } from './risk-scorer.js'
 import { applyEngine, defaultContext } from './scoring-engine.js'
+import { evidenceContainsRealSecret, isSpaShellBody } from './scoring-policy.js'
+import { oastEnabled, makeOastToken, oastUrl, checkOastHits } from './oast.js'
 import { buildAttackSurface, discoverSubdomainsFromCT } from './attack-surface.js'
 import { analyzeBundles as analyzeBundlesAst } from './js-ast.js'
 
@@ -1096,6 +1098,41 @@ async function probeOpenRedirect(
   return found
 }
 
+// URL-shaped params commonly wired straight into a server-side fetch in
+// AI-generated code (image proxies, link unfurlers, webhooks). The #1 documented
+// vibe-code failure class.
+const SSRF_PARAMS = [
+  'url', 'uri', 'target', 'dest', 'destination', 'redirect', 'callback', 'webhook',
+  'image', 'img', 'src', 'source', 'link', 'feed', 'proxy', 'fetch', 'load',
+  'host', 'domain', 'site', 'page', 'file', 'next', 'data', 'ref', 'u',
+]
+
+/**
+ * Active SSRF canary (OAST). Plants a unique URL pointing at our own collaborator
+ * (`/api/oast?t=<token>`) in each URL-shaped param. If the target fetches it
+ * server-side, our receiver records the token — confirmed later via checkOastHits.
+ * Benign: it only causes a request to OUR logging URL, never attacks the target
+ * (same spirit as the open-redirect/XSS canaries already in Stage 1).
+ */
+async function probeSsrf(baseUrl: string): Promise<{ param: string; token: string }[]> {
+  const planted: { param: string; token: string }[] = []
+  await Promise.all(
+    SSRF_PARAMS.map(async (param) => {
+      const token = makeOastToken()
+      try {
+        const u = new URL(baseUrl)
+        u.searchParams.set(param, oastUrl(token))
+        await fetchWithTimeout(u.toString(), { method: 'GET', redirect: 'manual' }, 2500)
+        planted.push({ param, token })
+      } catch {
+        // even on timeout the server may have fired the SSRF — keep the token
+        planted.push({ param, token })
+      }
+    }),
+  )
+  return planted
+}
+
 // Firebase Storage public probe
 async function probeFirebaseStorage(
   projectId: string,
@@ -1415,7 +1452,17 @@ const SERVER_CVES: ServerCve[] = [
  *
  * Cap: 10 candidates per scan, 2.5s per probe, parallel — total ~3-4s.
  */
-const ADMIN_PREFIX_RE = /(\/(?:admin|internal|private|dashboard|backoffice|control|console|cms|manage|management|backend|sysadmin|root|superuser|impersonate|users\/admin|settings\/admin|tenants|orgs)\b[^"'\`?#\s]*)/i
+// Strong admin-route signals only. Removed the generic English words that
+// constantly appear in docs/marketing URLs and caused false positives
+// (e.g. `/docs/frameworks/backend/nitro` matched the old `backend` token and
+// got reported as an unauth admin route on vercel.com). Dropped: backend,
+// control, console, manage, root, tenants, orgs.
+const ADMIN_PREFIX_RE = /(\/(?:admin|wp-admin|internal|private|backoffice|dashboard|cms|sysadmin|superuser|impersonate|users\/admin|settings\/admin)\b[^"'\`?#\s]*)/i
+
+// Docs/marketing first-segment guard — these sections legitimately contain
+// admin-ish words deep in the path but are never privileged routes.
+const NON_ADMIN_ROUTE_RE =
+  /^\/(?:docs?|documentation|guides?|reference|api-reference|learn|blog|news|press|help|support|faq|pricing|about|features?|changelog|examples?|tutorials?|community|showcase|templates?|integrations?|legal|terms|privacy)\b/i
 
 const ADMIN_HARD_PREFIXES = [
   '/admin',
@@ -1582,11 +1629,32 @@ function isSpaShellResponse(
   return body.slice(0, 256) === fp.head
 }
 
+/** Heuristic classification of an admin-probe body. */
+type AdminBodyKind = 'login-page' | 'dashboard' | 'unknown'
+
+function classifyAdminBody(body: string): AdminBodyKind {
+  if (!body) return 'unknown'
+  const b = body.toLowerCase()
+  const hasPasswordInput = /<input[^>]*type\s*=\s*["']password["']/.test(b)
+  const hasLoginAction = /<form[^>]*action\s*=\s*["'][^"']*\b(?:login|signin|sign[-_]in|auth)\b/.test(b)
+  const hasLoginCopy = /\b(?:sign in|log in|login|password|enter your (?:email|password))\b/.test(b)
+  if (hasPasswordInput || hasLoginAction || (hasLoginCopy && /password/.test(b))) {
+    return 'login-page'
+  }
+  // Dashboard markers: tables/grids of data, admin-nav, "dashboard"/"users"/"orders" copy, no password field
+  const dashboardKeywords =
+    /\b(?:dashboard|admin panel|administration|manage users|user list|orders|invoices|tenants|sites|projects|create new|delete|edit row)\b/.test(b)
+  const hasTable = /<(?:table|tbody|thead|tr|td)\b/.test(b) || /role\s*=\s*["']grid["']/.test(b)
+  const hasAdminNav = /<nav[\s\S]{0,200}\b(?:admin|dashboard|users|settings|tenants)\b/i.test(b)
+  if ((dashboardKeywords && hasTable) || hasAdminNav) return 'dashboard'
+  return 'unknown'
+}
+
 async function discoverAndProbeAdminRoutes(
   bundleText: string,
   html: string,
   origin: string,
-): Promise<{ path: string; status: number; contentLength: number | null; isSpaShell: boolean }[]> {
+): Promise<{ path: string; status: number; contentLength: number | null; isSpaShell: boolean; bodyKind: AdminBodyKind }[]> {
   const homepageFp = makeHomepageFingerprint(html)
   const candidates = new Set<string>()
   // Pattern 1: react-router style — `<Route path="/admin/...">` or path:"/admin..."
@@ -1614,6 +1682,7 @@ async function discoverAndProbeAdminRoutes(
   const filtered = Array.from(candidates)
     .filter((p) => p.length >= 5 && p.length <= 200)
     .filter((p) => !/\.(?:js|css|map|png|jpg|svg|webp|ico)$/i.test(p))
+    .filter((p) => !NON_ADMIN_ROUTE_RE.test(p))
     .slice(0, 10)
   if (filtered.length === 0) return []
 
@@ -1649,11 +1718,13 @@ async function discoverAndProbeAdminRoutes(
           body = ''
         }
         const isSpaShell = body.length > 0 && isSpaShellResponse(body, homepageFp)
+        const bodyKind: AdminBodyKind = isSpaShell ? 'unknown' : classifyAdminBody(body)
         return {
           path,
           status: r.status,
           contentLength: Number.isFinite(contentLength) ? contentLength : null,
           isSpaShell,
+          bodyKind,
         }
       } catch {
         return null
@@ -1661,7 +1732,7 @@ async function discoverAndProbeAdminRoutes(
     }),
   )
   return results.filter(
-    (x): x is { path: string; status: number; contentLength: number | null; isSpaShell: boolean } =>
+    (x): x is { path: string; status: number; contentLength: number | null; isSpaShell: boolean; bodyKind: AdminBodyKind } =>
       x !== null,
   )
 }
@@ -1849,6 +1920,11 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
     () => [] as { param: string; reflectedRaw: boolean }[],
   )
   const sqliP = probeSqliErrors(url.toString()).catch(() => [] as { param: string; pattern: string }[])
+  // Active SSRF canary — fire OAST payloads early so the target has the whole
+  // scan window to make the server-side fetch before we poll for hits.
+  const ssrfP = oastEnabled()
+    ? probeSsrf(url.toString()).catch(() => [] as { param: string; token: string }[])
+    : Promise.resolve([] as { param: string; token: string }[])
   // S1+3 — passive subdomain discovery via crt.sh, capped at 4s timeout.
   // Runs in parallel; failure → empty list (don't block the scan).
   const subdomainsP = discoverSubdomainsFromCT(getBaseDomain(url.hostname)).catch(() => [] as string[])
@@ -2421,19 +2497,52 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
             PROBE_TIMEOUT_MS,
           )
           if (smResp.ok) {
-            const sample = (await smResp.text()).slice(0, 256)
+            // Read up to 256 KB of the map for content-aware classification.
+            const body = (await smResp.text()).slice(0, 262144)
+            const sample = body.slice(0, 256)
             const looksLikeMap = sample.includes('"version"') && sample.includes('"sources"')
             if (looksLikeMap) {
-              findings.push({
-                id: `sourcemap-${fileSlug}`,
-                severity: 'warn',
-                category: 'sourcemaps',
-                title: 'Production source map is publicly served',
-                description:
-                  'Source maps reveal your full original source code, comments, and any secrets that were inlined at build time. They should not ship to production.',
-                evidence: `GET ${mapUrl} → ${smResp.status} OK (sourcemap)`,
-                fixPrompt: `In vite.config.ts (or next.config.ts) set "build.sourcemap: false" for production. If you need source maps for error tracking (Sentry / Vercel), use "hidden-source-map" so the .map is generated for upload but no sourceMappingURL comment is appended to the JS — making the .map unreachable from the browser. Then redeploy and confirm ${mapUrl} returns 404.`,
-              })
+              const hasSecret = evidenceContainsRealSecret(body)
+              const hasInternalPaths =
+                /\/Users\//.test(body) ||
+                /\/home\//.test(body) ||
+                /C:\\\\Users\\\\/.test(body) ||
+                /\.internal\b/.test(body) ||
+                /ip-10-\d+-\d+-\d+/.test(body)
+              if (hasSecret) {
+                findings.push({
+                  id: 'sourcemaps-exposed-with-secrets',
+                  severity: 'critical',
+                  category: 'sourcemaps',
+                  title: 'Source map contains real secret material',
+                  description:
+                    'A publicly accessible source map was found AND its body contains a real secret pattern (PEM key, DB password, provider live key, or service-role token). Rotate the secret immediately and remove the map.',
+                  evidence: `GET ${mapUrl} → ${smResp.status}\nSensitive pattern matched inside .map body (redacted)`,
+                  fixPrompt: `1) Rotate every secret in the leaked map at its issuing service. 2) In vite.config.ts / next.config.ts set "build.sourcemap: false" (or use "hidden-source-map" so the .map is generated but not referenced). 3) Redeploy and confirm ${mapUrl} → 404. 4) Audit your bundler config to make sure secrets are NOT inlined at build time — read from server env at runtime only.`,
+                })
+              } else if (hasInternalPaths) {
+                findings.push({
+                  id: 'sourcemaps-exposed-with-internal-paths',
+                  severity: 'warn',
+                  category: 'sourcemaps',
+                  title: 'Source map exposes internal paths / hostnames',
+                  description:
+                    'A public source map was found. No live secrets in it, but it leaks original file paths (e.g. /Users/, /home/, internal AWS hostnames). That gives attackers your full module tree for further recon.',
+                  evidence: `GET ${mapUrl} → ${smResp.status}`,
+                  fixPrompt: `In vite.config.ts / next.config.ts set "build.sourcemap: false" for production, or use "hidden-source-map" if you need maps for Sentry. Redeploy and confirm ${mapUrl} → 404.`,
+                })
+              } else {
+                findings.push({
+                  id: 'sourcemaps-exposed',
+                  severity: 'info',
+                  category: 'sourcemaps',
+                  title: 'Production source map is publicly served',
+                  description:
+                    'Source maps reveal your original source code. Worth removing for production, but no secrets / internal paths were observed in this map.',
+                  evidence: `GET ${mapUrl} → ${smResp.status} OK (sourcemap)`,
+                  fixPrompt: `In vite.config.ts (or next.config.ts) set "build.sourcemap: false" for production. If you need source maps for error tracking (Sentry / Vercel), use "hidden-source-map" so the .map is generated for upload but no sourceMappingURL comment is appended to the JS. Then redeploy and confirm ${mapUrl} returns 404.`,
+                })
+              }
             }
           }
         } catch {
@@ -2443,31 +2552,98 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
     }
   }
 
-  // === PATH PROBES (in parallel) ===
+  // === PATH PROBES (in parallel, body-aware) ===
+  // For each probed path: fetch up to 8KB of body, then classify:
+  //   1) status != 200 → no finding (login redirects handled elsewhere).
+  //   2) body empty (<8 bytes) → `info` paths-X-empty-200 (suspicious, demoted).
+  //   3) body matches main HTML SPA shell → `info` paths-X-spa-shell-200 (FP).
+  //   4) body matches a real-secret pattern → `critical` (the configured severity).
+  //   5) otherwise → severity downgraded to `warn` for `critical`-configured
+  //      probes (200 with non-shell body, no sensitive patterns: needs review).
+  const sensitivePathIds = new Set([
+    '/.env',
+    '/.env.production',
+    '/.env.local',
+    '/.git/HEAD',
+    '/.aws/credentials',
+    '/backup.zip',
+    '/backup.sql',
+    '/database.sql',
+    '/dump.sql',
+    '/config.json',
+  ])
   const probeResults = await Promise.allSettled(
     PATHS_TO_PROBE.map(async (probe) => {
       const probeUrl = new URL(probe.path, finalUrl).toString()
       const r = await fetchWithTimeout(probeUrl, { method: 'GET' }, PROBE_TIMEOUT_MS)
       if (!r.ok) return null
-      const sample = (await r.text()).slice(0, 256).toLowerCase()
-      const looksLikeIndex = sample.includes('<!doctype') || sample.includes('<html')
-      if (looksLikeIndex) return null
-      return { probe, status: r.status, statusText: r.statusText, probeUrl }
+      const body = (await r.text()).slice(0, 8192)
+      return { probe, status: r.status, statusText: r.statusText, probeUrl, body }
     }),
   )
   for (const res of probeResults) {
-    if (res.status === 'fulfilled' && res.value) {
-      const { probe, status, statusText, probeUrl } = res.value
+    if (res.status !== 'fulfilled' || !res.value) continue
+    const { probe, status, statusText, probeUrl, body } = res.value
+    const idBase = `path-${probe.path.replaceAll('/', '-').replaceAll('.', '-')}`
+
+    // (2) Empty or tiny body.
+    if (body.length < 8) {
+      findings.push({
+        id: `${idBase}-empty-200`,
+        severity: 'info',
+        category: 'paths',
+        title: `${probe.label} returned an empty 200`,
+        description: `${probe.path} responded 200 but the body was empty. Suspicious but inconclusive — could be a misconfigured rewrite. Confirm with curl.`,
+        evidence: `GET ${probeUrl} → ${status} (${body.length} bytes)`,
+        fixPrompt: `Confirm ${probe.path} is intentionally exposed or properly 404'd. curl -I ${probeUrl}`,
+      })
+      continue
+    }
+    // (3) SPA shell suppression.
+    if (isSpaShellBody(body, html)) {
+      findings.push({
+        id: `${idBase}-spa-shell-200`,
+        severity: 'info',
+        category: 'paths',
+        title: `${probe.label} returned the SPA shell`,
+        description: `${probe.path} responds 200 but the body is the SPA's index.html. Not an exposure — the SPA's router will surface its own 404 client-side.`,
+        evidence: `GET ${probeUrl} → 200 (SPA shell, ${body.length} bytes)`,
+        fixPrompt: `Optional: add a server-side rewrite that returns 404 for /\\.env*, /\\.git/*, /backup.*, /\\.aws/* so probes don't even reach the SPA fallback.`,
+      })
+      continue
+    }
+    // (4) Real-secret match → keep configured critical severity, redact.
+    const isSensitivePath = sensitivePathIds.has(probe.path)
+    if (isSensitivePath && evidenceContainsRealSecret(body)) {
+      // Redact: first 8 + last 4 chars of the longest credential-shaped line.
+      const lines = body.split(/\r?\n/).filter((l) => l.length >= 12 && l.length <= 240)
+      const sample = lines.find((l) => evidenceContainsRealSecret(l)) || lines[0] || ''
+      const redacted =
+        sample.length > 16 ? `${sample.slice(0, 8)}…${sample.slice(-4)}` : '***redacted***'
       findings.push({
         id: `path-${probe.path.replaceAll('/', '-').replaceAll('.', '-')}`,
-        severity: probe.severity,
+        severity: 'critical',
         category: 'paths',
-        title: `${probe.label} is reachable at ${probe.path}`,
-        description: `${probe.path} responds with ${status} and is not the SPA fallback. Files like this should never be public.`,
-        evidence: `GET ${probeUrl} → ${status} ${statusText}`,
-        fixPrompt: `Make sure ${probe.path} is not being deployed. Confirm .gitignore excludes it and your deploy output (public/, dist/, .next/, etc.) does not contain it. Add a rewrite rule that returns 404 for ${probe.path} and similar paths (/.env*, /.git/*, /.DS_Store, *.bak, *.swp, *~). On Vercel put this in vercel.json under "redirects". Redeploy and verify with: curl -I ${probeUrl}`,
+        title: `${probe.label} is reachable at ${probe.path} (contains real secrets)`,
+        description: `${probe.path} responds 200 with a body containing a real secret pattern (DB password, PEM key, provider live key, or service-role token). Treat all secrets in this file as compromised — rotate now.`,
+        evidence: `GET ${probeUrl} → ${status} ${statusText}\nMatched redacted: ${redacted}`,
+        fixPrompt: `1) Rotate every secret in ${probe.path} at its issuing service. 2) Remove ${probe.path} from deploy output (Vercel: add to .vercelignore; Next.js: ensure not under public/). 3) Add a 404 rewrite for /\\.env*, /\\.git/*, /backup.*. 4) curl -I ${probeUrl} → expect 404.`,
       })
+      continue
     }
+    // (5) Non-shell body, no sensitive pattern: downgrade `critical` to `warn`.
+    const finalSeverity: Severity = probe.severity === 'critical' ? 'warn' : probe.severity
+    findings.push({
+      id: probe.severity === 'critical'
+        ? `path-${probe.path.replaceAll('/', '-').replaceAll('.', '-')}-exposed-needs-review`
+        : `path-${probe.path.replaceAll('/', '-').replaceAll('.', '-')}`,
+      severity: finalSeverity,
+      category: 'paths',
+      title: `${probe.label} is reachable at ${probe.path}`,
+      description: `${probe.path} responds with ${status}. ${probe.severity === 'critical' ? 'Body is not the SPA shell but no real secret patterns matched — needs manual review to confirm exposure.' : 'Files like this should never be public.'}`,
+      evidence: `GET ${probeUrl} → ${status} ${statusText} (${body.length} bytes)`,
+      fixPrompt: `Make sure ${probe.path} is not being deployed. Confirm .gitignore excludes it and your deploy output (public/, dist/, .next/, etc.) does not contain it. Add a rewrite rule that returns 404 for ${probe.path} and similar paths (/.env*, /.git/*, /.DS_Store, *.bak, *.swp, *~). On Vercel put this in vercel.json under "redirects". Redeploy and verify with: curl -I ${probeUrl}`,
+    })
   }
 
   // === HTML HYGIENE (inline scripts, on* handlers, target=_blank) ===
@@ -2830,6 +3006,31 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
         .join('\n'),
       fixPrompt: `Treat every redirect parameter as untrusted input. Two patterns: (1) allow-list — keep a list of internal paths you redirect to, reject anything not in the list. (2) origin-restriction — parse the redirect target as a URL, ensure its origin matches yours, otherwise drop it. Specific to OAuth flows: use the OAuth state parameter and validate it on return. Never redirect to a user-supplied absolute URL without validation.`,
     })
+  }
+
+  // === SSRF (confirmed via OAST) ===
+  const ssrfPlanted = await ssrfP
+  if (ssrfPlanted.length > 0) {
+    // Give the target a moment to make the server-side fetch, then poll our
+    // collaborator. Only params whose token was actually hit are confirmed.
+    await new Promise((r) => setTimeout(r, 1500))
+    const hitTokens = await checkOastHits(ssrfPlanted.map((p) => p.token)).catch(
+      () => new Set<string>(),
+    )
+    const confirmed = ssrfPlanted.filter((p) => hitTokens.has(p.token))
+    if (confirmed.length > 0) {
+      findings.push({
+        id: 'paths-ssrf-confirmed',
+        severity: 'critical',
+        category: 'paths',
+        title: `Confirmed SSRF via ${confirmed.length} URL parameter${confirmed.length === 1 ? '' : 's'}`,
+        description: `We set ${confirmed.length} URL parameter${confirmed.length === 1 ? '' : 's'} to a unique address we control and YOUR SERVER fetched it — proven by an inbound request to our collaborator. This is Server-Side Request Forgery: an attacker can make your server fetch arbitrary internal URLs (cloud metadata at 169.254.169.254, internal admin panels, databases), often bypassing your firewall.`,
+        evidence: confirmed
+          .map((p) => `?${p.param}=<vguard-collaborator> → your server fetched it (out-of-band hit recorded)`)
+          .join('\n'),
+        fixPrompt: `Your server fetches a URL taken from user input without validation. Fix every endpoint that fetches a user-supplied URL: (1) Parse the URL and ALLOW-LIST the host — only permit the specific external hosts you actually need; reject everything else. (2) Resolve the hostname and BLOCK private/internal ranges before fetching: 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 (cloud metadata!), and ::1. (3) Disable following redirects (or re-validate after each hop — redirects bypass naive allow-lists). (4) Never send internal headers/credentials on the proxied request. For image proxies/link unfurlers specifically, use a vetted library with SSRF protection rather than a raw fetch.`,
+      })
+    }
   }
 
   // === FIREBASE RTDB EXPOSURE ===
@@ -3227,10 +3428,13 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
     if (astResult.hardcodedCredentials.length > 0) {
       findings.push({
         id: 'js-ast-hardcoded-creds',
-        severity: 'critical',
+        // Heuristic — NOT a confirmed leak. Many matches are public app-store
+        // IDs, analytics tags, or build-time placeholders. Surface as `warn`
+        // + "needs review" so the user investigates without panicking.
+        severity: 'warn',
         category: 'secrets',
-        title: `${astResult.hardcodedCredentials.length} hardcoded credential${astResult.hardcodedCredentials.length === 1 ? '' : 's'} in object literals`,
-        description: `AST parse found object-literal patterns where a credential-shaped key (apiKey, secret, token, password, etc.) is bound to a credential-shaped string value in your shipped JS. Regex-based scanners miss these because the value alone may not match a known provider; the structure (key + secret-shaped value) is what gives them away. Whatever this token is, it's now public.`,
+        title: `${astResult.hardcodedCredentials.length} credential-shaped pattern${astResult.hardcodedCredentials.length === 1 ? '' : 's'} (needs review)`,
+        description: `Heuristic — these are patterns shaped like credentials; verify against your codebase before treating as a real leak. AST parse found object literals where a credential-shaped key (apiKey, secret, token, password, etc.) is bound to a string value. Many real-world matches are publishable client IDs (Stripe pk_, analytics tag, app-store ID). Whichever way each entry goes — public publishable key or real server-side leak — confirm before rotating.`,
         evidence: astResult.hardcodedCredentials
           .slice(0, 6)
           .map((c) => `{ ${c.keyName}: "${c.valueSample}" }`)
@@ -3320,48 +3524,81 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
     bundleTextAll,
     html,
     url.origin,
-  ).catch(() => [] as { path: string; status: number; contentLength: number | null; isSpaShell: boolean }[])
-  const publicAdminRoutes = adminProbeResults.filter(
+  ).catch(() => [] as { path: string; status: number; contentLength: number | null; isSpaShell: boolean; bodyKind: AdminBodyKind }[])
+  // Split the 200-responses into three buckets by body content:
+  //   dashboard       → real admin data/actions reachable unauth  (critical)
+  //   login-page      → admin URL exists but auth-gated visibly   (informational)
+  //   unknown / shell → can't tell or SPA shell — needs review    (warn)
+  const probed200 = adminProbeResults.filter(
     (r) =>
       r.status === 200 &&
-      // Filter out tiny responses that are clearly redirects-via-HTML or
-      // generic 200 OK error pages: typically real admin pages return >1KB
-      // of HTML/JSON. Anything under 200 bytes is almost always a stub.
       (r.contentLength === null || r.contentLength >= 200) &&
-      // Filter out SPA shells. Vite + React, Next.js static export, Vue Router
-      // history-mode fallback, and similar setups serve the SAME index.html
-      // for every path — admin auth is enforced client-side after the shell
-      // mounts. Reporting the shell as "admin returned 200 unauth" is a false
-      // positive: no privileged data crossed the wire, just the bootstrap HTML.
       !r.isSpaShell,
   )
-  if (publicAdminRoutes.length > 0) {
+  const dashboardRoutes = probed200.filter((r) => r.bodyKind === 'dashboard')
+  const loginPageRoutes = probed200.filter((r) => r.bodyKind === 'login-page')
+  const needsReviewRoutes = probed200.filter((r) => r.bodyKind === 'unknown')
+  const protectedRoutes = adminProbeResults.filter(
+    (r) => r.status === 401 || r.status === 403 || (r.status >= 300 && r.status < 400),
+  )
+
+  if (dashboardRoutes.length > 0) {
     findings.push({
-      id: 'paths-admin-route-public',
+      id: 'paths-admin-unauth-data',
       severity: 'critical',
       category: 'auth',
-      title: `${publicAdminRoutes.length} admin route${
-        publicAdminRoutes.length === 1 ? '' : 's'
-      } from your bundle returned 200 without auth`,
-      description: `We discovered admin/internal routes referenced in your shipped JS, then sent unauthenticated GET requests to them. Some returned HTTP 200 — meaning anyone on the internet, with no login, can reach pages your code treats as privileged. This is broken access control: the canonical OWASP A1 (#1 most exploited class in 2021).`,
-      evidence: publicAdminRoutes
+      title: `${dashboardRoutes.length} admin dashboard${
+        dashboardRoutes.length === 1 ? '' : 's'
+      } reachable without auth`,
+      description: `We discovered admin/internal routes in your shipped JS, then sent unauthenticated GET requests. Some returned HTTP 200 with body content that looks like a real admin dashboard (tables / admin nav / management actions — no password field). This is broken access control: anyone on the internet can reach pages your code treats as privileged.`,
+      evidence: dashboardRoutes
         .map((r) => `${r.path} → HTTP ${r.status}${r.contentLength !== null ? ` (${r.contentLength}B)` : ''}`)
         .join('\n'),
-      fixPrompt: `For each route above: confirm it's actually meant to be admin-only. If yes, add a server-side auth gate at the route boundary (Next.js middleware on /admin/* / pages with getServerSession; Supabase RLS on the API the page calls; custom JWT verification). The check must run BEFORE the route handler — client-side auth (e.g. "redirect if no localStorage token") is bypassable in 5 seconds with curl. Re-run this scan after fixing — the route should now return 401/403/redirect-to-login.`,
+      fixPrompt: `For each route above: add a server-side auth gate at the route boundary (Next.js middleware on /admin/* / getServerSession; Supabase RLS on the API the page calls; custom JWT verification). The check must run BEFORE the route handler — client-side auth (e.g. "redirect if no localStorage token") is bypassable with curl in 5 seconds. Re-run this scan after fixing — the route should now return 401/403/redirect-to-login.`,
     })
-  } else if (adminProbeResults.length > 0) {
-    // Discovered candidates but they're all gated correctly — emit OK marker.
+  }
+  if (loginPageRoutes.length > 0) {
     findings.push({
-      id: 'paths-admin-route-clean',
+      id: 'paths-admin-login-visible',
+      severity: 'info',
+      category: 'auth',
+      title: `${loginPageRoutes.length} admin login page${
+        loginPageRoutes.length === 1 ? '' : 's'
+      } visible to the public`,
+      description: `Admin routes referenced by your bundle return a login form to unauthenticated requests. This is the intended behavior — the URL is reachable but no privileged data is exposed without credentials. Listed for awareness so you can decide whether the URL itself should be moved behind a less-guessable subpath.`,
+      evidence: loginPageRoutes
+        .map((r) => `${r.path} → HTTP ${r.status} (login form)`)
+        .join('\n'),
+      fixPrompt: `If you'd rather not advertise the admin URL: rename it to a long random subpath (e.g. /admin → /a_${Math.random().toString(36).slice(2, 10)}) and update your bundle/redirects accordingly. This is "security by obscurity" — it does not replace the server-side auth gate, but it does dampen automated discovery.`,
+    })
+  }
+  if (needsReviewRoutes.length > 0) {
+    findings.push({
+      id: 'paths-admin-needs-review',
+      severity: 'warn',
+      category: 'auth',
+      title: `${needsReviewRoutes.length} admin route${
+        needsReviewRoutes.length === 1 ? '' : 's'
+      } returned 200 — body content inconclusive`,
+      description: `We probed admin routes referenced by your bundle. These returned HTTP 200 with non-SPA-shell bodies but we couldn't confidently classify them as dashboard or login page. Open each URL in a private browser tab without logging in — if you see privileged content, treat as a critical access-control issue.`,
+      evidence: needsReviewRoutes
+        .map((r) => `${r.path} → HTTP ${r.status}${r.contentLength !== null ? ` (${r.contentLength}B)` : ''}`)
+        .join('\n'),
+      fixPrompt: `Manually verify each route above: open in an incognito window with no cookies. If you see admin data → apply the server-side auth gate fix (see paths-admin-unauth-data). If you see a login screen → no action needed (this is paths-admin-login-visible behavior). If you see something else (e.g. a marketing page that just happens to live at /admin) — keep as-is.`,
+    })
+  }
+  if (protectedRoutes.length > 0 && dashboardRoutes.length === 0 && loginPageRoutes.length === 0 && needsReviewRoutes.length === 0) {
+    findings.push({
+      id: 'paths-admin-protected',
       severity: 'ok',
       category: 'auth',
-      title: `${adminProbeResults.length} admin route${
-        adminProbeResults.length === 1 ? '' : 's'
+      title: `${protectedRoutes.length} admin route${
+        protectedRoutes.length === 1 ? '' : 's'
       } discovered in bundle, all gated`,
-      description: `We extracted ${adminProbeResults.length} admin/internal route path${
-        adminProbeResults.length === 1 ? '' : 's'
-      } from your shipped JS, then probed each without auth. None returned 200 — your access control is enforced at the route level, not just in the UI.`,
-      evidence: adminProbeResults
+      description: `We extracted ${protectedRoutes.length} admin/internal route path${
+        protectedRoutes.length === 1 ? '' : 's'
+      } from your shipped JS and probed each without auth. None returned 200 with real content — your access control is enforced at the route boundary, not just in the UI.`,
+      evidence: protectedRoutes
         .map((r) => `${r.path} → HTTP ${r.status}`)
         .slice(0, 8)
         .join('\n'),
@@ -3620,6 +3857,9 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
   const engineOut = applyEngine(legacyScored, engineCtx)
   const scored = engineOut.findings
   const dynamicVibeScore = engineOut.vibeScore
+  const dynamicGrade = engineOut.grade
+  const severityCounts = engineOut.severityCounts
+  const scoreBreakdown = engineOut.scoreBreakdown
   // Aggregate "risk number" still computed via legacy scorer for back-compat
   // numeric field. The user-facing band comes from the engine (which clamps
   // to `low` when no verified impact exists). We don't clamp the number — it
@@ -3689,11 +3929,24 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
       // hardening-recommendations otherwise; informational is more honest
       // since "WAF present" is a defense, not a finding).
       riskClass: 'informational',
+      effectiveSeverity: 'info',
       confidence: 'informational',
       uiGroup: 'informational-observations',
     })
-    // Re-roll totals to reflect the new info finding so the score panel matches.
+    // Re-roll counts to reflect the new info finding so the panel matches.
     totals.info += 1
+    severityCounts.info += 1
+  }
+
+  // Reconciled totals — the legacy 4-bucket shape the UI/CLI/badge consume,
+  // but now sourced from the ENGINE'S reconciled severities, not raw detector
+  // output. This is what kills "1 critical · 95/100": a detector `critical`
+  // that the engine demoted to medium/info no longer inflates `totals.critical`.
+  const reconciledTotals = {
+    critical: severityCounts.critical,
+    warn: severityCounts.high + severityCounts.medium,
+    info: severityCounts.low + severityCounts.info,
+    ok: severityCounts.ok,
   }
 
   return {
@@ -3702,9 +3955,12 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
     scannedAt: new Date().toISOString(),
     durationMs: Date.now() - t0,
     vibeScore: dynamicVibeScore,
+    grade: dynamicGrade,
     aggregateRisk,
     aggregateRiskBand: engineOut.aggregateBand,
-    totals,
+    totals: reconciledTotals,
+    severityCounts,
+    scoreBreakdown,
     findings: scored,
     attackSurface,
     stage: 1 as const,

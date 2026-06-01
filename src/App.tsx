@@ -15,6 +15,7 @@ import { TypingEffect } from '@/components/ui/typing-effect'
 import { InteractiveGlobe } from '@/components/ui/interactive-globe'
 import { BentoGrid, type BentoCardProps } from '@/components/ui/bento'
 import { CpuArchitecture } from '@/components/ui/cpu-architecture'
+import { PricingSection } from '@/components/PricingSection'
 
 interface RecentFinding {
   hostname: string
@@ -266,7 +267,7 @@ export default function App() {
             >
               <span className="text-(--color-accent)">▸</span> No source code. No enterprise plan. Just a URL.
             </motion.p>
-            <motion.div variants={fadeUp} transition={{ duration: 0.6 }} className="mt-7 sm:mt-10">
+            <motion.div id="vguard-scan" variants={fadeUp} transition={{ duration: 0.6 }} className="mt-7 sm:mt-10 scroll-mt-24">
               <ScanForm />
             </motion.div>
             <motion.div
@@ -488,6 +489,8 @@ export default function App() {
           </motion.div>
         </section>
 
+        <PricingSection />
+
         <ContactSection />
       </main>
 
@@ -498,13 +501,15 @@ export default function App() {
             <span>in stealth</span>
           </div>
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-1 sm:gap-0">
-            <span>Founders · Roy Argaman · Oded Safdie</span>
+            <span>Founder · Roy Argaman</span>
             <a href="mailto:infovguards@gmail.com" className="hover:text-(--color-fg-muted) transition-colors">infovguards@gmail.com</a>
           </div>
           <div className="flex items-center gap-4 pt-1">
             <a href="/terms" className="hover:text-(--color-fg-muted) transition-colors">Terms</a>
             <a href="/privacy" className="hover:text-(--color-fg-muted) transition-colors">Privacy</a>
             <a href="/accessibility" className="hover:text-(--color-fg-muted) transition-colors">Accessibility</a>
+            <span className="opacity-40">·</span>
+            <a href="https://roiai.co.il" target="_blank" rel="noopener noreferrer" className="hover:text-(--color-accent) transition-colors text-(--color-accent)/70">Built by ROI AI</a>
           </div>
         </div>
       </footer>

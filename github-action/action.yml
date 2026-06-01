@@ -25,6 +25,14 @@ inputs:
     description: 'Override the Vguard API base (defaults to the public instance).'
     required: false
     default: 'https://v-guards.com'
+  create-fix-pr:
+    description: 'Open (or update) a pull request containing VGUARD_FIXES.md with the paste-ready AI fix prompt for every finding. Requires the workflow to grant `contents: write` and `pull-requests: write`.'
+    required: false
+    default: 'false'
+  fix-pr-branch:
+    description: 'Branch name for the fixes PR (re-runs update the same branch/PR).'
+    required: false
+    default: 'vguard/security-fixes'
 
 outputs:
   vibe-score:
@@ -37,6 +45,8 @@ outputs:
     description: 'Number of info findings.'
   outcome:
     description: 'Scan outcome: success | blocked_by_waf | blocked_by_target | unreachable | timeout | internal.'
+  fix-pr-url:
+    description: 'URL of the opened/updated fixes PR (only when create-fix-pr is enabled and findings exist).'
 
 runs:
   using: 'node20'
