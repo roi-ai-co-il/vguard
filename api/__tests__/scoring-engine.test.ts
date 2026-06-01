@@ -38,7 +38,8 @@ describe('strict critical gate — passive findings cannot be Critical alone', (
       baseCtx,
     )
     assert.notEqual(out.findings[0].riskClass, 'critical-exploit')
-    assert.ok(out.vibeScore >= 85)
+    // v4: a lone medium-weakness now caps the score at the medium ceiling (79, C).
+    assert.ok(out.vibeScore >= 75, `got ${out.vibeScore}`)
   })
 
   it('DOM sink alone is informational/hardening only', () => {
@@ -111,7 +112,9 @@ describe('strict critical gate — passive findings cannot be Critical alone', (
       assert.equal(fi.riskClass, 'low-hardening')
       assert.equal(fi.uiGroup, 'hardening-recommendations')
     }
-    assert.ok(out.vibeScore >= 90)
+    // v4: low-hardening caps at the low ceiling (89, B) — missing advanced
+    // headers means "not fully hardened", which is a B, not an A.
+    assert.ok(out.vibeScore >= 85, `got ${out.vibeScore}`)
   })
 })
 
@@ -358,7 +361,8 @@ describe('final-spec regressions — calm for noise, strict for real risk, hones
       f({ id: 'paths-robots', severity: 'info', category: 'paths' }),
     ]
     const out = applyEngine(findings, baseCtx)
-    assert.ok(out.vibeScore >= 90, `expected >= 90 on clean site, got ${out.vibeScore}`)
+    // v4: a missing advanced header (COOP) is a low finding → B ceiling (89).
+    assert.ok(out.vibeScore >= 85, `expected >= 85 on near-clean site, got ${out.vibeScore}`)
     assert.equal(out.aggregateBand, 'low')
     assert.equal(out.hasVerifiedImpact, false)
   })
@@ -462,12 +466,13 @@ describe('scoring-policy overhaul — 20 scenarios', () => {
     assert.equal(out.findings.filter((x) => x.riskClass === 'critical-exploit').length, 0)
   })
 
-  it('3. Static site with few missing headers: 90-100', () => {
+  it('3. Static site with few missing headers: B-range (low-only)', () => {
     const out = applyEngine([
       f({ id: 'headers-no-x-content-type', severity: 'info', category: 'headers' }),
       f({ id: 'headers-no-hsts', severity: 'warn', category: 'headers' }),
     ], baseCtx)
-    assert.ok(out.vibeScore >= 90, `got ${out.vibeScore}`)
+    // v4: low-only posture lands at the low ceiling (89, B).
+    assert.ok(out.vibeScore >= 85, `got ${out.vibeScore}`)
   })
 
   it('4. CSP unsafe-inline alone → low-hardening', () => {
@@ -684,6 +689,145 @@ describe('AST heuristic — credential-shaped patterns', () => {
           evidence: '{ apiKey: "..." }' }),
     ], baseCtx)
     assert.notEqual(out.findings[0].riskClass, 'critical-exploit')
+  })
+})
+
+// ----------------------------------------------------------------------------
+// Score v4 — band-anchored hybrid (2026-06-01). The authoritative spec for the
+// "real, not compressed" scoring + letter grade + breakdown + reconciled
+// effective severity. Numbers calibrated against the real-site distribution.
+// ----------------------------------------------------------------------------
+
+describe('v4 — effective severity is the single source of truth (badge ↔ score)', () => {
+  it('riskClass maps 1:1 to effectiveSeverity on every finding', () => {
+    const out = applyEngine([
+      f({ id: 'paths-env', severity: 'critical', category: 'paths', evidence: 'DB_PASSWORD=x' }),
+      f({ id: 'cookies-no-httponly', severity: 'warn', category: 'cookies', evidence: 'session=eyJ; auth_token=eyJ' }),
+      f({ id: 'cookies-no-secure', severity: 'critical', category: 'cookies', evidence: 'prefs=dark' }),
+      f({ id: 'headers-cross-origin-opener-policy', severity: 'info', category: 'headers' }),
+      f({ id: 'paths-robots', severity: 'info', category: 'paths' }),
+    ], baseCtx)
+    const map: Record<string, string> = {
+      'critical-exploit': 'critical', 'high-impact-misconfig': 'high',
+      'medium-weakness': 'medium', 'low-hardening': 'low', informational: 'info',
+    }
+    for (const fi of out.findings) {
+      assert.equal(fi.effectiveSeverity, map[fi.riskClass!], `${fi.id}: ${fi.riskClass} → ${fi.effectiveSeverity}`)
+    }
+  })
+
+  it('apple FP — js-ast public token shows as Info, NEVER inflates Critical count', () => {
+    const out = applyEngine([
+      f({ id: 'js-ast-hardcoded-creds', severity: 'critical', category: 'secrets',
+          evidence: '{ token: "app_store-apl" }' }),
+    ], baseCtx)
+    assert.equal(out.findings[0].effectiveSeverity, 'info')
+    assert.equal(out.severityCounts.critical, 0, 'a demoted heuristic must not count as Critical')
+    // The "1 critical · 95" decoupling bug is gone: no real critical, high score.
+    assert.ok(out.vibeScore >= 95, `got ${out.vibeScore}`)
+  })
+
+  it('severityCounts + scoreBreakdown are populated and attributable', () => {
+    const out = applyEngine([
+      f({ id: 'cookies-no-secure', severity: 'critical', category: 'cookies', evidence: 'a=1' }),
+      f({ id: 'headers-cross-origin-opener-policy', severity: 'info', category: 'headers' }),
+    ], baseCtx)
+    assert.equal(typeof out.scoreBreakdown.finalScore, 'number')
+    assert.equal(out.scoreBreakdown.base, 100)
+    assert.ok(out.scoreBreakdown.categories.length >= 1)
+    assert.ok(out.scoreBreakdown.categories.every((c) => c.penalty >= 0 && c.label.length > 0))
+    const sum = out.severityCounts.critical + out.severityCounts.high + out.severityCounts.medium +
+      out.severityCounts.low + out.severityCounts.info + out.severityCounts.ok
+    assert.equal(sum, out.findings.length)
+  })
+})
+
+describe('v4 — band ceilings: the worst severity caps the grade (SSL Labs mechanic)', () => {
+  const sev = (rc: 'critical' | 'high' | 'medium' | 'low') => {
+    if (rc === 'critical') return f({ id: 'paths-env', severity: 'critical', category: 'paths', evidence: 'DB_PASSWORD=secret\nSTRIPE_SECRET_KEY=sk_live_xxxxxxxxxxxxxxxx' })
+    if (rc === 'high') return f({ id: 'cookies-no-httponly', severity: 'warn', category: 'cookies', evidence: 'session=eyJ; auth_token=eyJ' })
+    if (rc === 'medium') return f({ id: 'cookies-no-secure', severity: 'critical', category: 'cookies', evidence: 'prefs=dark' })
+    return f({ id: 'headers-cross-origin-opener-policy', severity: 'info', category: 'headers' })
+  }
+  it('a Critical caps at F (≤49)', () => {
+    const out = applyEngine([sev('critical')], baseCtx)
+    assert.ok(out.vibeScore <= 49, `got ${out.vibeScore}`)
+    assert.equal(out.grade, 'F')
+  })
+  it('a High caps at C (≤70)', () => {
+    const out = applyEngine([sev('high')], baseCtx)
+    assert.ok(out.vibeScore <= 70 && out.vibeScore >= 60, `got ${out.vibeScore}`)
+    assert.equal(out.grade, 'C')
+  })
+  it('a Medium caps at C (≤79)', () => {
+    const out = applyEngine([sev('medium')], baseCtx)
+    assert.ok(out.vibeScore <= 79 && out.vibeScore >= 70, `got ${out.vibeScore}`)
+    assert.equal(out.grade, 'C')
+  })
+  it('Low-only caps at B (≤89)', () => {
+    const out = applyEngine([sev('low')], baseCtx)
+    assert.ok(out.vibeScore <= 89 && out.vibeScore >= 80, `got ${out.vibeScore}`)
+    assert.equal(out.grade, 'B')
+  })
+  it('clean (info/ok only) earns A+ (100)', () => {
+    const out = applyEngine([
+      f({ id: 'secrets-clean', severity: 'ok', category: 'secrets' }),
+      f({ id: 'paths-robots', severity: 'info', category: 'paths' }),
+    ], baseCtx)
+    assert.equal(out.vibeScore, 100)
+    assert.equal(out.grade, 'A+')
+  })
+})
+
+describe('v4 — discrimination: real sites spread instead of clustering at 85-100', () => {
+  const ctx = baseCtx
+  const lows = (n: number) => Array.from({ length: n }, (_, i) =>
+    f({ id: 'headers-cross-origin-opener-policy', severity: 'info', category: 'headers', evidence: `h${i}` }))
+  const infos = (n: number) => Array.from({ length: n }, (_, i) =>
+    f({ id: 'paths-robots', severity: 'info', category: 'paths', evidence: `r${i}` }))
+  const meds = (n: number) => Array.from({ length: n }, (_, i) =>
+    f({ id: 'cookies-no-secure', severity: 'critical', category: 'cookies', evidence: `p${i}=x` }))
+  const highs = (n: number) => Array.from({ length: n }, (_, i) =>
+    f({ id: 'cookies-no-httponly', severity: 'warn', category: 'cookies', evidence: `session_${i}=eyJ; auth_token=eyJ` }))
+
+  it('apple-profile (2 medium) → C, ~75-79', () => {
+    const out = applyEngine([...meds(2), ...lows(7), ...infos(5)], ctx)
+    assert.equal(out.grade, 'C')
+    assert.ok(out.vibeScore >= 72 && out.vibeScore <= 79, `got ${out.vibeScore}`)
+  })
+  it('amazon-profile (2 high cookies) → C, ~68-72', () => {
+    const out = applyEngine([...highs(2), ...lows(8), ...infos(7)], ctx)
+    assert.equal(out.grade, 'C')
+    assert.ok(out.vibeScore >= 65 && out.vibeScore <= 74, `got ${out.vibeScore}`)
+  })
+  it('vibe app with exposed .env → F, ≤49', () => {
+    const out = applyEngine([
+      f({ id: 'paths-env', severity: 'critical', category: 'paths',
+          evidence: 'DB_PASSWORD=secret\nSTRIPE_SECRET_KEY=sk_live_xxxxxxxxxxxxxxxx' }),
+      ...lows(3),
+    ], ctx)
+    assert.equal(out.grade, 'F')
+    assert.ok(out.vibeScore <= 49, `got ${out.vibeScore}`)
+  })
+  it('multiple confirmed exploits drive toward 0', () => {
+    const out = applyEngine([
+      f({ id: 'paths-sqli', severity: 'critical', category: 'paths', evidence: "ERROR: syntax error near \"'\"" }),
+      f({ id: 'paths-env', severity: 'critical', category: 'paths', evidence: 'DB_PASSWORD=x' }),
+      f({ id: 'secrets-stripe-secret', severity: 'critical', category: 'secrets', evidence: 'sk_live_redacted' }),
+    ], ctx)
+    assert.ok(out.vibeScore < 30, `got ${out.vibeScore}`)
+    assert.equal(out.grade, 'F')
+  })
+})
+
+describe('v4 — confidence down-weighting (passive < confirmed)', () => {
+  it('no-HTTPS is a hard cap to F regardless of findings', () => {
+    const out = applyEngine(
+      [f({ id: 'headers-csp-missing', severity: 'warn', category: 'headers' })],
+      defaultContext({ pathname: '/', isHttps: false, stage: 1 }),
+    )
+    assert.ok(out.vibeScore <= 49, `got ${out.vibeScore}`)
+    assert.equal(out.scoreBreakdown.hardCap?.reason, 'Served without HTTPS')
   })
 })
 

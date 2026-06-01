@@ -5,6 +5,19 @@
 
 export type Severity = 'critical' | 'warn' | 'info' | 'ok'
 
+/**
+ * Reconciled 5-tier severity (CVSS-aligned). This — NOT the raw detector
+ * `severity` — is the single source of truth for the badge, the totals, and
+ * the score. Derived from the engine's `riskClass`, so a detector that emitted
+ * `critical` on a public token can no longer show "Critical" while scoring as a
+ * medium. Mapping: critical-exploit→critical, high-impact-misconfig→high,
+ * medium-weakness→medium, low-hardening→low, informational→info.
+ */
+export type EffectiveSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info'
+
+/** Letter grade shown alongside the 0–100 number (SSL Labs / Observatory style). */
+export type Grade = 'A+' | 'A' | 'B' | 'C' | 'D' | 'F'
+
 export type Category =
   | 'secrets'
   | 'auth'
@@ -56,6 +69,12 @@ export interface Finding {
     | 'medium-weakness'
     | 'low-hardening'
     | 'informational'
+  /**
+   * Reconciled severity derived from `riskClass` by the scoring engine. This is
+   * what the UI badge and the totals MUST render — keeps "what's shown" and
+   * "what's scored" in lockstep. Falls back to `severity` for legacy data.
+   */
+  effectiveSeverity?: EffectiveSeverity
   /** Confidence the finding is real and actionable. */
   confidence?: 'confirmed' | 'likely' | 'informational'
   /**
@@ -119,13 +138,46 @@ export interface ScanError {
   suggestedAction?: SuggestedAction
 }
 
+/** One category's contribution to the score, for the "why this score" card. */
+export interface ScoreCategoryContribution {
+  category: Category
+  label: string
+  /** Points removed by this category (positive number). */
+  penalty: number
+  findingCount: number
+  worstSeverity: EffectiveSeverity
+  /** True when a per-category swing cap limited this category's penalty. */
+  capped: boolean
+}
+
+/** Full, attributable score derivation — the scorecard the UI renders. */
+export interface ScoreBreakdown {
+  base: 100
+  categories: ScoreCategoryContribution[]
+  /** Raw score after deductions, before the band ceiling / hard cap. */
+  rawScore: number
+  /** Worst effective severity present (drives the band ceiling). */
+  worstSeverity: EffectiveSeverity | null
+  /** Ceiling imposed by the worst severity (e.g. a Critical caps at 49). */
+  bandCeiling: number
+  /** Non-negotiable hard cap that overrode everything, if any. */
+  hardCap?: { reason: string; cap: number }
+  finalScore: number
+}
+
 export interface ScanResult {
   ok: true
   url: string
   scannedAt: string
   durationMs: number
   vibeScore: number
+  /** Letter grade derived from `vibeScore` (A+ … F). */
+  grade?: Grade
   totals: { critical: number; warn: number; info: number; ok: number }
+  /** 5-tier reconciled counts (the honest histogram behind the badges). */
+  severityCounts?: { critical: number; high: number; medium: number; low: number; info: number; ok: number }
+  /** Attributable per-category score derivation for the "why this score" card. */
+  scoreBreakdown?: ScoreBreakdown
   findings: Finding[]
   meta: {
     finalUrl: string

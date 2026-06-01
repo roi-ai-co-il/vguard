@@ -11,14 +11,18 @@
  * Pure module — no I/O, browser-safe.
  */
 
-import type { Finding } from '../../src/lib/scanner-types.js'
+import type { EffectiveSeverity, Finding, Grade, ScoreBreakdown, ScoreCategoryContribution } from '../../src/lib/scanner-types.js'
 import {
-  CAPS,
   CLASS_BASE,
-  CLASS_DAMAGE,
   CONFIDENCE_MULT,
   DECAY_FACTOR,
-  BAND_THRESHOLDS,
+  RISKCLASS_TO_EFFECTIVE,
+  SEVERITY_PENALTY,
+  BAND_CEILING,
+  CATEGORY_CAP,
+  DEFAULT_CATEGORY_CAP,
+  CATEGORY_LABELS,
+  gradeForScore,
   isAdvancedHardeningHeader,
   isPublicClientIdentifier,
   verifiedImpactPredicate,
@@ -28,7 +32,7 @@ import {
   type RouteContext,
   type ScoringContext,
   type FindingTraits,
-} from './scoring-policy.ts'
+} from './scoring-policy.js'
 
 // Re-export so existing consumers don't break.
 export type { RiskClass, Confidence, UiGroup, RouteContext, ScoringContext, FindingTraits }
@@ -153,7 +157,7 @@ export function extractTraits(finding: Finding, ctx: ScoringContext): FindingTra
         'headers-csp-no-form-action',
       ) ||
       ID(id, 'cookies-no-secure', 'cookies-no-samesite') ||
-      ID(id, 'dom-sink-innerhtml', 'dom-sink-outerhtml', 'dom-sink-insertadjacent', 'dom-sink-document-write') ||
+      ID(id, 'dom-sink-innerhtml', 'dom-sink-outerhtml', 'dom-sink-insertadjacent', 'dom-sink-document-write', 'js-ast-dom-sink') ||
       ID(id, 'dns-no-caa', 'dns-no-dnssec') ||
       ID(id, 'email-dmarc-monitor', 'email-spf-softfail') ||
       ID(id, 'integrity-no-sri') ||
@@ -214,6 +218,11 @@ export function classifyRiskClass(
 ): RiskClass {
   if (finding.severity === 'ok') return 'informational'
 
+  // `meta` is the informational-observations category (WAF present, localhost
+  // reference, etc.) — never a weakness. It must never set a band ceiling or it
+  // produces the nonsense "1 Medium (capped) · −0 · score capped at 79".
+  if (finding.category === 'meta') return 'informational'
+
   if (traits.knownPublicAsset && !traits.verifiedImpact) {
     return 'informational'
   }
@@ -248,11 +257,15 @@ export function classifyRiskClass(
   //   bare 'sourcemaps-exposed' → low-hardening (info-ish) on public route,
   //                              → medium-weakness on sensitive route
   //   'sourcemaps-exposed-with-internal-paths' → medium-weakness
-  if (finding.id === 'sourcemaps-exposed') {
+  // Source maps WITHOUT secrets are transparency, not a vulnerability — top-tier
+  // sites (GitHub, Apple, …) ship them intentionally. Grade as a hardening
+  // suggestion on public routes; a weakness only on sensitive routes or when
+  // internal paths leak. The with-secrets variant is caught by the verified-
+  // impact gate (→ critical). This covers both the bare `sourcemaps-exposed`
+  // id and the per-file `sourcemap-<file>` ids the detector actually emits.
+  if (finding.category === 'sourcemaps' && !finding.id.includes('with-secrets')) {
+    if (finding.id.includes('with-internal-paths')) return 'medium-weakness'
     return ctx.routeContext === 'sensitive' ? 'medium-weakness' : 'low-hardening'
-  }
-  if (finding.id === 'sourcemaps-exposed-with-internal-paths') {
-    return 'medium-weakness'
   }
 
   if (traits.defenseInDepthOnly) {
@@ -348,80 +361,197 @@ export interface ScoredFinding {
   finding: Finding
   traits: FindingTraits
   riskClass: RiskClass
+  effectiveSeverity: EffectiveSeverity
   confidence: Confidence
   riskScore: number
+  /** Point penalty this finding contributes (severity × confidence, pre cap/decay). */
   scoreImpact: number
+}
+
+export interface SeverityCounts {
+  critical: number
+  high: number
+  medium: number
+  low: number
+  info: number
+  ok: number
 }
 
 export interface EngineOutput {
   vibeScore: number
+  grade: Grade
   scored: ScoredFinding[]
   groupCounts: Record<RiskClass, number>
+  severityCounts: SeverityCounts
   hasVerifiedImpact: boolean
+  breakdown: ScoreBreakdown
 }
 
+const SEV_RANK: Record<EffectiveSeverity, number> = {
+  critical: 4,
+  high: 3,
+  medium: 2,
+  low: 1,
+  info: 0,
+}
+
+/**
+ * Categories whose findings are DETERMINISTIC across scans — derived from the
+ * fetched response headers, TLS handshake, DNS records, and downloaded bundles,
+ * which are identical every run. These may set the band ceiling. The omitted
+ * categories (`paths`, `auth*`, `ai`) are active-probe-driven and flaky, so they
+ * only set the ceiling when the finding is a verified/confirmed exploit (handled
+ * separately) — otherwise they just deduct. This keeps the same site at the same
+ * grade run-to-run.
+ */
+const STABLE_CEILING_CATS = new Set<string>([
+  'headers',
+  'cookies',
+  'tls',
+  'mixed-content',
+  'integrity',
+  'html',
+  'dns',
+  'email',
+  'secrets',
+  'sourcemaps',
+  'deps',
+  'methods',
+  'meta',
+])
+
+/**
+ * Aggregate the per-finding penalties into the 0–100 vibe score using the
+ * band-anchored hybrid model (see scoring-policy.ts header):
+ *   1. penalty = SEVERITY_PENALTY[effective] × CONFIDENCE_MULT[confidence]
+ *   2. accumulate per category with diminishing returns, then cap the swing
+ *      (unless the category carries a real critical/high)
+ *   3. rawScore = 100 − Σ category penalties
+ *   4. the worst severity present CAPS the score (band ceiling)
+ *   5. hard caps for non-negotiables (no HTTPS, …) override everything
+ */
 export function runScoringEngine(findings: Finding[], ctx: ScoringContext): EngineOutput {
   const scored: ScoredFinding[] = findings.map((f) => {
     const traits = extractTraits(f, ctx)
     const riskClass = classifyRiskClass(f, traits, ctx)
     const confidence = classifyConfidence(f, traits)
     const riskScore = computeFindingRisk(f, traits, riskClass, confidence, ctx)
-    const baseDamage = CLASS_DAMAGE[riskClass]
-    const impact =
-      f.severity === 'ok'
-        ? 0
-        : baseDamage * CONFIDENCE_MULT[confidence] * (riskScore / 10 + 0.4)
-    return { finding: f, traits, riskClass, confidence, riskScore, scoreImpact: impact }
+    const effectiveSeverity: EffectiveSeverity =
+      f.severity === 'ok' ? 'info' : RISKCLASS_TO_EFFECTIVE[riskClass]
+    const scoreImpact =
+      f.severity === 'ok' ? 0 : SEVERITY_PENALTY[effectiveSeverity] * CONFIDENCE_MULT[confidence]
+    return { finding: f, traits, riskClass, effectiveSeverity, confidence, riskScore, scoreImpact }
   })
 
-  const byClass: Record<RiskClass, number[]> = {
-    'critical-exploit': [],
-    'high-impact-misconfig': [],
-    'medium-weakness': [],
-    'low-hardening': [],
-    informational: [],
-  }
+  // Reconciled severity histogram — the honest counts behind the badges.
+  const severityCounts: SeverityCounts = { critical: 0, high: 0, medium: 0, low: 0, info: 0, ok: 0 }
   for (const s of scored) {
-    if (s.finding.severity !== 'ok') byClass[s.riskClass].push(s.scoreImpact)
+    if (s.finding.severity === 'ok') severityCounts.ok++
+    else severityCounts[s.effectiveSeverity]++
   }
 
-  const criticalSum = diminishingSum(byClass['critical-exploit'])
-  const highSum = diminishingSum(byClass['high-impact-misconfig'])
-  const mediumSum = diminishingSum(byClass['medium-weakness'])
-  const hardeningSumRaw = diminishingSum(byClass['low-hardening'])
-  const informationalSumRaw = diminishingSum(byClass.informational)
+  // Group penalties by category → diminish within → cap the swing.
+  const byCat = new Map<
+    string,
+    { penalties: number[]; worst: EffectiveSeverity; count: number; hasRealRisk: boolean }
+  >()
+  for (const s of scored) {
+    if (s.finding.severity === 'ok' || s.scoreImpact <= 0) continue
+    const cat = s.finding.category
+    const e =
+      byCat.get(cat) ?? { penalties: [], worst: 'info' as EffectiveSeverity, count: 0, hasRealRisk: false }
+    e.penalties.push(s.scoreImpact)
+    e.count++
+    if (SEV_RANK[s.effectiveSeverity] > SEV_RANK[e.worst]) e.worst = s.effectiveSeverity
+    // Only a CONFIRMED critical lifts the per-category swing cap — we never mute
+    // a real exploit, but unconfirmed high-impact misconfigs (e.g. several auth
+    // cookies missing HttpOnly) stay bounded so one category can't dominate.
+    if (s.effectiveSeverity === 'critical') e.hasRealRisk = true
+    byCat.set(cat, e)
+  }
+
+  const categories: ScoreCategoryContribution[] = []
+  let totalPenalty = 0
+  for (const [cat, e] of byCat) {
+    const raw = diminishingSum(e.penalties)
+    // Cap only when the category's worst issue is medium-or-below — a confirmed
+    // critical/high is never muted.
+    const cap = e.hasRealRisk
+      ? Infinity
+      : CATEGORY_CAP[cat as keyof typeof CATEGORY_CAP] ?? DEFAULT_CATEGORY_CAP
+    const penalty = Math.min(raw, cap)
+    totalPenalty += penalty
+    categories.push({
+      category: cat as ScoreCategoryContribution['category'],
+      label: CATEGORY_LABELS[cat as keyof typeof CATEGORY_LABELS] ?? cat,
+      penalty: Math.round(penalty * 10) / 10,
+      findingCount: e.count,
+      worstSeverity: e.worst,
+      capped: raw > cap,
+    })
+  }
+  categories.sort((a, b) => b.penalty - a.penalty)
+
+  const rawScore = Math.max(0, 100 - totalPenalty)
+
+  // Worst severity present → band ceiling (SSL Labs mechanic). Info doesn't cap.
+  //
+  // STABILITY (root fix 2026-06-01): the ceiling has outsized impact (it can
+  // swing a whole grade), so ONLY deterministic / confirmed findings may set
+  // it. Findings derived from the fetched response, headers and bundles are the
+  // same on every scan; active network probes (paths, auth, AI endpoints) can
+  // 200 once and time-out / get WAF-blocked the next run — letting one of those
+  // set the ceiling made the same site score 89 then 79. A flaky probe finding
+  // still DEDUCTS (smooth, small), it just can't move the band unless it's a
+  // confirmed/verified exploit (a real .env leak or reflected XSS IS stable).
+  let worstSeverity: EffectiveSeverity | null = null
+  for (const s of scored) {
+    if (s.finding.severity === 'ok' || s.effectiveSeverity === 'info') continue
+    const ceilingEligible =
+      STABLE_CEILING_CATS.has(s.finding.category) ||
+      s.traits.verifiedImpact ||
+      s.confidence === 'confirmed'
+    if (!ceilingEligible) continue
+    if (!worstSeverity || SEV_RANK[s.effectiveSeverity] > SEV_RANK[worstSeverity]) {
+      worstSeverity = s.effectiveSeverity
+    }
+  }
+  const bandCeiling = worstSeverity ? BAND_CEILING[worstSeverity] : 100
+
+  // Hard caps — non-negotiables override everything.
+  let hardCap: ScoreBreakdown['hardCap'] | undefined
+  if (!ctx.httpsActive) hardCap = { reason: 'Served without HTTPS', cap: 49 }
+
+  let finalScore = Math.min(rawScore, bandCeiling)
+  if (hardCap) finalScore = Math.min(finalScore, hardCap.cap)
+  finalScore = Math.max(0, Math.round(finalScore))
 
   const hasVerifiedImpact = scored.some((s) => s.traits.verifiedImpact)
-  // Caps only apply when there is NO verified impact.
-  const hardeningSum = hasVerifiedImpact
-    ? hardeningSumRaw
-    : Math.min(hardeningSumRaw, CAPS.hardeningTotal)
-  const informationalSum = hasVerifiedImpact
-    ? informationalSumRaw
-    : Math.min(informationalSumRaw, CAPS.informationalTotal)
-
-  const HARDENING_CATS = new Set(['headers', 'cookies', 'html'])
-  const allHardeningOnlyCats = scored
-    .filter((s) => s.finding.severity !== 'ok')
-    .every((s) => HARDENING_CATS.has(s.finding.category as string))
-
-  let mediumLowInfo = mediumSum + hardeningSum + informationalSum
-  if (!hasVerifiedImpact && allHardeningOnlyCats) {
-    mediumLowInfo = Math.min(mediumLowInfo, CAPS.headerCspOnlyCombined)
-  }
-
-  const totalPenaltyRaw = criticalSum + highSum + mediumLowInfo
-  const vibeScore = Math.max(0, Math.min(100, Math.round(100 - totalPenaltyRaw)))
+  const isClean =
+    worstSeverity === null &&
+    scored.every((s) => s.finding.severity === 'ok' || s.effectiveSeverity === 'info')
+  const grade = gradeForScore(finalScore, isClean)
 
   const groupCounts: Record<RiskClass, number> = {
-    'critical-exploit': byClass['critical-exploit'].length,
-    'high-impact-misconfig': byClass['high-impact-misconfig'].length,
-    'medium-weakness': byClass['medium-weakness'].length,
-    'low-hardening': byClass['low-hardening'].length,
-    informational: byClass.informational.length,
+    'critical-exploit': 0,
+    'high-impact-misconfig': 0,
+    'medium-weakness': 0,
+    'low-hardening': 0,
+    informational: 0,
+  }
+  for (const s of scored) if (s.finding.severity !== 'ok') groupCounts[s.riskClass]++
+
+  const breakdown: ScoreBreakdown = {
+    base: 100,
+    categories,
+    rawScore: Math.round(rawScore),
+    worstSeverity,
+    bandCeiling,
+    hardCap,
+    finalScore,
   }
 
-  return { vibeScore, scored, groupCounts, hasVerifiedImpact }
+  return { vibeScore: finalScore, grade, scored, groupCounts, severityCounts, hasVerifiedImpact, breakdown }
 }
 
 // ---------------------------------------------------------------------------
@@ -430,43 +560,57 @@ export function runScoringEngine(findings: Finding[], ctx: ScoringContext): Engi
 
 export interface EnrichedFinding extends Finding {
   riskClass?: RiskClass
+  effectiveSeverity?: EffectiveSeverity
   confidence?: Confidence
   uiGroup?: UiGroup
 }
 
 export interface ApplyResult {
   vibeScore: number
+  grade: Grade
   findings: EnrichedFinding[]
   groupCounts: Record<RiskClass, number>
+  severityCounts: SeverityCounts
+  scoreBreakdown: ScoreBreakdown
   hasVerifiedImpact: boolean
-  /** Aggregate band, clamped to <= medium when no verified impact. */
+  /** Aggregate band derived directly from the final score (no clamping). */
   aggregateBand: 'low' | 'medium' | 'high' | 'severe'
 }
 
 export function applyEngine(findings: Finding[], ctx: ScoringContext): ApplyResult {
-  const { vibeScore, scored, groupCounts, hasVerifiedImpact } = runScoringEngine(findings, ctx)
+  const { vibeScore, grade, scored, groupCounts, severityCounts, hasVerifiedImpact, breakdown } =
+    runScoringEngine(findings, ctx)
 
   const enriched: EnrichedFinding[] = scored.map((s) => ({
     ...s.finding,
     riskScore: s.riskScore,
     riskBand: bandForRiskScore(s.riskScore),
     riskClass: s.riskClass,
+    effectiveSeverity: s.effectiveSeverity,
     confidence: s.confidence,
     uiGroup: uiGroupFor(s.finding, s.riskClass, s.traits),
   }))
 
-  const inverted = 100 - vibeScore
+  // Band derives straight from the final score — the band ceiling already did
+  // the "don't over-alarm" work, so no separate clamp. Honest weak posture is
+  // allowed to land in medium/high without a confirmed exploit (the whole point
+  // of the v4 redesign).
   let aggregateBand: ApplyResult['aggregateBand']
-  if (inverted >= BAND_THRESHOLDS.severe) aggregateBand = 'severe'
-  else if (inverted >= BAND_THRESHOLDS.high) aggregateBand = 'high'
-  else if (inverted >= BAND_THRESHOLDS.medium) aggregateBand = 'medium'
+  if (vibeScore < 50) aggregateBand = 'severe'
+  else if (vibeScore < 70) aggregateBand = 'high'
+  else if (vibeScore < 85) aggregateBand = 'medium'
   else aggregateBand = 'low'
 
-  if (!hasVerifiedImpact && (aggregateBand === 'severe' || aggregateBand === 'high')) {
-    aggregateBand = 'medium'
+  return {
+    vibeScore,
+    grade,
+    findings: enriched,
+    groupCounts,
+    severityCounts,
+    scoreBreakdown: breakdown,
+    hasVerifiedImpact,
+    aggregateBand,
   }
-
-  return { vibeScore, findings: enriched, groupCounts, hasVerifiedImpact, aggregateBand }
 }
 
 export function defaultContext(opts: {

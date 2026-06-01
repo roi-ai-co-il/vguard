@@ -12,7 +12,7 @@
  * than emitting `critical` and relying on the engine to demote.
  */
 
-import type { Category, Finding, Severity } from '../../src/lib/scanner-types.js'
+import type { Category, EffectiveSeverity, Finding, Grade, Severity } from '../../src/lib/scanner-types.js'
 
 // ---------------------------------------------------------------------------
 // Enums (kept here for SSOT; engine re-exports for back-compat)
@@ -61,14 +61,120 @@ export const CLASS_DAMAGE: Record<RiskClass, number> = {
   informational: 0.2,
 }
 
+/**
+ * Confidence down-weighting (Snyk reachability / OWASP likelihood). A passive,
+ * version-inferred, or heuristic finding must dent far less than a confirmed
+ * exploit — this is the single biggest lever against false-positive complaints.
+ * Retuned 2026-06-01 (was 1.0 / 0.85 / 0.6) for sharper separation.
+ */
 export const CONFIDENCE_MULT: Record<Confidence, number> = {
   confirmed: 1.0,
-  likely: 0.85,
-  informational: 0.6,
+  likely: 0.7,
+  informational: 0.45,
 }
 
 /** Diminishing-returns factor applied per additional finding in a class. */
 export const DECAY_FACTOR = 0.6
+
+// ---------------------------------------------------------------------------
+// Score v4 — band-anchored hybrid (2026-06-01)
+//
+// Grounded in how the field's leaders grade (researched 2026-06-01):
+//   • SSL Labs  → the worst issue CAPS the grade (band ceiling).
+//   • ImmuniWeb → per-category swing caps stop one noisy category dominating.
+//   • CVSS      → 5 severity tiers map to score ranges.
+//   • Observatory → clean = baseline-high, the top grade is EARNED, not default.
+//   • Snyk/OWASP → confidence/likelihood down-weights unconfirmed findings.
+// ---------------------------------------------------------------------------
+
+/** riskClass → the single reconciled severity shown AND scored. */
+export const RISKCLASS_TO_EFFECTIVE: Record<RiskClass, EffectiveSeverity> = {
+  'critical-exploit': 'critical',
+  'high-impact-misconfig': 'high',
+  'medium-weakness': 'medium',
+  'low-hardening': 'low',
+  informational: 'info',
+}
+
+/** Base point deduction per finding, by reconciled severity (pre confidence/decay). */
+export const SEVERITY_PENALTY: Record<EffectiveSeverity, number> = {
+  critical: 45,
+  high: 22,
+  medium: 10,
+  low: 3,
+  info: 0,
+}
+
+/**
+ * Band ceiling — the worst severity present caps the maximum achievable score
+ * (SSL Labs mechanic). A site with a Critical CANNOT score above 49 no matter
+ * how clean the rest is. `info` imposes no ceiling.
+ */
+export const BAND_CEILING: Record<EffectiveSeverity, number> = {
+  // A CONFIRMED exploit/leak fails outright. Unconfirmed-but-serious
+  // misconfigs (high) land at C, not D/F — a real gap, not "you're owned".
+  // This is what stops a mature site (e.g. Amazon, whose session cookie lacks
+  // HttpOnly) from being graded D for one hardening miss. Mozilla Observatory
+  // similarly grades most major sites B/C/D, not F.
+  critical: 49, // → F
+  high: 70, // → C (low end)
+  medium: 79, // → C (high end)
+  low: 89, // → B
+  info: 100, // → A / A+
+}
+
+/**
+ * Per-category swing cap — the maximum penalty a single category may contribute
+ * (ImmuniWeb mechanic). Applied ONLY to categories whose worst finding is
+ * medium-or-below; a category that carries a real critical/high is never capped
+ * (we never want to mute confirmed risk). Categories absent here use
+ * `DEFAULT_CATEGORY_CAP`.
+ */
+export const CATEGORY_CAP: Partial<Record<Category, number>> = {
+  headers: 22,
+  cookies: 14,
+  html: 12,
+  integrity: 8,
+  dns: 8,
+  email: 8,
+  methods: 10,
+  'mixed-content': 18,
+  sourcemaps: 14,
+  meta: 0,
+}
+export const DEFAULT_CATEGORY_CAP = 30
+
+/** Human labels for the breakdown card. */
+export const CATEGORY_LABELS: Record<Category, string> = {
+  secrets: 'Secrets & keys',
+  auth: 'Authentication',
+  'auth-enum': 'Account enumeration',
+  'auth-weak': 'Weak authentication',
+  'auth-disclosure': 'Auth disclosure',
+  headers: 'Security headers',
+  paths: 'Exposed paths',
+  sourcemaps: 'Source maps',
+  tls: 'TLS / certificate',
+  cookies: 'Cookies',
+  integrity: 'Subresource integrity',
+  'mixed-content': 'Mixed content',
+  html: 'HTML / DOM safety',
+  dns: 'DNS',
+  email: 'Email auth (SPF/DKIM/DMARC)',
+  methods: 'HTTP methods',
+  ai: 'AI endpoints',
+  deps: 'Dependencies',
+  meta: 'Informational',
+}
+
+/** finalScore → letter grade. Aligned to the band ceilings above. */
+export function gradeForScore(score: number, isClean: boolean): Grade {
+  if (score >= 90) return isClean && score >= 100 ? 'A+' : 'A'
+  if (score >= 80) return 'B'
+  if (score >= 65) return 'C'
+  if (score >= 50) return 'D'
+  return 'F'
+}
 
 /** Caps when `hasVerifiedImpact === false`. */
 export const CAPS = {

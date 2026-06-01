@@ -36,9 +36,11 @@ import { applyEngine, defaultContext } from '../../api/_lib/scoring-engine'
 import type {
   Category,
   Finding as ApiFinding,
+  Grade,
   ScanError,
   ScanResponse,
   ScanResult,
+  ScoreBreakdown,
   Severity,
   WafVendor,
 } from '@/lib/scanner-types'
@@ -788,6 +790,92 @@ function recomputeFinalTotals(findings: ApiFinding[]): FinalTotals {
   return t
 }
 
+// "Why this score" — attributable breakdown card. Renders the engine's
+// scoreBreakdown so the number is transparent, not a black box (the practice
+// every credible scanner — Observatory, SSL Labs, SecurityHeaders — follows).
+const SEV_COLOR: Record<string, string> = {
+  critical: 'var(--color-danger)',
+  high: 'var(--color-danger)',
+  medium: 'var(--color-warning)',
+  low: 'var(--color-fg-dim)',
+  info: 'var(--color-fg-dim)',
+}
+const SEV_LABEL: Record<string, string> = {
+  critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low', info: 'Info',
+}
+
+function ScoreBreakdownCard({ breakdown }: { breakdown: ScoreBreakdown }) {
+  const { categories, worstSeverity, bandCeiling, hardCap, rawScore, finalScore } = breakdown
+  const effectiveCeiling = hardCap ? Math.min(bandCeiling, hardCap.cap) : bandCeiling
+  // The cap (band ceiling or hard cap) is what actually SET the score — it
+  // overrode the running subtotal. This is the line users were missing: a few
+  // points of deductions but a much lower final because one issue caps the band.
+  const capBinds = effectiveCeiling < rawScore
+  const capColor = hardCap ? 'var(--color-danger)' : SEV_COLOR[worstSeverity ?? 'low'] ?? 'var(--color-warning)'
+  return (
+    <div className="px-4 sm:px-6 py-4 border-b border-(--color-border) bg-(--color-bg)">
+      <div className="font-mono text-[10px] tracking-[0.2em] uppercase text-(--color-fg-dim) mb-3">
+        Why this score
+      </div>
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between font-mono text-xs text-(--color-fg-dim)">
+          <span>Baseline</span>
+          <span className="tabular-nums">100</span>
+        </div>
+        {categories.map((c) => (
+          <div key={c.category} className="flex items-center justify-between font-mono text-xs">
+            <span className="inline-flex items-center gap-2 text-(--color-fg) min-w-0">
+              <span
+                className="inline-block w-1.5 h-1.5 rounded-full flex-shrink-0"
+                style={{ background: SEV_COLOR[c.worstSeverity] ?? 'var(--color-fg-dim)' }}
+                aria-hidden="true"
+              />
+              <span className="truncate">{c.label}</span>
+              <span className="text-(--color-fg-dim) flex-shrink-0">
+                ({c.findingCount} {SEV_LABEL[c.worstSeverity] ?? c.worstSeverity}
+                {c.findingCount === 1 ? '' : 's'}{c.capped ? ', capped' : ''})
+              </span>
+            </span>
+            <span className="tabular-nums text-(--color-danger) flex-shrink-0 ml-2">
+              −{c.penalty}
+            </span>
+          </div>
+        ))}
+        {categories.length === 0 && (
+          <div className="font-mono text-xs text-(--color-ok)">No deductions — clean scan.</div>
+        )}
+
+        {/* When a cap binds, show the running subtotal THEN the cap step, so the
+            final number reconciles (100 − deductions = subtotal → capped → final). */}
+        {capBinds && (
+          <>
+            <div className="flex items-center justify-between font-mono text-xs text-(--color-fg-dim) pt-1.5 border-t border-(--color-border) border-dashed">
+              <span>Subtotal</span>
+              <span className="tabular-nums">{rawScore}</span>
+            </div>
+            <div
+              className="flex items-center justify-between gap-2 font-mono text-xs px-2 py-1.5 rounded-md mt-1"
+              style={{ background: `color-mix(in oklab, ${capColor} 12%, transparent)`, border: `1px solid color-mix(in oklab, ${capColor} 35%, transparent)` }}
+            >
+              <span style={{ color: capColor }}>
+                {hardCap
+                  ? `Capped · ${hardCap.reason}`
+                  : <>Capped · a <span className="font-bold">{SEV_LABEL[worstSeverity ?? 'low']}</span> issue limits the grade</>}
+              </span>
+              <span className="tabular-nums font-semibold flex-shrink-0" style={{ color: capColor }}>→ {effectiveCeiling}</span>
+            </div>
+          </>
+        )}
+
+        <div className="flex items-center justify-between font-mono text-sm font-bold pt-2 mt-1 border-t border-(--color-border)">
+          <span className="text-(--color-fg)">Final score</span>
+          <span className="tabular-nums text-(--color-fg)">{finalScore}/100</span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function ScanForm() {
   const reduceMotion = useReducedMotion() ?? false
   const [state, setState] = useState<ScanState>('idle')
@@ -1315,6 +1403,8 @@ export function ScanForm() {
           let mergedFindings: ApiFinding[]
           let displayScore: number
           let displayBand: 'low' | 'medium' | 'high' | 'severe'
+          let displayGrade: Grade | undefined
+          let displayBreakdown: ScoreBreakdown | undefined
           if (stage2.findings.length > 0) {
             let pathname = '/'
             try { pathname = new URL(result.meta.finalUrl).pathname } catch { /* keep */ }
@@ -1329,10 +1419,14 @@ export function ScanForm() {
             mergedFindings = engineOut.findings as ApiFinding[]
             displayScore = engineOut.vibeScore
             displayBand = engineOut.aggregateBand
+            displayGrade = engineOut.grade
+            displayBreakdown = engineOut.scoreBreakdown
           } else {
             mergedFindings = result.findings.slice()
             displayScore = result.vibeScore
             displayBand = (result.aggregateRiskBand ?? 'low') as 'low' | 'medium' | 'high' | 'severe'
+            displayGrade = result.grade
+            displayBreakdown = result.scoreBreakdown
           }
           mergedFindings.sort((a, b) => UI_GROUP_ORDER[uiGroupOf(a)] - UI_GROUP_ORDER[uiGroupOf(b)])
           const finalTotals = recomputeFinalTotals(mergedFindings)
@@ -1480,12 +1574,16 @@ export function ScanForm() {
                 <div className="flex-shrink-0 self-center sm:self-auto">
                   <VibeScoreGauge
                     score={displayScore}
+                    grade={displayGrade}
                     band={displayBand}
                     size={typeof window !== 'undefined' && window.innerWidth < 640 ? 160 : 200}
                   />
                 </div>
               </div>
             </div>
+
+            {/* Why this score — attributable breakdown scorecard. */}
+            {displayBreakdown && <ScoreBreakdownCard breakdown={displayBreakdown} />}
 
             {/* Toggle — collapsed by default. Clicking reveals the full
                 findings list (filter chips + cards). When the list is open,

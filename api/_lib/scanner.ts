@@ -9,7 +9,8 @@ import type { Finding, ScanResponse, Severity } from '../../src/lib/scanner-type
 import { enrichFindings } from './fix-prompt-composer.js'
 import { aggregateBand, applyRisk, classifyRouteContext, computeAggregateRisk } from './risk-scorer.js'
 import { applyEngine, defaultContext } from './scoring-engine.js'
-import { evidenceContainsRealSecret, isSpaShellBody } from './scoring-policy.ts'
+import { evidenceContainsRealSecret, isSpaShellBody } from './scoring-policy.js'
+import { oastEnabled, makeOastToken, oastUrl, checkOastHits } from './oast.js'
 import { buildAttackSurface, discoverSubdomainsFromCT } from './attack-surface.js'
 import { analyzeBundles as analyzeBundlesAst } from './js-ast.js'
 
@@ -1097,6 +1098,41 @@ async function probeOpenRedirect(
   return found
 }
 
+// URL-shaped params commonly wired straight into a server-side fetch in
+// AI-generated code (image proxies, link unfurlers, webhooks). The #1 documented
+// vibe-code failure class.
+const SSRF_PARAMS = [
+  'url', 'uri', 'target', 'dest', 'destination', 'redirect', 'callback', 'webhook',
+  'image', 'img', 'src', 'source', 'link', 'feed', 'proxy', 'fetch', 'load',
+  'host', 'domain', 'site', 'page', 'file', 'next', 'data', 'ref', 'u',
+]
+
+/**
+ * Active SSRF canary (OAST). Plants a unique URL pointing at our own collaborator
+ * (`/api/oast?t=<token>`) in each URL-shaped param. If the target fetches it
+ * server-side, our receiver records the token — confirmed later via checkOastHits.
+ * Benign: it only causes a request to OUR logging URL, never attacks the target
+ * (same spirit as the open-redirect/XSS canaries already in Stage 1).
+ */
+async function probeSsrf(baseUrl: string): Promise<{ param: string; token: string }[]> {
+  const planted: { param: string; token: string }[] = []
+  await Promise.all(
+    SSRF_PARAMS.map(async (param) => {
+      const token = makeOastToken()
+      try {
+        const u = new URL(baseUrl)
+        u.searchParams.set(param, oastUrl(token))
+        await fetchWithTimeout(u.toString(), { method: 'GET', redirect: 'manual' }, 2500)
+        planted.push({ param, token })
+      } catch {
+        // even on timeout the server may have fired the SSRF — keep the token
+        planted.push({ param, token })
+      }
+    }),
+  )
+  return planted
+}
+
 // Firebase Storage public probe
 async function probeFirebaseStorage(
   projectId: string,
@@ -1416,7 +1452,17 @@ const SERVER_CVES: ServerCve[] = [
  *
  * Cap: 10 candidates per scan, 2.5s per probe, parallel — total ~3-4s.
  */
-const ADMIN_PREFIX_RE = /(\/(?:admin|internal|private|dashboard|backoffice|control|console|cms|manage|management|backend|sysadmin|root|superuser|impersonate|users\/admin|settings\/admin|tenants|orgs)\b[^"'\`?#\s]*)/i
+// Strong admin-route signals only. Removed the generic English words that
+// constantly appear in docs/marketing URLs and caused false positives
+// (e.g. `/docs/frameworks/backend/nitro` matched the old `backend` token and
+// got reported as an unauth admin route on vercel.com). Dropped: backend,
+// control, console, manage, root, tenants, orgs.
+const ADMIN_PREFIX_RE = /(\/(?:admin|wp-admin|internal|private|backoffice|dashboard|cms|sysadmin|superuser|impersonate|users\/admin|settings\/admin)\b[^"'\`?#\s]*)/i
+
+// Docs/marketing first-segment guard — these sections legitimately contain
+// admin-ish words deep in the path but are never privileged routes.
+const NON_ADMIN_ROUTE_RE =
+  /^\/(?:docs?|documentation|guides?|reference|api-reference|learn|blog|news|press|help|support|faq|pricing|about|features?|changelog|examples?|tutorials?|community|showcase|templates?|integrations?|legal|terms|privacy)\b/i
 
 const ADMIN_HARD_PREFIXES = [
   '/admin',
@@ -1636,6 +1682,7 @@ async function discoverAndProbeAdminRoutes(
   const filtered = Array.from(candidates)
     .filter((p) => p.length >= 5 && p.length <= 200)
     .filter((p) => !/\.(?:js|css|map|png|jpg|svg|webp|ico)$/i.test(p))
+    .filter((p) => !NON_ADMIN_ROUTE_RE.test(p))
     .slice(0, 10)
   if (filtered.length === 0) return []
 
@@ -1873,6 +1920,11 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
     () => [] as { param: string; reflectedRaw: boolean }[],
   )
   const sqliP = probeSqliErrors(url.toString()).catch(() => [] as { param: string; pattern: string }[])
+  // Active SSRF canary — fire OAST payloads early so the target has the whole
+  // scan window to make the server-side fetch before we poll for hits.
+  const ssrfP = oastEnabled()
+    ? probeSsrf(url.toString()).catch(() => [] as { param: string; token: string }[])
+    : Promise.resolve([] as { param: string; token: string }[])
   // S1+3 — passive subdomain discovery via crt.sh, capped at 4s timeout.
   // Runs in parallel; failure → empty list (don't block the scan).
   const subdomainsP = discoverSubdomainsFromCT(getBaseDomain(url.hostname)).catch(() => [] as string[])
@@ -2956,6 +3008,31 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
     })
   }
 
+  // === SSRF (confirmed via OAST) ===
+  const ssrfPlanted = await ssrfP
+  if (ssrfPlanted.length > 0) {
+    // Give the target a moment to make the server-side fetch, then poll our
+    // collaborator. Only params whose token was actually hit are confirmed.
+    await new Promise((r) => setTimeout(r, 1500))
+    const hitTokens = await checkOastHits(ssrfPlanted.map((p) => p.token)).catch(
+      () => new Set<string>(),
+    )
+    const confirmed = ssrfPlanted.filter((p) => hitTokens.has(p.token))
+    if (confirmed.length > 0) {
+      findings.push({
+        id: 'paths-ssrf-confirmed',
+        severity: 'critical',
+        category: 'paths',
+        title: `Confirmed SSRF via ${confirmed.length} URL parameter${confirmed.length === 1 ? '' : 's'}`,
+        description: `We set ${confirmed.length} URL parameter${confirmed.length === 1 ? '' : 's'} to a unique address we control and YOUR SERVER fetched it — proven by an inbound request to our collaborator. This is Server-Side Request Forgery: an attacker can make your server fetch arbitrary internal URLs (cloud metadata at 169.254.169.254, internal admin panels, databases), often bypassing your firewall.`,
+        evidence: confirmed
+          .map((p) => `?${p.param}=<vguard-collaborator> → your server fetched it (out-of-band hit recorded)`)
+          .join('\n'),
+        fixPrompt: `Your server fetches a URL taken from user input without validation. Fix every endpoint that fetches a user-supplied URL: (1) Parse the URL and ALLOW-LIST the host — only permit the specific external hosts you actually need; reject everything else. (2) Resolve the hostname and BLOCK private/internal ranges before fetching: 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 (cloud metadata!), and ::1. (3) Disable following redirects (or re-validate after each hop — redirects bypass naive allow-lists). (4) Never send internal headers/credentials on the proxied request. For image proxies/link unfurlers specifically, use a vetted library with SSRF protection rather than a raw fetch.`,
+      })
+    }
+  }
+
   // === FIREBASE RTDB EXPOSURE ===
   const firebase = await firebaseP
   if (firebase?.exposed) {
@@ -3780,6 +3857,9 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
   const engineOut = applyEngine(legacyScored, engineCtx)
   const scored = engineOut.findings
   const dynamicVibeScore = engineOut.vibeScore
+  const dynamicGrade = engineOut.grade
+  const severityCounts = engineOut.severityCounts
+  const scoreBreakdown = engineOut.scoreBreakdown
   // Aggregate "risk number" still computed via legacy scorer for back-compat
   // numeric field. The user-facing band comes from the engine (which clamps
   // to `low` when no verified impact exists). We don't clamp the number — it
@@ -3849,11 +3929,24 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
       // hardening-recommendations otherwise; informational is more honest
       // since "WAF present" is a defense, not a finding).
       riskClass: 'informational',
+      effectiveSeverity: 'info',
       confidence: 'informational',
       uiGroup: 'informational-observations',
     })
-    // Re-roll totals to reflect the new info finding so the score panel matches.
+    // Re-roll counts to reflect the new info finding so the panel matches.
     totals.info += 1
+    severityCounts.info += 1
+  }
+
+  // Reconciled totals — the legacy 4-bucket shape the UI/CLI/badge consume,
+  // but now sourced from the ENGINE'S reconciled severities, not raw detector
+  // output. This is what kills "1 critical · 95/100": a detector `critical`
+  // that the engine demoted to medium/info no longer inflates `totals.critical`.
+  const reconciledTotals = {
+    critical: severityCounts.critical,
+    warn: severityCounts.high + severityCounts.medium,
+    info: severityCounts.low + severityCounts.info,
+    ok: severityCounts.ok,
   }
 
   return {
@@ -3862,9 +3955,12 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
     scannedAt: new Date().toISOString(),
     durationMs: Date.now() - t0,
     vibeScore: dynamicVibeScore,
+    grade: dynamicGrade,
     aggregateRisk,
     aggregateRiskBand: engineOut.aggregateBand,
-    totals,
+    totals: reconciledTotals,
+    severityCounts,
+    scoreBreakdown,
     findings: scored,
     attackSurface,
     stage: 1 as const,

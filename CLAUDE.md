@@ -204,12 +204,30 @@ tsconfig.app.json     # frontend, paths alias for @/*
 
 Linked to Vercel project `Vguard` in team `team_evbzoCbdWuVIB4ZDwEfZ0Oeg`.
 
-**Production deploy command** (from `Vguard/`):
+**🔴 DEPLOY GATE — run BEFORE and verify AFTER, every time. Not optional.**
 
 ```bash
+# 1. BEFORE deploy — the verifier catches the silent killers (typecheck + tests
+#    pass while prod would 500). Must be green.
+node ~/.claude/skills/roi-ai-backend/verify-backend.mjs "$(pwd)"
+
+# 2. Deploy
 source ~/.claude/.env.global
 GIT_CEILING_DIRECTORIES="$(pwd)/.." npx vercel deploy --prod --yes
+
+# 3. AFTER deploy — curl the LIVE endpoint. "ready" ≠ working. Must be a real 200.
+curl -s -X POST https://v-guards.com/api/scan -H "Content-Type: application/json" \
+  -d '{"url":"https://example.com"}' --max-time 70 | head -c 200
 ```
+
+> **Incident 2026-06-01:** a pre-existing `from './scoring-policy.ts'` (a `.ts`
+> extension on a relative import in `api/_lib/`) took `/api/scan` +
+> `/api/scan-stream` down with `FUNCTION_INVOCATION_FAILED` the moment a deploy's
+> build compiled the functions to `.js` — the `.ts` specifier resolves to nothing
+> at runtime. It passed `tsc` AND `node --strip-types` tests, so it was invisible
+> until the live 500. Fix: `.ts` → `.js`. The verifier now hard-fails this; the
+> test runner gets a `.js`→`.ts` resolve hook so `.js` works in both prod + tests.
+> **Both gate steps above would have caught it pre-failure.**
 
 ## Live infrastructure (post-rebrand 2026-05-05)
 
