@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion'
 import { Check, ShieldCheck, Zap, ArrowRight } from 'lucide-react'
+import { VGuardsLogo } from '@/components/ui/vguards-logo'
 
 /**
  * Two-card pricing — adapted from a 21st.dev animated pricing section into
@@ -25,7 +26,7 @@ const TIERS: Tier[] = [
     popular: false,
     Icon: Zap,
     includes: [
-      'Stage 1 — passive scan: headers, TLS, secrets, DNS, exposed paths',
+      'Stage 1 — 23 checks: TLS, exposed secrets & service-role keys, sensitive paths, cloud storage, XSS / SQLi / redirect',
       'Stage 2 — browser-assisted: cookies, JWTs, runtime APIs',
       'Vibe Score + letter grade + full breakdown',
       'Paste-ready AI fix prompt for every finding',
@@ -75,6 +76,7 @@ export function PricingSection() {
           transition={{ duration: 0.5 }}
           className="text-center max-w-2xl mx-auto"
         >
+          <VGuardsLogo size={46} className="mx-auto mb-4" />
           <div className="font-mono text-[10px] sm:text-xs text-(--color-fg-dim) tracking-widest uppercase mb-3">
             Pricing
           </div>

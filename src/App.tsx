@@ -28,7 +28,7 @@ const STEPS = [
     n: '01',
     title: 'Scan',
     Icon: Search,
-    body: 'Paste your URL. We check HTTPS/TLS, JS bundles for exposed secrets & service-role keys, sensitive paths, cloud storage, plus safe XSS / SQLi / redirect / login-rate-limit probes.',
+    body: 'Paste your URL. We check HTTPS/TLS, JS bundles for exposed secrets & service-role keys, sensitive paths, cloud storage, plus safe XSS / SQLi / redirect probes. Active login-rate-limit testing is consent-gated (Stage 3).',
   },
   {
     n: '02',
@@ -105,8 +105,13 @@ export default function App() {
       </motion.header>
 
       <main className="relative flex-1 z-10">
-        <section className="max-w-6xl mx-auto px-4 sm:px-6 pt-12 sm:pt-32 pb-14 sm:pb-28">
+        <section className="relative overflow-hidden max-w-6xl mx-auto px-4 sm:px-6 pt-12 sm:pt-32 pb-14 sm:pb-28">
+          {/* Mascot watermark */}
+          <div className="pointer-events-none absolute inset-0" aria-hidden="true">
+            <VGuardsLogo size={260} className="absolute -top-6 right-2 sm:right-8 opacity-[0.06]" />
+          </div>
           <motion.div
+            className="relative z-10"
             initial="hidden"
             animate="show"
             variants={{
@@ -165,8 +170,12 @@ export default function App() {
           </motion.div>
         </section>
 
-        <section className="border-t border-(--color-border) relative">
-          <div className="max-w-6xl mx-auto px-4 sm:px-6 py-12 sm:py-20 grid grid-cols-1 lg:grid-cols-12 gap-8 sm:gap-10 items-center">
+        <section className="border-t border-(--color-border) relative overflow-hidden">
+          {/* Mascot watermark */}
+          <div className="pointer-events-none absolute inset-0" aria-hidden="true">
+            <VGuardsLogo size={300} className="absolute -bottom-14 -left-10 opacity-[0.05]" />
+          </div>
+          <div className="relative z-10 max-w-6xl mx-auto px-4 sm:px-6 py-12 sm:py-20 grid grid-cols-1 lg:grid-cols-12 gap-8 sm:gap-10 items-center">
             <motion.div
               initial={{ opacity: 0, y: 12 }}
               whileInView={{ opacity: 1, y: 0 }}
@@ -280,6 +289,7 @@ export default function App() {
             transition={{ duration: 0.5 }}
             className="max-w-6xl mx-auto px-4 sm:px-6 py-10 sm:py-16 flex flex-col items-center text-center"
           >
+            <VGuardsLogo size={48} className="mb-4" />
             <div className="font-mono text-[10px] sm:text-xs text-(--color-fg-dim) tracking-widest uppercase mb-3">
               The scoring engine
             </div>
@@ -340,7 +350,10 @@ export default function App() {
       <footer className="relative border-t border-(--color-border) mt-auto z-10">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-5 sm:py-6 flex flex-col gap-2 font-mono text-[11px] sm:text-xs text-(--color-fg-dim)">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-1 sm:gap-0">
-            <span>© 2026 V-Guards</span>
+            <span className="flex items-center gap-2">
+              <VGuardsLogo size={26} />
+              © 2026 V-Guards
+            </span>
             <span>in stealth</span>
           </div>
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-1 sm:gap-0">
