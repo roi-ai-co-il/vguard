@@ -33,6 +33,7 @@ import {
 import { VibeScoreGauge } from '@/components/ui/vibe-score-gauge'
 import { NextStagesPanel, Stage2Modal } from '@/components/NextStagesPanel'
 import { applyEngine, defaultContext } from '../../api/_lib/scoring-engine'
+import { computeDisplayScore, findingsHaveCritical } from '../../api/_lib/display-score'
 import type {
   Category,
   Finding as ApiFinding,
@@ -121,12 +122,12 @@ async function consumeScanStream(
 
 const SCAN_STEPS = [
   'Resolving DNS & TLS handshake',
-  'Fetching response headers',
-  'Inspecting CSP, HSTS, X-Frame-Options',
-  'Probing JS bundles for hardcoded secrets',
-  'Checking for exposed source maps',
-  'Path probing — .git, .env, .DS_Store',
+  'Checking HTTPS, TLS version & certificate',
+  'Probing JS bundles for exposed secrets',
   'Decoding JWTs for service-role keys',
+  'Path probing — .env, .git, backups, admin',
+  'Testing cloud storage — Supabase / Firebase / S3',
+  'Safe active checks — XSS / SQLi / open redirect',
   'Compiling report',
 ]
 
@@ -145,7 +146,7 @@ const CATEGORY_META: Record<Category, { label: string; Icon: LucideIcon }> = {
   'mixed-content': { label: 'Mixed content', Icon: Link2 },
   html: { label: 'HTML hygiene', Icon: Code },
   dns: { label: 'DNS & domain', Icon: Globe },
-  email: { label: 'Email auth (SPF / DMARC)', Icon: Mail },
+  email: { label: 'Email authentication', Icon: Mail },
   methods: { label: 'HTTP methods', Icon: ArrowRightLeft },
   ai: { label: 'AI surfaces & prompt injection', Icon: Sparkles },
   deps: { label: 'Dependencies & CVEs', Icon: Bot },
@@ -414,7 +415,7 @@ function buildBulkFixPrompt(result: ScanResult): string {
     ``,
     `**Site:** ${result.meta.finalUrl}`,
     `**Detected stack:** ${fw}`,
-    `**Vibe score:** ${result.vibeScore}/100`,
+    `**Vibe score:** ${result.displayScore ?? result.vibeScore}/100`,
     `**To fix:** ${buckets['confirmed-vulnerabilities'].length} confirmed · ${buckets['likely-risks'].length} likely risks · ${buckets['needs-review'].length} review · ${buckets['hardening-recommendations'].length} hardening`,
     `**Total findings in this plan:** ${actionable.length}`,
     ``,
@@ -506,7 +507,7 @@ async function copyTextToClipboard(text: string): Promise<boolean> {
   }
 }
 
-function CopyAllFixPromptsButton({ result }: { result: ScanResult }) {
+function CopyAllFixPromptsButton({ result, prominent = false }: { result: ScanResult; prominent?: boolean }) {
   const [copied, setCopied] = useState(false)
   const bulk = buildBulkFixPrompt(result)
   if (!bulk) return null
@@ -520,22 +521,28 @@ function CopyAllFixPromptsButton({ result }: { result: ScanResult }) {
     }
   }
 
+  const base = 'inline-flex items-center justify-center gap-2 font-mono transition-all cursor-pointer'
+  const prominentCls =
+    'w-full sm:w-auto px-5 py-3 rounded-lg text-sm font-bold bg-(--color-accent) text-(--color-bg) hover:bg-(--color-accent-strong) active:scale-[0.99] shadow-[0_0_30px_-8px_var(--color-accent)] min-h-[48px]'
+  const subtleCls =
+    'px-3 py-2 rounded-md text-xs bg-(--color-surface-elevated) hover:bg-(--color-bg) border border-(--color-border) hover:border-(--color-accent-border) text-(--color-fg) min-h-[36px]'
+
   return (
     <button
       type="button"
       onClick={handleCopy}
       aria-label={copied ? 'All fix prompts copied to clipboard' : `Copy all ${actionableCount} fix prompts to clipboard as one bulk plan`}
-      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-(--color-surface-elevated) hover:bg-(--color-bg) border border-(--color-border) hover:border-(--color-accent-border) text-(--color-fg) font-mono text-xs transition-colors cursor-pointer min-h-[36px]"
+      className={`${base} ${prominent ? prominentCls : subtleCls}`}
     >
       {copied ? (
         <>
-          <Check size={13} strokeWidth={2.5} className="text-(--color-accent)" aria-hidden="true" />
-          Copied · paste into Cursor / Claude
+          <Check size={prominent ? 16 : 13} strokeWidth={2.5} className={prominent ? '' : 'text-(--color-accent)'} aria-hidden="true" />
+          Copied — now paste into your AI
         </>
       ) : (
         <>
-          <Copy size={13} strokeWidth={2} aria-hidden="true" />
-          Copy all {actionableCount} fix prompts
+          <Copy size={prominent ? 16 : 13} strokeWidth={2.5} aria-hidden="true" />
+          Copy all {actionableCount} fixes
         </>
       )}
     </button>
@@ -716,18 +723,24 @@ function FindingCard({ finding }: { finding: ApiFinding }) {
             <button
               type="button"
               onClick={handleCopy}
-              aria-label={copied ? 'Fix prompt copied to clipboard' : 'Copy fix prompt to clipboard'}
-              className="mt-3 inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-(--color-surface-elevated) hover:bg-(--color-bg) border border-(--color-border) hover:border-(--color-accent-border) text-(--color-fg) font-mono text-xs transition-colors cursor-pointer min-h-[36px]"
+              aria-label={copied ? 'Fix prompt copied to clipboard' : 'Copy the ready-to-paste fix prompt for this issue'}
+              className={
+                'mt-3 inline-flex items-center justify-center gap-2 w-full sm:w-auto px-4 py-2.5 rounded-lg font-mono text-xs font-semibold transition-all cursor-pointer min-h-[42px] active:scale-[0.99] ' +
+                (copied
+                  ? 'bg-(--color-accent) text-(--color-bg)'
+                  : 'bg-(--color-accent-muted) text-(--color-accent) border border-(--color-accent-border) hover:bg-(--color-accent) hover:text-(--color-bg)')
+              }
             >
               {copied ? (
                 <>
-                  <Check size={13} strokeWidth={2.5} className="text-(--color-accent)" aria-hidden="true" />
-                  Copied · paste into Cursor / Claude
+                  <Check size={15} strokeWidth={2.5} aria-hidden="true" />
+                  Copied — paste into your AI
                 </>
               ) : (
                 <>
-                  <Copy size={13} strokeWidth={2} aria-hidden="true" />
+                  <Copy size={15} strokeWidth={2.5} aria-hidden="true" />
                   Copy fix prompt
+                  <ArrowRight size={14} strokeWidth={2.5} aria-hidden="true" />
                 </>
               )}
             </button>
@@ -790,91 +803,6 @@ function recomputeFinalTotals(findings: ApiFinding[]): FinalTotals {
   return t
 }
 
-// "Why this score" — attributable breakdown card. Renders the engine's
-// scoreBreakdown so the number is transparent, not a black box (the practice
-// every credible scanner — Observatory, SSL Labs, SecurityHeaders — follows).
-const SEV_COLOR: Record<string, string> = {
-  critical: 'var(--color-danger)',
-  high: 'var(--color-danger)',
-  medium: 'var(--color-warning)',
-  low: 'var(--color-fg-dim)',
-  info: 'var(--color-fg-dim)',
-}
-const SEV_LABEL: Record<string, string> = {
-  critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low', info: 'Info',
-}
-
-function ScoreBreakdownCard({ breakdown }: { breakdown: ScoreBreakdown }) {
-  const { categories, worstSeverity, bandCeiling, hardCap, rawScore, finalScore } = breakdown
-  const effectiveCeiling = hardCap ? Math.min(bandCeiling, hardCap.cap) : bandCeiling
-  // The cap (band ceiling or hard cap) is what actually SET the score — it
-  // overrode the running subtotal. This is the line users were missing: a few
-  // points of deductions but a much lower final because one issue caps the band.
-  const capBinds = effectiveCeiling < rawScore
-  const capColor = hardCap ? 'var(--color-danger)' : SEV_COLOR[worstSeverity ?? 'low'] ?? 'var(--color-warning)'
-  return (
-    <div className="px-4 sm:px-6 py-4 border-b border-(--color-border) bg-(--color-bg)">
-      <div className="font-mono text-[10px] tracking-[0.2em] uppercase text-(--color-fg-dim) mb-3">
-        Why this score
-      </div>
-      <div className="space-y-1.5">
-        <div className="flex items-center justify-between font-mono text-xs text-(--color-fg-dim)">
-          <span>Baseline</span>
-          <span className="tabular-nums">100</span>
-        </div>
-        {categories.map((c) => (
-          <div key={c.category} className="flex items-center justify-between font-mono text-xs">
-            <span className="inline-flex items-center gap-2 text-(--color-fg) min-w-0">
-              <span
-                className="inline-block w-1.5 h-1.5 rounded-full flex-shrink-0"
-                style={{ background: SEV_COLOR[c.worstSeverity] ?? 'var(--color-fg-dim)' }}
-                aria-hidden="true"
-              />
-              <span className="truncate">{c.label}</span>
-              <span className="text-(--color-fg-dim) flex-shrink-0">
-                ({c.findingCount} {SEV_LABEL[c.worstSeverity] ?? c.worstSeverity}
-                {c.findingCount === 1 ? '' : 's'}{c.capped ? ', capped' : ''})
-              </span>
-            </span>
-            <span className="tabular-nums text-(--color-danger) flex-shrink-0 ml-2">
-              −{c.penalty}
-            </span>
-          </div>
-        ))}
-        {categories.length === 0 && (
-          <div className="font-mono text-xs text-(--color-ok)">No deductions — clean scan.</div>
-        )}
-
-        {/* When a cap binds, show the running subtotal THEN the cap step, so the
-            final number reconciles (100 − deductions = subtotal → capped → final). */}
-        {capBinds && (
-          <>
-            <div className="flex items-center justify-between font-mono text-xs text-(--color-fg-dim) pt-1.5 border-t border-(--color-border) border-dashed">
-              <span>Subtotal</span>
-              <span className="tabular-nums">{rawScore}</span>
-            </div>
-            <div
-              className="flex items-center justify-between gap-2 font-mono text-xs px-2 py-1.5 rounded-md mt-1"
-              style={{ background: `color-mix(in oklab, ${capColor} 12%, transparent)`, border: `1px solid color-mix(in oklab, ${capColor} 35%, transparent)` }}
-            >
-              <span style={{ color: capColor }}>
-                {hardCap
-                  ? `Capped · ${hardCap.reason}`
-                  : <>Capped · a <span className="font-bold">{SEV_LABEL[worstSeverity ?? 'low']}</span> issue limits the grade</>}
-              </span>
-              <span className="tabular-nums font-semibold flex-shrink-0" style={{ color: capColor }}>→ {effectiveCeiling}</span>
-            </div>
-          </>
-        )}
-
-        <div className="flex items-center justify-between font-mono text-sm font-bold pt-2 mt-1 border-t border-(--color-border)">
-          <span className="text-(--color-fg)">Final score</span>
-          <span className="tabular-nums text-(--color-fg)">{finalScore}/100</span>
-        </div>
-      </div>
-    </div>
-  )
-}
 
 export function ScanForm() {
   const reduceMotion = useReducedMotion() ?? false
@@ -1401,7 +1329,9 @@ export function ScanForm() {
           // user-visible vibeScore and band reflect everything Stage 2 added.
           // If Stage 2 hasn't run, this is a no-op vs. Stage 1's result.
           let mergedFindings: ApiFinding[]
-          let displayScore: number
+          // Raw engine score for the merged Stage 1 (+ Stage 2) union. The
+          // cosmetic 96–99→100 normalization is applied below (visibleScore).
+          let rawDisplayScore: number
           let displayBand: 'low' | 'medium' | 'high' | 'severe'
           let displayGrade: Grade | undefined
           let displayBreakdown: ScoreBreakdown | undefined
@@ -1414,21 +1344,29 @@ export function ScanForm() {
                 pathname,
                 isHttps: result.meta.finalUrl.startsWith('https://'),
                 stage: 2,
+                wafPresent: Boolean(result.attackSurface?.wafVendor),
               }),
             )
             mergedFindings = engineOut.findings as ApiFinding[]
-            displayScore = engineOut.vibeScore
+            rawDisplayScore = engineOut.vibeScore
             displayBand = engineOut.aggregateBand
             displayGrade = engineOut.grade
             displayBreakdown = engineOut.scoreBreakdown
           } else {
             mergedFindings = result.findings.slice()
-            displayScore = result.vibeScore
+            rawDisplayScore = result.vibeScore
             displayBand = (result.aggregateRiskBand ?? 'low') as 'low' | 'medium' | 'high' | 'severe'
             displayGrade = result.grade
             displayBreakdown = result.scoreBreakdown
           }
           mergedFindings.sort((a, b) => UI_GROUP_ORDER[uiGroupOf(a)] - UI_GROUP_ORDER[uiGroupOf(b)])
+          // Display-only cosmetic: a clean 96–99 (no critical) renders as 100.
+          // Never mutates the raw score, severities, findings, or order.
+          const { displayScore: visibleScore, scoreAdjustedForDisplay } = computeDisplayScore(
+            rawDisplayScore,
+            { hasCritical: findingsHaveCritical(mergedFindings) },
+          )
+          const visibleTier = scoreAdjustedForDisplay ? 'exceptional' : displayBreakdown?.scoreTier
           const finalTotals = recomputeFinalTotals(mergedFindings)
           const displayResult: ScanResult = {
             ...result,
@@ -1573,8 +1511,9 @@ export function ScanForm() {
                 </div>
                 <div className="flex-shrink-0 self-center sm:self-auto">
                   <VibeScoreGauge
-                    score={displayScore}
+                    score={visibleScore}
                     grade={displayGrade}
+                    tier={visibleTier}
                     band={displayBand}
                     size={typeof window !== 'undefined' && window.innerWidth < 640 ? 160 : 200}
                   />
@@ -1582,8 +1521,40 @@ export function ScanForm() {
               </div>
             </div>
 
-            {/* Why this score — attributable breakdown scorecard. */}
-            {displayBreakdown && <ScoreBreakdownCard breakdown={displayBreakdown} />}
+            {/* Scan → prompt — the core value. Every issue ships with a
+                ready-to-paste fix prompt; this is the primary action. */}
+            {(() => {
+              const fixCount = displayResult.findings.filter(
+                (f) => f.fixPrompt && f.severity !== 'ok',
+              ).length
+              if (fixCount === 0) {
+                return (
+                  <div className="px-4 sm:px-6 py-4 border-b border-(--color-border) bg-(--color-bg) flex items-center gap-2 font-mono text-xs text-(--color-ok)">
+                    <Check size={14} strokeWidth={2.5} aria-hidden="true" />
+                    Nothing to fix right now — clean scan. 🎉
+                  </div>
+                )
+              }
+              return (
+                <div className="px-4 sm:px-6 py-4 sm:py-5 border-b border-(--color-border) bg-(--color-bg)">
+                  <div className="rounded-xl border border-(--color-accent-border) bg-(--color-accent-muted) p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center gap-4">
+                    <div className="flex-1 min-w-0">
+                      <div className="font-mono text-[10px] tracking-widest uppercase text-(--color-accent) mb-1.5">
+                        Fix it in one paste
+                      </div>
+                      <p className="text-sm text-(--color-fg) leading-relaxed">
+                        Every issue comes with a ready-to-paste fix prompt. Copy it into{' '}
+                        <span className="font-semibold">Cursor · Claude · Lovable</span> and your AI
+                        applies the fix. Rescan to prove it's gone.
+                      </p>
+                    </div>
+                    <div className="flex-shrink-0 w-full sm:w-auto">
+                      <CopyAllFixPromptsButton result={displayResult} prominent />
+                    </div>
+                  </div>
+                </div>
+              )
+            })()}
 
             {/* Toggle — collapsed by default. Clicking reveals the full
                 findings list (filter chips + cards). When the list is open,

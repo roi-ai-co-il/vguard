@@ -106,9 +106,11 @@ export default function App() {
 
       <main className="relative flex-1 z-10">
         <section className="relative overflow-hidden max-w-6xl mx-auto px-4 sm:px-6 pt-12 sm:pt-32 pb-14 sm:pb-28">
-          {/* Mascot watermark with a cyan scan wave */}
+          {/* Mascot watermark with a cyan scan wave (right side) */}
           <div className="pointer-events-none absolute inset-0" aria-hidden="true">
-            <MascotScanMark size={260} className="absolute -top-6 right-2 sm:right-8" />
+            <div className="absolute -top-6 right-2 sm:right-8">
+              <MascotScanMark size={260} />
+            </div>
           </div>
           <motion.div
             className="relative z-10"
@@ -173,7 +175,9 @@ export default function App() {
         <section className="border-t border-(--color-border) relative overflow-hidden">
           {/* Mascot watermark with a cyan scan wave */}
           <div className="pointer-events-none absolute inset-0" aria-hidden="true">
-            <MascotScanMark size={300} className="absolute -bottom-14 -left-10" />
+            <div className="absolute -bottom-14 -left-10">
+              <MascotScanMark size={300} />
+            </div>
           </div>
           <div className="relative z-10 max-w-6xl mx-auto px-4 sm:px-6 py-12 sm:py-20 grid grid-cols-1 lg:grid-cols-12 gap-8 sm:gap-10 items-center">
             <motion.div
