@@ -172,14 +172,8 @@ export default function App() {
           </motion.div>
         </section>
 
-        <section className="border-t border-(--color-border) relative overflow-hidden">
-          {/* Mascot watermark with a cyan scan wave */}
-          <div className="pointer-events-none absolute inset-0" aria-hidden="true">
-            <div className="absolute -bottom-14 -left-10">
-              <MascotScanMark size={300} />
-            </div>
-          </div>
-          <div className="relative z-10 max-w-6xl mx-auto px-4 sm:px-6 py-12 sm:py-20 grid grid-cols-1 lg:grid-cols-12 gap-8 sm:gap-10 items-center">
+        <section className="border-t border-(--color-border) relative">
+          <div className="max-w-6xl mx-auto px-4 sm:px-6 py-12 sm:py-20 grid grid-cols-1 lg:grid-cols-12 gap-8 sm:gap-10 items-center">
             <motion.div
               initial={{ opacity: 0, y: 12 }}
               whileInView={{ opacity: 1, y: 0 }}

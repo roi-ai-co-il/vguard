@@ -1335,6 +1335,12 @@ export function ScanForm() {
           let displayBand: 'low' | 'medium' | 'high' | 'severe'
           let displayGrade: Grade | undefined
           let displayBreakdown: ScoreBreakdown | undefined
+          // When the result is already a Stage 3 deep scan, the server engine
+          // ran with the authoritative stage-3 context. Re-running here with
+          // `stage: 2` would re-score the deep findings under the wrong context
+          // and make the gauge/grade drift the moment Stage 3 lands — that's the
+          // "design changes after Stage 3" glitch. Use the deep stage when deep.
+          const isDeepResult = result.stage === 3
           if (stage2.findings.length > 0) {
             let pathname = '/'
             try { pathname = new URL(result.meta.finalUrl).pathname } catch { /* keep */ }
@@ -1343,7 +1349,7 @@ export function ScanForm() {
               defaultContext({
                 pathname,
                 isHttps: result.meta.finalUrl.startsWith('https://'),
-                stage: 2,
+                stage: isDeepResult ? 3 : 2,
                 wafPresent: Boolean(result.attackSurface?.wafVendor),
               }),
             )
@@ -1701,7 +1707,14 @@ export function ScanForm() {
                 stage2Status={stage2.status}
                 stage2FindingCount={stage2.findings.filter((f) => f.severity !== 'ok').length}
                 stage3Done={result.stage === 3}
-                onDeepScanComplete={(deep) => setResult(deep)}
+                onDeepScanComplete={(deep) => {
+                  // Land the deep result in a clean, predictable view: clear any
+                  // stale filter and reveal the findings so the new (often
+                  // confirmed-exploit) results are immediately visible.
+                  setResult(deep)
+                  setFindingFilter({ kind: 'all' })
+                  setShowFindings(true)
+                }}
                 autoOpenStage3={autoOpenStage3Ref.current}
               />
             </div>
