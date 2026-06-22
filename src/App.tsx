@@ -28,7 +28,7 @@ const STEPS = [
     n: '01',
     title: 'Scan',
     Icon: Search,
-    body: 'Paste your URL. We probe headers, JS bundles, source maps, exposed paths, RLS endpoints & AI surfaces.',
+    body: 'Paste your URL. We check HTTPS/TLS, JS bundles for exposed secrets & service-role keys, sensitive paths, cloud storage, plus safe XSS / SQLi / redirect / login-rate-limit probes.',
   },
   {
     n: '02',
@@ -50,10 +50,10 @@ const fadeUp = {
 }
 
 const FALLBACK_FINDINGS: RecentFinding[] = [
-  { hostname: 'illustrative', secondsAgo: 23, finding: 'Missing Content-Security-Policy header', country: null, severity: 'warn' },
-  { hostname: 'illustrative', secondsAgo: 41, finding: 'No DMARC record', country: null, severity: 'warn' },
-  { hostname: 'illustrative', secondsAgo: 67, finding: 'Source map publicly served', country: null, severity: 'warn' },
-  { hostname: 'illustrative', secondsAgo: 92, finding: 'DNSSEC not enabled', country: null, severity: 'info' },
+  { hostname: 'illustrative', secondsAgo: 23, finding: 'Stripe live secret key in JS bundle', country: null, severity: 'critical' },
+  { hostname: 'illustrative', secondsAgo: 41, finding: 'Supabase service_role key exposed to client', country: null, severity: 'critical' },
+  { hostname: 'illustrative', secondsAgo: 67, finding: '.env file publicly reachable', country: null, severity: 'critical' },
+  { hostname: 'illustrative', secondsAgo: 92, finding: 'Mixed content — HTTP resource on HTTPS page', country: null, severity: 'warn' },
 ]
 
 export default function App() {
@@ -96,8 +96,8 @@ export default function App() {
         className="relative border-b border-(--color-border) backdrop-blur-sm bg-(--color-bg)/60 z-10"
       >
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-4 sm:py-5 flex items-center justify-between gap-3">
-          <a href="/" className="flex items-center gap-2 font-mono text-sm" aria-label="V-Guards home">
-            <VGuardsLogo size={20} className="text-(--color-accent)" strokeWidth={3} />
+          <a href="/" className="flex items-center gap-2.5 font-mono text-base sm:text-lg" aria-label="V-Guards home">
+            <VGuardsLogo size={44} />
             <span className="font-semibold tracking-tight">V-Guards</span>
             <span className="text-(--color-fg-dim) animate-pulse">_</span>
           </a>
@@ -227,10 +227,10 @@ export default function App() {
               <div className="mt-6 grid grid-cols-3 gap-4 max-w-md">
                 <div>
                   <div className="font-mono text-2xl font-semibold tabular-nums text-(--color-fg)">
-                    150+
+                    23
                   </div>
                   <div className="font-mono text-[10px] tracking-widest uppercase text-(--color-fg-dim) mt-1">
-                    Detection rules
+                    Canonical checks
                   </div>
                 </div>
                 <div>
@@ -287,9 +287,10 @@ export default function App() {
               Eight signal streams. <span className="text-(--color-fg-muted)">One verdict.</span>
             </h2>
             <p className="mt-3 text-(--color-fg-muted) text-[13.5px] sm:text-base leading-relaxed max-w-xl">
-              Every probe — secrets, RLS, headers, paths, AI surfaces, source
-              maps, cookies, DNS — converges into a single Vibe Score you can
-              act on.
+              Every probe — transport &amp; TLS, exposed secrets &amp; keys,
+              cookies, exposed paths, cloud storage, injection (XSS / SQLi /
+              redirect), access control &amp; rate-limiting, recon leaks —
+              converges into a single Vibe Score you can act on.
             </p>
             <div className="mt-5 sm:mt-8 w-full max-w-[320px] sm:max-w-md aspect-[2/1] text-(--color-fg-dim)">
               <CpuArchitecture text="secure" />
