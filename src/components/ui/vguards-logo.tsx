@@ -6,13 +6,12 @@ interface VGuardsLogoProps {
 }
 
 /**
- * V-Guards brand mark — a recon radar scope set inside a geometric shield.
- * The scope (ring + crosshair + sweep needle + target blip) reads as
- * "scanning / reconnaissance", which is exactly what the product does.
- * All strokes/fills use currentColor, so the parent controls the color
- * (defaults to the cyan accent token via Tailwind classes).
+ * V-Guards brand mark — the raccoon mascot (robber-mask face + rounded ears +
+ * whisker tufts) set inside the security shield. Strokes/fills use currentColor
+ * so the parent controls the color (defaults to the cyan accent token); the eye
+ * cut-outs use the bg token so they read as dark eyes inside the cyan mask.
  */
-export function VGuardsLogo({ size = 18, className, strokeWidth = 3, ariaHidden = true }: VGuardsLogoProps) {
+export function VGuardsLogo({ size = 18, className, strokeWidth = 2.6, ariaHidden = true }: VGuardsLogoProps) {
   return (
     <svg
       xmlns="http://www.w3.org/2000/svg"
@@ -21,28 +20,42 @@ export function VGuardsLogo({ size = 18, className, strokeWidth = 3, ariaHidden 
       height={size}
       fill="none"
       stroke="currentColor"
+      strokeLinejoin="round"
+      strokeLinecap="round"
       className={className}
       aria-hidden={ariaHidden}
       role={ariaHidden ? 'presentation' : 'img'}
     >
-      {/* Shield silhouette */}
+      {/* Shield */}
+      <path d="M32 6 L54 13.5 L54 31 Q54 49 32 58 Q10 49 10 31 L10 13.5 Z" strokeWidth={strokeWidth} />
+      {/* Ears */}
+      <path d="M26 24 Q20.5 23.5 19 18 Q25 17.5 29 23 Z" fill="currentColor" strokeWidth="1.6" />
+      <path d="M38 24 Q43.5 23.5 45 18 Q39 17.5 35 23 Z" fill="currentColor" strokeWidth="1.6" />
+      {/* Head / cheeks */}
       <path
-        d="M32 5 L55 13.5 L55 32 Q55 50.5 32 60 Q9 50.5 9 32 L9 13.5 Z"
-        strokeWidth={strokeWidth}
-        strokeLinejoin="round"
+        d="M27.5 22.5 Q19 26 19.5 35 Q20 41 24.5 45 Q28 47.5 32 47.5 Q36 47.5 39.5 45 Q44 41 44.5 35 Q45 26 36.5 22.5"
+        strokeWidth="1.8"
       />
-      {/* Radar sweep wedge (trailing glow behind the needle) */}
-      <path d="M32 31 L32 18 A13 13 0 0 1 42.65 23.54 Z" fill="currentColor" fillOpacity={0.22} stroke="none" />
-      {/* Scope rings */}
-      <circle cx="32" cy="31" r="13" strokeWidth="2" />
-      <circle cx="32" cy="31" r="6.5" strokeWidth="1.3" strokeOpacity={0.55} />
-      {/* Crosshair */}
-      <line x1="19" y1="31" x2="45" y2="31" strokeWidth="1.3" strokeOpacity={0.5} />
-      <line x1="32" y1="18" x2="32" y2="44" strokeWidth="1.3" strokeOpacity={0.5} />
-      {/* Sweep needle + target blip + origin */}
-      <line x1="32" y1="31" x2="42.65" y2="23.54" strokeWidth="2" strokeLinecap="round" />
-      <circle cx="42.65" cy="23.54" r="2.3" fill="currentColor" stroke="none" />
-      <circle cx="32" cy="31" r="1.8" fill="currentColor" stroke="none" />
+      {/* Whisker / cheek tufts */}
+      <path
+        d="M19.7 33 L16.6 32.2 M20.2 37 L17.2 37.8 M44.3 33 L47.4 32.2 M43.8 37 L46.8 37.8"
+        strokeWidth="1.2"
+        strokeOpacity={0.8}
+      />
+      {/* Robber mask */}
+      <path
+        d="M19 31 Q25 28 30 31 Q31 32.5 32 31.5 Q33 32.5 34 31 Q39 28 45 31 Q46 36 40.5 38 Q35 40 33 36.5 Q32 35 31 36.5 Q29 40 23.5 38 Q18 36 19 31 Z"
+        fill="currentColor"
+        strokeWidth="1"
+      />
+      {/* Eyes (dark cut-outs) + glints */}
+      <circle cx="25.5" cy="33.2" r="2.3" fill="var(--color-bg)" stroke="none" />
+      <circle cx="38.5" cy="33.2" r="2.3" fill="var(--color-bg)" stroke="none" />
+      <circle cx="26.2" cy="32.4" r="0.75" fill="currentColor" stroke="none" />
+      <circle cx="39.2" cy="32.4" r="0.75" fill="currentColor" stroke="none" />
+      {/* Muzzle + nose */}
+      <path d="M32 38.5 L32 42.5" strokeWidth="1.3" />
+      <path d="M29 43.5 Q32 41 35 43.5 Q32 46.8 29 43.5 Z" fill="currentColor" strokeWidth="0.8" />
     </svg>
   )
 }
