@@ -94,11 +94,11 @@ export function NextStagesPanel({ scannedUrl, stage2Status, stage2FindingCount, 
       <div className="mt-8">
         <div className="flex items-center gap-2 mb-3">
           <span className="font-mono text-[10px] tracking-widest uppercase text-(--color-fg-dim)">
-            Want a deeper scan?
+            {stage3Done ? 'All stages complete' : 'Want a deeper scan?'}
           </span>
           <span className="font-mono text-[10px] text-(--color-fg-dim)">·</span>
           <span className="font-mono text-[10px] tracking-widest uppercase text-(--color-fg-muted)">
-            Stage 1 ✓ &nbsp; Stage 2 auto &nbsp; Stage 3 unlock
+            {stage3Done ? 'Stage 1 ✓   Stage 2 ✓   Stage 3 ✓' : 'Stage 1 ✓   Stage 2 auto   Stage 3 unlock'}
           </span>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -952,11 +952,6 @@ function detectFreeTierProvider(domain: string): FreeTierProvider | null {
   return null
 }
 
-// Stage 3 one-time unlock price (frontend display). When the payment backend
-// is built these move server-side; for now the paywall is frontend-only.
-const STAGE3_PRICE_CENTS = 2900
-const STAGE3_CURRENCY = 'usd'
-
 function Stage3Modal({
   open,
   onClose,
@@ -988,11 +983,6 @@ function Stage3Modal({
   const [hint, setHint] = useState('')
   const [copied, setCopied] = useState<'uuid' | 'cmd' | 'ai' | null>(null)
   const [deepFindingsCount, setDeepFindingsCount] = useState(0)
-  // Stage 3 paywall (frontend-only for now — payment backend not wired yet).
-  // Shown after ownership is verified; the unlock CTA proceeds to the scan.
-  const [paywall, setPaywall] = useState<{ priceCents: number; currency: string } | null>(null)
-  const [unlocked, setUnlocked] = useState(false)
-  const [pendingScanUuid, setPendingScanUuid] = useState<string | undefined>(undefined)
   const [userJwt, setUserJwt] = useState('')
   const [authMode, setAuthMode] = useState(false)
   const [vercelToken, setVercelToken] = useState('')
@@ -1089,17 +1079,10 @@ function Stage3Modal({
             // localStorage may be unavailable (private mode, quota); fail-soft
           }
         }
-        // Stage 3 paywall (frontend) — once verified, show the one-time unlock
-        // screen before the paid deep scan. If already unlocked this session,
-        // go straight to the scan. Pass the verify uuid explicitly to avoid the
-        // stale-closure uuid problem noted on runDeepScan.
-        if (unlocked) {
-          setTimeout(() => runDeepScan(verifyUuid), 600)
-        } else {
-          setPendingScanUuid(verifyUuid)
-          setStatus('verified')
-          setPaywall({ priceCents: STAGE3_PRICE_CENTS, currency: STAGE3_CURRENCY })
-        }
+        // Stage 3 is fully free — once ownership is verified, go straight to the
+        // deep scan. Pass the verify uuid explicitly to avoid the stale-closure
+        // uuid problem noted on runDeepScan.
+        setTimeout(() => runDeepScan(verifyUuid), 600)
       } else {
         setStatus('failed')
         setHint(data.hint ?? data.error ?? 'Could not verify ownership.')
@@ -1141,7 +1124,6 @@ function Stage3Modal({
         setHint(data.error.message ?? 'Deep scan failed.')
         return
       }
-      setPaywall(null)
       const result = data as ScanResult
       // Count NEW findings (Stage 3 deep findings have IDs starting with auth-rls or paths-aggressive or paths-traversal)
       const deepFindings = result.findings.filter(
@@ -1160,23 +1142,6 @@ function Stage3Modal({
       setHint(msg)
     }
   }
-
-  // Frontend-only unlock. The Stripe checkout API isn't built yet, so the CTA
-  // proceeds straight to the deep scan. Swap this for the real /api/create-
-  // checkout redirect when the payment backend lands.
-  function unlockStage3() {
-    setUnlocked(true)
-    setPaywall(null)
-    void runDeepScan(pendingScanUuid)
-  }
-
-  const priceLabel = paywall
-    ? new Intl.NumberFormat('en-US', {
-        style: 'currency',
-        currency: (paywall.currency || 'usd').toUpperCase(),
-        minimumFractionDigits: paywall.priceCents % 100 === 0 ? 0 : 2,
-      }).format(paywall.priceCents / 100)
-    : ''
 
   const fileCmd =
     method === 'file'
@@ -1651,36 +1616,7 @@ function Stage3Modal({
           )}
         </div>
 
-        {paywall && (
-          <motion.div
-            initial={{ opacity: 0, y: 4 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="mt-4 rounded-md bg-(--color-bg) border border-(--color-accent-border) px-4 py-4"
-          >
-            <div className="flex items-center gap-2 font-mono text-[10px] tracking-widest uppercase text-(--color-accent) mb-2">
-              <Lock size={12} strokeWidth={2.5} aria-hidden="true" />
-              Unlock Stage 3 — {domain}
-            </div>
-            <p className="text-sm text-(--color-fg-muted) leading-relaxed">
-              Ownership verified. The deep scan fires real RLS / XSS / SQLi / traversal probes
-              against your site. It's a <span className="text-(--color-fg) font-semibold">one-time {priceLabel}</span>{' '}
-              unlock for this domain (re-scan free for 30 days).
-            </p>
-            <button
-              type="button"
-              onClick={unlockStage3}
-              className="mt-3 inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-md bg-(--color-accent) text-(--color-bg) font-mono text-sm font-semibold hover:opacity-90 transition-opacity cursor-pointer min-h-[40px]"
-            >
-              <Lock size={14} strokeWidth={2.5} aria-hidden="true" />
-              Unlock for {priceLabel}
-            </button>
-            <p className="mt-2 font-mono text-[10px] text-(--color-fg-dim)">
-              Secure one-time payment · re-scan free for 30 days
-            </p>
-          </motion.div>
-        )}
-
-        {status === 'verified' && !paywall && (
+        {status === 'verified' && (
           <motion.div
             initial={{ opacity: 0, y: 4 }}
             animate={{ opacity: 1, y: 0 }}

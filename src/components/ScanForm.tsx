@@ -1365,6 +1365,18 @@ export function ScanForm() {
             displayGrade = result.grade
             displayBreakdown = result.scoreBreakdown
           }
+          // Dedupe by id — the Stage 3 deep result can re-emit Stage 1 findings
+          // that also appear in the merged union, which would otherwise render
+          // duplicate cards and trip React's "two children with the same key"
+          // warning. Keep the first occurrence (engine order).
+          {
+            const seenIds = new Set<string>()
+            mergedFindings = mergedFindings.filter((f) => {
+              if (seenIds.has(f.id)) return false
+              seenIds.add(f.id)
+              return true
+            })
+          }
           mergedFindings.sort((a, b) => UI_GROUP_ORDER[uiGroupOf(a)] - UI_GROUP_ORDER[uiGroupOf(b)])
           // Display-only cosmetic: a clean 96–99 (no critical) renders as 100.
           // Never mutates the raw score, severities, findings, or order.

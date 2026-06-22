@@ -18,14 +18,16 @@ function devApi(): Plugin {
       const handler: Connect.NextHandleFunction = async (req, res, next) => {
         if (!req.url) return next()
         const isScanDeep = req.url.startsWith('/api/scan-deep')
+        const isScanStream = req.url.startsWith('/api/scan-stream')
         const isVerify = req.url.startsWith('/api/verify')
         const isStage2Collect = req.url.startsWith('/api/stage2-collect')
         const isStage2Results = req.url.startsWith('/api/stage2-results')
         const isRecentFindings = req.url.startsWith('/api/recent-findings')
         const isVerifyVercelToken = req.url.startsWith('/api/verify-vercel-token')
-        const isScan = req.url.startsWith('/api/scan') && !isScanDeep
+        const isScan = req.url.startsWith('/api/scan') && !isScanDeep && !isScanStream
         if (
           !isScan &&
+          !isScanStream &&
           !isVerify &&
           !isScanDeep &&
           !isStage2Collect &&
@@ -34,6 +36,53 @@ function devApi(): Plugin {
           !isVerifyVercelToken
         ) {
           return next()
+        }
+
+        // Emulate the NDJSON streaming scan endpoint in dev by forwarding to the
+        // real handler with a res adapter that passes write()/end() straight
+        // through, so localhost behaves exactly like production.
+        if (isScanStream) {
+          if (req.method !== 'POST') {
+            res.statusCode = 405
+            res.end()
+            return
+          }
+          try {
+            const chunks: Buffer[] = []
+            for await (const chunk of req) chunks.push(chunk as Buffer)
+            const raw = Buffer.concat(chunks).toString('utf-8')
+            const body = raw ? JSON.parse(raw) : {}
+            const { default: handlerFn } = (await server.ssrLoadModule('/api/scan-stream.ts')) as {
+              default: (r1: unknown, r2: unknown) => Promise<void> | void
+            }
+            const fakeReq = { method: 'POST', body, query: {}, headers: req.headers } as unknown
+            const fakeRes = {
+              statusCode: 200,
+              setHeader: (k: string, v: string) => res.setHeader(k, v),
+              flushHeaders: () => res.flushHeaders?.(),
+              write: (chunk: string) => res.write(chunk),
+              status(this: { statusCode: number }, code: number) {
+                res.statusCode = code
+                return this
+              },
+              json(obj: unknown) {
+                res.setHeader('Content-Type', 'application/json')
+                res.end(JSON.stringify(obj))
+              },
+              end: (chunk?: string) => res.end(chunk),
+            }
+            await handlerFn(fakeReq, fakeRes)
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : 'unknown error'
+            if (!res.headersSent) {
+              res.statusCode = 500
+              res.setHeader('Content-Type', 'application/json')
+              res.end(JSON.stringify({ ok: false, error: { code: 'internal', message: msg } }))
+            } else {
+              res.end()
+            }
+          }
+          return
         }
 
         if (isStage2Collect || isStage2Results || isRecentFindings || isVerifyVercelToken) {

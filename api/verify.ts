@@ -167,6 +167,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .json({ ok: false, error: 'Method must be "file" or "dns".' } satisfies VerifyResponse)
   }
 
+  // Dev-only bypass: localhost can't host a /.well-known file or a DNS TXT
+  // record, so skip the live ownership check during local development to allow
+  // end-to-end Stage 3 testing. This can NEVER fire in production — Vercel sets
+  // NODE_ENV=production for all deployments.
+  if (process.env.NODE_ENV !== 'production') {
+    return res.status(200).json({ ok: true, verified: true, method } satisfies VerifyResponse)
+  }
+
   try {
     const result =
       method === 'file' ? await verifyFileChallenge(domain, uuid) : await verifyDnsChallenge(domain, uuid)
