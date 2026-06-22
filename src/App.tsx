@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import {
-  Sparkles,
   Search,
   FileCheck2,
   Wrench,
@@ -13,7 +12,6 @@ import ContactSection from './components/ContactSection'
 import { VGuardsLogo } from '@/components/ui/vguards-logo'
 import { TypingEffect } from '@/components/ui/typing-effect'
 import { InteractiveGlobe } from '@/components/ui/interactive-globe'
-import { BentoGrid, type BentoCardProps } from '@/components/ui/bento'
 import { CpuArchitecture } from '@/components/ui/cpu-architecture'
 import { PricingSection } from '@/components/PricingSection'
 
@@ -56,120 +54,6 @@ const FALLBACK_FINDINGS: RecentFinding[] = [
   { hostname: 'illustrative', secondsAgo: 41, finding: 'No DMARC record', country: null, severity: 'warn' },
   { hostname: 'illustrative', secondsAgo: 67, finding: 'Source map publicly served', country: null, severity: 'warn' },
   { hostname: 'illustrative', secondsAgo: 92, finding: 'DNSSEC not enabled', country: null, severity: 'info' },
-]
-
-const SCAN_CARDS: BentoCardProps[] = [
-  {
-    className: 'lg:col-span-3 lg:row-span-1',
-    eyebrow: 'P0 · Secrets & API keys',
-    title: 'Find Anthropic, OpenAI, Supabase keys baked into your bundle',
-    description:
-      'JS bundles + source maps scanned for inlined keys. Each hit ships with a fix prompt.',
-    graphic: (
-      <div className="absolute inset-0 p-6 font-mono text-[11px] leading-relaxed">
-        <div className="text-(--color-fg-dim)">$ vguard scan https://your-app.com</div>
-        <div className="text-(--color-fg-dim)">{'> probing JS bundle...'}</div>
-        <div className="mt-3 rounded-md bg-(--color-bg) border border-(--color-danger)/40 p-3 shadow-[0_0_24px_-8px_rgba(255,107,107,0.5)]">
-          <div className="text-(--color-danger) font-semibold">! CRITICAL — secret found</div>
-          <div className="mt-1.5 text-(--color-fg-muted)">assets/index-B7kQ2.js:1</div>
-          <div className="mt-2 text-(--color-fg)">
-            const KEY = <span className="text-(--color-warning)">"sk-ant-api03-</span>
-            <span className="text-(--color-danger)">XXXXXXXXXXXXXXXX</span>
-            <span className="text-(--color-warning)">"</span>
-          </div>
-          <div className="mt-1 text-(--color-fg-dim)">^ Anthropic API key (40 chars)</div>
-        </div>
-      </div>
-    ),
-  },
-  {
-    className: 'lg:col-span-3 lg:row-span-1',
-    eyebrow: 'P0 · Auth & sessions',
-    title: 'Catch the Supabase RLS policies that look safe but aren’t',
-    description:
-      'Catches the RLS patterns that leak rows when signup is open by default.',
-    graphic: (
-      <div className="absolute inset-0 p-6 font-mono text-[11px] leading-relaxed">
-        <div className="text-(--color-fg-dim)">-- public.documents</div>
-        <div className="text-(--color-fg-dim)">CREATE POLICY <span className="text-(--color-fg)">"read_own"</span> ON documents</div>
-        <div className="text-(--color-fg-dim)">FOR SELECT TO authenticated</div>
-        <div className="mt-1 text-(--color-fg-dim)">USING (</div>
-        <div className="ml-4 inline-flex items-center bg-(--color-danger)/15 border border-(--color-danger)/40 rounded px-2 py-0.5 text-(--color-danger)">
-          auth.uid() IS NOT NULL
-        </div>
-        <div className="text-(--color-fg-dim)">);</div>
-        <div className="mt-3 text-(--color-warning)">
-          ! Signup is OPEN. Anyone can read every row.
-        </div>
-        <div className="mt-2 text-(--color-fg-muted)">
-          fix → check ownership: <span className="text-(--color-accent)">auth.uid() = user_id</span>
-        </div>
-      </div>
-    ),
-  },
-  {
-    className: 'lg:col-span-2 lg:row-span-1',
-    eyebrow: 'P1 · AI surfaces',
-    title: 'Test your AI endpoints for prompt injection',
-    description:
-      'Probes chat endpoints, agent tool scopes, and RAG context leaks.',
-    graphic: (
-      <div className="absolute inset-0 p-5 font-mono text-[10px] leading-relaxed">
-        <div className="text-(--color-fg-dim)">POST /api/[your-llm]</div>
-        <div className="mt-1 text-(--color-fg-muted)">{'{'}</div>
-        <div className="ml-3">
-          <span className="text-(--color-fg-dim)">"messages": </span>
-          <span className="text-(--color-fg)">[...]</span>
-          <span className="text-(--color-fg-dim)">,</span>
-        </div>
-        <div className="ml-3">
-          <span className="text-(--color-danger)">"system"</span>
-          <span className="text-(--color-fg-dim)">: </span>
-          <span className="text-(--color-warning)">"ignore previous"</span>
-        </div>
-        <div className="text-(--color-fg-muted)">{'}'}</div>
-        <div className="mt-2 text-(--color-fg-muted)">→ 200 OK</div>
-        <div className="mt-2 text-(--color-danger)">! prompt-injection surface</div>
-      </div>
-    ),
-  },
-  {
-    className: 'lg:col-span-2 lg:row-span-1',
-    eyebrow: 'P0 · Exposed paths',
-    title: 'Find what shouldn’t be public',
-    description:
-      '.env, .git, source maps, preview URLs your team forgot to lock down.',
-    graphic: (
-      <div className="absolute inset-0 p-5 font-mono text-[10px] leading-relaxed">
-        <div className="text-(--color-fg-muted)">/</div>
-        <div className="text-(--color-fg-muted)">├── index.html</div>
-        <div className="text-(--color-fg-muted)">├── assets/</div>
-        <div className="text-(--color-fg-muted)">│ └── index-B7kQ2.js</div>
-        <div className="text-(--color-danger)">├── assets/index.js.map ← 200</div>
-        <div className="text-(--color-danger)">├── .env ← 200</div>
-        <div className="text-(--color-warning)">├── .git/HEAD ← 200</div>
-        <div className="text-(--color-fg-muted)">└── robots.txt</div>
-      </div>
-    ),
-  },
-  {
-    className: 'lg:col-span-2 lg:row-span-1',
-    eyebrow: 'P1 · Headers & CVEs',
-    title: 'CSP, HSTS, CORS, and the rest',
-    description:
-      'Missing headers + dep CVEs, each with the exact config snippet to fix.',
-    graphic: (
-      <div className="absolute inset-0 p-5 font-mono text-[10px] leading-relaxed">
-        <div className="text-(--color-fg-dim)">$ curl -I https://your-app.com</div>
-        <div className="mt-2 text-(--color-fg-muted)">HTTP/2 200</div>
-        <div className="text-(--color-fg-muted)">strict-transport-security: <span className="text-(--color-ok)">max-age=63072000</span></div>
-        <div className="text-(--color-fg-muted)">x-content-type-options: <span className="text-(--color-ok)">nosniff</span></div>
-        <div className="text-(--color-warning)">content-security-policy: <span className="font-bold">missing</span></div>
-        <div className="text-(--color-warning)">referrer-policy: <span className="font-bold">missing</span></div>
-        <div className="mt-2 text-(--color-fg-dim)">→ 4 of 9 hardening headers</div>
-      </div>
-    ),
-  },
 ]
 
 export default function App() {
@@ -382,52 +266,10 @@ export default function App() {
           </div>
         </section>
 
-        <section className="border-t border-(--color-border) relative">
-          <div className="max-w-6xl mx-auto px-4 sm:px-6 py-12 sm:py-20">
-            <motion.div
-              initial={{ opacity: 0, y: 12 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true, amount: 'some' }}
-              transition={{ duration: 0.5 }}
-              className="mb-8 sm:mb-10 max-w-2xl"
-            >
-              <div className="font-mono text-[10px] sm:text-xs text-(--color-fg-dim) tracking-widest uppercase mb-3">
-                What we scan
-              </div>
-              <h2 className="text-[1.75rem] sm:text-3xl font-semibold tracking-tight leading-[1.15] text-balance">
-                Built for the way you actually ship.
-              </h2>
-              <p className="mt-3 text-(--color-fg-muted) text-[14px] sm:text-base leading-relaxed">
-                Whether you ship plain HTML or a full React app, we map the surfaces AI tools tend to leak through.
-              </p>
-            </motion.div>
-
-            <motion.div
-              initial={{ opacity: 0, y: 16 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true, amount: 'some' }}
-              transition={{ duration: 0.5 }}
-            >
-              <BentoGrid cards={SCAN_CARDS} />
-            </motion.div>
-
-            <motion.p
-              initial={{ opacity: 0 }}
-              whileInView={{ opacity: 1 }}
-              viewport={{ once: true }}
-              transition={{ duration: 0.5, delay: 0.3 }}
-              className="mt-6 font-mono text-[11px] sm:text-xs text-(--color-fg-dim) flex items-start sm:items-center gap-2"
-            >
-              <Sparkles size={12} className="text-(--color-accent) mt-0.5 sm:mt-0 flex-shrink-0" aria-hidden="true" />
-              <span className="leading-relaxed">+ 70 more checks across OWASP 2021, AI-native vulns, Firebase &amp; static HTML hygiene.</span>
-            </motion.p>
-          </div>
-        </section>
-
         {/* Architecture visual — 8 colored signal streams converge into a
             central CPU. Maps directly to Vguard's mental model: many detector
-            categories → one Vibe Score. Bridges the bento ("what we scan")
-            and the 3-step process ("how it lands").
+            categories → one Vibe Score. Bridges the globe section and the
+            3-step process ("how it lands").
             Mobile: SVG container is `max-w-md` so it never gets too big on
             phones, and aspect-[2/1] preserves the 200×100 viewBox. */}
         <section className="border-t border-(--color-border)">
@@ -501,7 +343,7 @@ export default function App() {
             <span>in stealth</span>
           </div>
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-1 sm:gap-0">
-            <span>Founder · Roy Argaman</span>
+            <span>Founders · Royi Argaman · Oded Safdie</span>
             <a href="mailto:infovguards@gmail.com" className="hover:text-(--color-fg-muted) transition-colors">infovguards@gmail.com</a>
           </div>
           <div className="flex items-center gap-4 pt-1">

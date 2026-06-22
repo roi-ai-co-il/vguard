@@ -12,29 +12,95 @@ interface GlobeProps {
   markers?: { lat: number; lng: number; label?: string }[]
 }
 
-const DEFAULT_MARKERS = [
-  { lat: 37.78, lng: -122.42, label: 'San Francisco' },
-  { lat: 51.51, lng: -0.13, label: 'London' },
-  { lat: 35.68, lng: 139.69, label: 'Tokyo' },
-  { lat: -33.87, lng: 151.21, label: 'Sydney' },
-  { lat: 1.35, lng: 103.82, label: 'Singapore' },
-  { lat: 55.76, lng: 37.62, label: 'Moscow' },
-  { lat: -23.55, lng: -46.63, label: 'São Paulo' },
-  { lat: 19.43, lng: -99.13, label: 'Mexico City' },
-  { lat: 28.61, lng: 77.21, label: 'Delhi' },
-  { lat: 32.08, lng: 34.78, label: 'Tel Aviv' },
+// Global hub coordinates — a denser, more real-world spread of cities so the
+// connection mesh reads like genuine cross-planet traffic.
+const CITY = {
+  sf: [37.78, -122.42] as [number, number],
+  la: [34.05, -118.24] as [number, number],
+  ny: [40.71, -74.01] as [number, number],
+  toronto: [43.65, -79.38] as [number, number],
+  saopaulo: [-23.55, -46.63] as [number, number],
+  mexico: [19.43, -99.13] as [number, number],
+  london: [51.51, -0.13] as [number, number],
+  paris: [48.85, 2.35] as [number, number],
+  berlin: [52.52, 13.4] as [number, number],
+  moscow: [55.76, 37.62] as [number, number],
+  telaviv: [32.08, 34.78] as [number, number],
+  dubai: [25.2, 55.27] as [number, number],
+  cairo: [30.04, 31.24] as [number, number],
+  lagos: [6.52, 3.38] as [number, number],
+  joburg: [-26.2, 28.05] as [number, number],
+  delhi: [28.61, 77.21] as [number, number],
+  bangalore: [12.97, 77.59] as [number, number],
+  singapore: [1.35, 103.82] as [number, number],
+  hongkong: [22.32, 114.17] as [number, number],
+  tokyo: [35.68, 139.69] as [number, number],
+  seoul: [37.57, 126.98] as [number, number],
+  sydney: [-33.87, 151.21] as [number, number],
+}
+
+// Only the major hubs carry a text label — every city still renders a dot, but
+// labelling all 22 would clutter the sphere.
+const DEFAULT_MARKERS: { lat: number; lng: number; label?: string }[] = [
+  { lat: CITY.sf[0], lng: CITY.sf[1], label: 'San Francisco' },
+  { lat: CITY.la[0], lng: CITY.la[1] },
+  { lat: CITY.ny[0], lng: CITY.ny[1], label: 'New York' },
+  { lat: CITY.toronto[0], lng: CITY.toronto[1] },
+  { lat: CITY.saopaulo[0], lng: CITY.saopaulo[1], label: 'São Paulo' },
+  { lat: CITY.mexico[0], lng: CITY.mexico[1] },
+  { lat: CITY.london[0], lng: CITY.london[1], label: 'London' },
+  { lat: CITY.paris[0], lng: CITY.paris[1] },
+  { lat: CITY.berlin[0], lng: CITY.berlin[1] },
+  { lat: CITY.moscow[0], lng: CITY.moscow[1] },
+  { lat: CITY.telaviv[0], lng: CITY.telaviv[1], label: 'Tel Aviv' },
+  { lat: CITY.dubai[0], lng: CITY.dubai[1] },
+  { lat: CITY.cairo[0], lng: CITY.cairo[1] },
+  { lat: CITY.lagos[0], lng: CITY.lagos[1] },
+  { lat: CITY.joburg[0], lng: CITY.joburg[1] },
+  { lat: CITY.delhi[0], lng: CITY.delhi[1], label: 'Delhi' },
+  { lat: CITY.bangalore[0], lng: CITY.bangalore[1] },
+  { lat: CITY.singapore[0], lng: CITY.singapore[1], label: 'Singapore' },
+  { lat: CITY.hongkong[0], lng: CITY.hongkong[1] },
+  { lat: CITY.tokyo[0], lng: CITY.tokyo[1], label: 'Tokyo' },
+  { lat: CITY.seoul[0], lng: CITY.seoul[1] },
+  { lat: CITY.sydney[0], lng: CITY.sydney[1], label: 'Sydney' },
 ]
 
 const DEFAULT_CONNECTIONS: { from: [number, number]; to: [number, number] }[] = [
-  { from: [37.78, -122.42], to: [51.51, -0.13] },
-  { from: [51.51, -0.13], to: [35.68, 139.69] },
-  { from: [35.68, 139.69], to: [-33.87, 151.21] },
-  { from: [37.78, -122.42], to: [1.35, 103.82] },
-  { from: [51.51, -0.13], to: [28.61, 77.21] },
-  { from: [37.78, -122.42], to: [-23.55, -46.63] },
-  { from: [1.35, 103.82], to: [-33.87, 151.21] },
-  { from: [28.61, 77.21], to: [32.08, 34.78] },
-  { from: [51.51, -0.13], to: [32.08, 34.78] },
+  { from: CITY.sf, to: CITY.london },
+  { from: CITY.sf, to: CITY.tokyo },
+  { from: CITY.sf, to: CITY.singapore },
+  { from: CITY.sf, to: CITY.ny },
+  { from: CITY.la, to: CITY.mexico },
+  { from: CITY.la, to: CITY.sydney },
+  { from: CITY.ny, to: CITY.london },
+  { from: CITY.ny, to: CITY.saopaulo },
+  { from: CITY.ny, to: CITY.toronto },
+  { from: CITY.toronto, to: CITY.paris },
+  { from: CITY.saopaulo, to: CITY.lagos },
+  { from: CITY.mexico, to: CITY.saopaulo },
+  { from: CITY.london, to: CITY.berlin },
+  { from: CITY.london, to: CITY.telaviv },
+  { from: CITY.london, to: CITY.moscow },
+  { from: CITY.paris, to: CITY.dubai },
+  { from: CITY.berlin, to: CITY.moscow },
+  { from: CITY.moscow, to: CITY.delhi },
+  { from: CITY.cairo, to: CITY.london },
+  { from: CITY.cairo, to: CITY.dubai },
+  { from: CITY.telaviv, to: CITY.delhi },
+  { from: CITY.telaviv, to: CITY.lagos },
+  { from: CITY.dubai, to: CITY.singapore },
+  { from: CITY.dubai, to: CITY.joburg },
+  { from: CITY.lagos, to: CITY.joburg },
+  { from: CITY.delhi, to: CITY.bangalore },
+  { from: CITY.bangalore, to: CITY.singapore },
+  { from: CITY.singapore, to: CITY.hongkong },
+  { from: CITY.singapore, to: CITY.sydney },
+  { from: CITY.hongkong, to: CITY.tokyo },
+  { from: CITY.tokyo, to: CITY.seoul },
+  { from: CITY.tokyo, to: CITY.sydney },
+  { from: CITY.seoul, to: CITY.sf },
+  { from: CITY.joburg, to: CITY.sydney },
 ]
 
 function latLngToXYZ(lat: number, lng: number, radius: number): [number, number, number] {
@@ -156,6 +222,41 @@ export function InteractiveGlobe({
 
     const ry = rotYRef.current
     const rx = rotXRef.current
+
+    // Graticule — meridians + parallels traced on the sphere give it a real
+    // globe's wireframe read (front hemisphere only, depth-faded). Drawn under
+    // the dot field so the dots sit on top like surface texture.
+    const drawGraticule = (samples: [number, number][]) => {
+      let prev: { sx: number; sy: number; z: number; front: boolean } | null = null
+      for (const [glat, glng] of samples) {
+        let [gx, gy, gz] = latLngToXYZ(glat, glng, radius)
+        ;[gx, gy, gz] = rotateX(gx, gy, gz, rx)
+        ;[gx, gy, gz] = rotateY(gx, gy, gz, ry)
+        const [sx, sy] = project(gx, gy, gz, cx, cy, fov)
+        const front = gz < 0
+        if (prev && prev.front && front) {
+          const meanZ = (gz + prev.z) / 2
+          const depthT = Math.max(0, Math.min(1, -meanZ / radius))
+          ctx.beginPath()
+          ctx.moveTo(prev.sx, prev.sy)
+          ctx.lineTo(sx, sy)
+          ctx.strokeStyle = `rgba(34, 211, 238, ${(0.05 + 0.13 * depthT).toFixed(2)})`
+          ctx.lineWidth = 0.6
+          ctx.stroke()
+        }
+        prev = { sx, sy, z: gz, front }
+      }
+    }
+    for (let lng = -180; lng < 180; lng += 30) {
+      const meridian: [number, number][] = []
+      for (let lat = -90; lat <= 90; lat += 4) meridian.push([lat, lng])
+      drawGraticule(meridian)
+    }
+    for (let lat = -60; lat <= 60; lat += 30) {
+      const parallel: [number, number][] = []
+      for (let lng = -180; lng <= 180; lng += 4) parallel.push([lat, lng])
+      drawGraticule(parallel)
+    }
 
     const dots = dotsRef.current
     for (let i = 0; i < dots.length; i++) {

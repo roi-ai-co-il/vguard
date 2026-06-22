@@ -2,17 +2,15 @@ import { motion } from 'framer-motion'
 import { Check, ShieldCheck, Zap, ArrowRight } from 'lucide-react'
 
 /**
- * Two-tier pricing — adapted from a 21st.dev animated pricing section into
+ * Two-card pricing — adapted from a 21st.dev animated pricing section into
  * Vguard's terminal/security DNA (no generic blue gradient, no heavy particle
  * deps — just framer-motion + the design tokens). The model is intentionally
- * simple: Free unlocks Stage 1 + Stage 2; Pro adds the verified Stage 3 deep
- * scan as a one-time unlock per domain.
+ * simple: every stage is free. Stage 3 (the verified deep scan) is gated only
+ * by an ownership-proof step — never by payment.
  */
 interface Tier {
   name: string
   tagline: string
-  price: string
-  priceNote: string
   cta: string
   popular: boolean
   Icon: typeof Zap
@@ -21,10 +19,8 @@ interface Tier {
 
 const TIERS: Tier[] = [
   {
-    name: 'Free',
+    name: 'Scan',
     tagline: 'Passive + browser-assisted scanning, forever.',
-    price: '$0',
-    priceNote: 'no account needed',
     cta: 'Scan a URL',
     popular: false,
     Icon: Zap,
@@ -37,19 +33,17 @@ const TIERS: Tier[] = [
     ],
   },
   {
-    name: 'Pro',
-    tagline: 'Everything in Free, plus the verified deep scan.',
-    price: '$29',
-    priceNote: 'one-time · per domain',
-    cta: 'Unlock Stage 3',
+    name: 'Verified deep scan',
+    tagline: 'Everything in Scan, plus the verified deep scan — also free.',
+    cta: 'Run Stage 3',
     popular: true,
     Icon: ShieldCheck,
     includes: [
-      'Everything in Free',
+      'Everything in Scan',
       'Stage 3 — verified deep scan (you prove you own the domain)',
       'Real RLS / XSS / SQLi / path-traversal probes',
       'Supabase anon-key + storage write tests',
-      'Re-scan free for 30 days',
+      'Re-scan free, any time',
     ],
   },
 ]
@@ -85,11 +79,11 @@ export function PricingSection() {
             Pricing
           </div>
           <h2 className="text-[1.5rem] sm:text-3xl font-semibold tracking-tight leading-[1.15] text-balance">
-            Scan for free. <span className="text-(--color-fg-muted)">Pay only to go deep.</span>
+            Free. <span className="text-(--color-fg-muted)">Every stage, no catch.</span>
           </h2>
           <p className="mt-3 text-(--color-fg-muted) text-[13.5px] sm:text-base leading-relaxed">
-            Stages 1 &amp; 2 are free for everyone. Stage 3 fires real attack payloads —
-            so it's gated behind a one-time unlock per domain you own.
+            All three stages are free for everyone. Stage 3 fires real attack payloads —
+            so it's gated behind a quick ownership check, never a paywall.
           </p>
         </motion.div>
 
@@ -110,7 +104,7 @@ export function PricingSection() {
             >
               {tier.popular && (
                 <span className="absolute -top-3 right-6 inline-flex items-center gap-1 rounded-full bg-(--color-accent) text-(--color-bg) font-mono text-[10px] font-bold uppercase tracking-widest px-3 py-1">
-                  Most value
+                  Goes deepest
                 </span>
               )}
 
@@ -132,10 +126,12 @@ export function PricingSection() {
                 {tier.tagline}
               </p>
 
-              <div className="mt-4 flex items-baseline gap-2">
-                <span className="text-4xl font-semibold tracking-tight tabular-nums">{tier.price}</span>
-                <span className="font-mono text-[11px] text-(--color-fg-dim) uppercase tracking-wider">
-                  {tier.priceNote}
+              {/* No prices — all services are free right now. We surface that
+                  state explicitly instead of a $0 figure. */}
+              <div className="mt-4 inline-flex items-center gap-2 self-start rounded-full border border-(--color-ok)/30 bg-(--color-ok)/10 px-3.5 py-1.5">
+                <span className="text-base leading-none" aria-hidden="true">🙂</span>
+                <span className="font-mono text-[12px] sm:text-[13px] font-semibold text-(--color-ok)">
+                  All services free right now
                 </span>
               </div>
 
@@ -171,7 +167,7 @@ export function PricingSection() {
         </div>
 
         <p className="mt-8 text-center font-mono text-[11px] text-(--color-fg-dim)">
-          One-time payment · re-scan free for 30 days · secure checkout
+          No payment · no account · re-scan any time
         </p>
       </div>
     </section>
