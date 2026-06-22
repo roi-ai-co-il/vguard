@@ -232,9 +232,9 @@ function ModalShell({
               type="button"
               onClick={onClose}
               aria-label="Close"
-              className="absolute top-3 right-3 p-1.5 rounded-md text-(--color-fg-dim) hover:text-(--color-fg) hover:bg-(--color-surface-elevated) transition-colors cursor-pointer"
+              className="absolute top-2.5 right-2.5 flex items-center justify-center w-10 h-10 rounded-md text-(--color-fg-dim) hover:text-(--color-fg) hover:bg-(--color-surface-elevated) transition-colors cursor-pointer"
             >
-              <X size={16} strokeWidth={2} />
+              <X size={18} strokeWidth={2} />
             </button>
             {children}
           </motion.div>

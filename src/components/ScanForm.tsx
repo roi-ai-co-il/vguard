@@ -633,7 +633,7 @@ function FilterChip({
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      className={`inline-flex items-center gap-1.5 px-2.5 h-7 rounded-full border font-mono text-[11px] uppercase tracking-wider transition-colors cursor-pointer ${cls}`}
+      className={`inline-flex items-center gap-1.5 px-3 h-9 sm:h-8 rounded-full border font-mono text-[11px] uppercase tracking-wider transition-colors cursor-pointer ${cls}`}
     >
       {label}
       <span className={`tabular-nums ${active ? 'opacity-90' : 'opacity-60'}`}>{count}</span>

@@ -106,8 +106,9 @@ export default function App() {
 
       <main className="relative flex-1 z-10">
         <section className="relative overflow-hidden max-w-6xl mx-auto px-4 sm:px-6 pt-12 sm:pt-32 pb-14 sm:pb-28">
-          {/* Mascot watermark with a cyan scan wave (right side) */}
-          <div className="pointer-events-none absolute inset-0" aria-hidden="true">
+          {/* Mascot watermark with a cyan scan wave (right side). Hidden on
+              phones — at 260px it sits behind the headline and reads as noise. */}
+          <div className="pointer-events-none absolute inset-0 hidden sm:block" aria-hidden="true">
             <div className="absolute -top-6 right-2 sm:right-8">
               <MascotScanMark size={260} />
             </div>

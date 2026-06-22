@@ -422,7 +422,9 @@ export function InteractiveGlobe({
     <canvas
       ref={canvasRef}
       className={cn('cursor-grab active:cursor-grabbing', className)}
-      style={{ width: size, height: size, maxWidth: '100%' }}
+      // touch-action: pan-y lets a vertical swipe scroll the page (instead of
+      // being trapped rotating the globe); horizontal drags still rotate it.
+      style={{ width: size, height: size, maxWidth: '100%', touchAction: 'pan-y' }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
