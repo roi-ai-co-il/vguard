@@ -9,7 +9,7 @@ import {
 } from 'lucide-react'
 import { ScanForm } from './components/ScanForm'
 import ContactSection from './components/ContactSection'
-import { VGuardsLogo } from '@/components/ui/vguards-logo'
+import { VGuardsLogo, MascotScanMark } from '@/components/ui/vguards-logo'
 import { TypingEffect } from '@/components/ui/typing-effect'
 import { InteractiveGlobe } from '@/components/ui/interactive-globe'
 import { CpuArchitecture } from '@/components/ui/cpu-architecture'
@@ -106,9 +106,9 @@ export default function App() {
 
       <main className="relative flex-1 z-10">
         <section className="relative overflow-hidden max-w-6xl mx-auto px-4 sm:px-6 pt-12 sm:pt-32 pb-14 sm:pb-28">
-          {/* Mascot watermark */}
+          {/* Mascot watermark with a cyan scan wave */}
           <div className="pointer-events-none absolute inset-0" aria-hidden="true">
-            <VGuardsLogo size={260} className="absolute -top-6 right-2 sm:right-8 opacity-[0.06]" />
+            <MascotScanMark size={260} className="absolute -top-6 right-2 sm:right-8" />
           </div>
           <motion.div
             className="relative z-10"
@@ -171,9 +171,9 @@ export default function App() {
         </section>
 
         <section className="border-t border-(--color-border) relative overflow-hidden">
-          {/* Mascot watermark */}
+          {/* Mascot watermark with a cyan scan wave */}
           <div className="pointer-events-none absolute inset-0" aria-hidden="true">
-            <VGuardsLogo size={300} className="absolute -bottom-14 -left-10 opacity-[0.05]" />
+            <MascotScanMark size={300} className="absolute -bottom-14 -left-10" />
           </div>
           <div className="relative z-10 max-w-6xl mx-auto px-4 sm:px-6 py-12 sm:py-20 grid grid-cols-1 lg:grid-cols-12 gap-8 sm:gap-10 items-center">
             <motion.div

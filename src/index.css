@@ -307,3 +307,38 @@ html[data-a11y-motion="reduced"] *::after {
 @media (prefers-reduced-motion: reduce) {
   .cpu-architecture { animation: none !important; }
 }
+
+/* Mascot watermark with a cyan "scan wave" sweeping top→bottom.
+   A dim base raccoon + a bright copy revealed by a clip-path band that
+   travels down the mark, like a scanner illuminating it. */
+.vg-mascot-scan {
+  position: relative;
+}
+.vg-mascot-scan img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.vg-mascot-scan__base {
+  opacity: 0.1;
+}
+.vg-mascot-scan__beam {
+  opacity: 0.9;
+  filter: drop-shadow(0 0 6px rgba(34, 211, 238, 0.7));
+  clip-path: inset(-30% 0 100% 0);
+  animation: vg-mascot-scan 3.2s linear infinite;
+  will-change: clip-path;
+}
+@keyframes vg-mascot-scan {
+  0% { clip-path: inset(-30% 0 100% 0); }
+  100% { clip-path: inset(100% 0 -30% 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .vg-mascot-scan__beam {
+    animation: none;
+    clip-path: none;
+    opacity: 0.16;
+  }
+}

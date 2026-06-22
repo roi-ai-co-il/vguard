@@ -1,4 +1,5 @@
 import markUrl from '@/assets/vguards-mark.svg'
+import { cn } from '@/lib/utils'
 
 interface VGuardsLogoProps {
   size?: number
@@ -25,6 +26,21 @@ export function VGuardsLogo({ size = 18, className, ariaHidden = true }: VGuards
       draggable={false}
       style={{ display: 'block' }}
     />
+  )
+}
+
+/**
+ * Decorative watermark variant of the mascot: a dim cyan raccoon with a brighter
+ * cyan "scan wave" sweeping top→bottom (the security-scanner motif). Two stacked
+ * copies of the mark — a faint base + a bright copy revealed by an animated band
+ * (clip-path). Always aria-hidden; respects prefers-reduced-motion.
+ */
+export function MascotScanMark({ size, className }: { size: number; className?: string }) {
+  return (
+    <div className={cn('vg-mascot-scan', className)} style={{ width: size, height: size }} aria-hidden="true">
+      <img src={markUrl} alt="" draggable={false} className="vg-mascot-scan__base" />
+      <img src={markUrl} alt="" draggable={false} className="vg-mascot-scan__beam" />
+    </div>
   )
 }
 
