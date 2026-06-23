@@ -121,14 +121,14 @@ async function consumeScanStream(
 }
 
 const SCAN_STEPS = [
-  'Resolving DNS & TLS handshake',
-  'Checking HTTPS, TLS version & certificate',
-  'Probing JS bundles for exposed secrets',
-  'Decoding JWTs for service-role keys',
-  'Path probing — .env, .git, backups, admin',
-  'Testing cloud storage — Supabase / Firebase / S3',
-  'Safe active checks — XSS / SQLi / open redirect',
-  'Compiling report',
+  'Connecting securely to your site',
+  'Checking your connection is encrypted',
+  'Looking for passwords or keys left in your code',
+  'Checking for exposed admin keys',
+  'Looking for private files left public',
+  'Checking your cloud storage is locked down',
+  'Safely testing the most common break-in tricks',
+  'Building your report',
 ]
 
 const CATEGORY_META: Record<Category, { label: string; Icon: LucideIcon }> = {
@@ -327,10 +327,10 @@ function StageTracker({ stage1Done, stage1DurationMs, stage1FrameworkLabel, stag
   const stage2Label = (() => {
     switch (stage2Status) {
       case 'idle': return 'Queued'
-      case 'running': return 'Running headless browser…'
+      case 'running': return 'Opening your site in a browser…'
       case 'done': return `Done · ${stage2DurationMs ? `${(stage2DurationMs / 1000).toFixed(1)}s` : ''}`
-      case 'failed': return 'Skipped (worker error)'
-      case 'unavailable': return 'Skipped (not configured)'
+      case 'failed': return 'Skipped (couldn’t run)'
+      case 'unavailable': return 'Skipped (not available)'
     }
   })()
   const stage2State: 'pending' | 'running' | 'done' | 'skipped' = stage2Status === 'done'
@@ -353,7 +353,7 @@ function StageTracker({ stage1Done, stage1DurationMs, stage1FrameworkLabel, stag
             {stage1Done ? <Check size={11} strokeWidth={3} /> : '1'}
           </span>
           <div className="min-w-0">
-            <div className="font-mono text-xs text-(--color-fg) font-semibold leading-tight">Stage 1 · Passive</div>
+            <div className="font-mono text-xs text-(--color-fg) font-semibold leading-tight">Stage 1 · Quick scan</div>
             <div className="font-mono text-[11px] text-(--color-fg-muted) leading-snug">
               {stage1Done
                 ? `Done · ${(stage1DurationMs / 1000).toFixed(1)}s${stage1FrameworkLabel ? ` · ${stage1FrameworkLabel}` : ''}`
@@ -370,7 +370,7 @@ function StageTracker({ stage1Done, stage1DurationMs, stage1FrameworkLabel, stag
             {stage2State === 'done' ? <Check size={11} strokeWidth={3} /> : stage2State === 'running' ? <Loader2 size={11} strokeWidth={2.5} className="animate-spin" /> : '2'}
           </span>
           <div className="min-w-0">
-            <div className="font-mono text-xs text-(--color-fg) font-semibold leading-tight">Stage 2 · Browser-assisted</div>
+            <div className="font-mono text-xs text-(--color-fg) font-semibold leading-tight">Stage 2 · Browser check</div>
             <div className="font-mono text-[11px] text-(--color-fg-muted) leading-snug">{stage2Label}</div>
           </div>
         </div>
@@ -380,9 +380,9 @@ function StageTracker({ stage1Done, stage1DurationMs, stage1FrameworkLabel, stag
             {stage3Verified ? <Check size={11} strokeWidth={3} /> : <Lock size={10} strokeWidth={2.5} />}
           </span>
           <div className="min-w-0">
-            <div className="font-mono text-xs text-(--color-fg) font-semibold leading-tight">Stage 3 · Verified deep</div>
+            <div className="font-mono text-xs text-(--color-fg) font-semibold leading-tight">Stage 3 · Deep scan</div>
             <div className="font-mono text-[11px] text-(--color-fg-muted) leading-snug">
-              {stage3Verified ? 'Done · active probes ran' : 'Locked · verify ownership to unlock active probes'}
+              {stage3Verified ? 'Done · deep tests ran' : 'Locked · prove you own the site to unlock the deep tests'}
             </div>
           </div>
         </div>
@@ -569,7 +569,7 @@ function WafSurfacePanel({ surface }: { surface: NonNullable<ScanResult['attackS
       <div className="min-w-0 flex-1 text-xs leading-relaxed">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="font-mono text-[10px] uppercase tracking-widest text-amber-300/80">
-            Edge protection detected
+            Site protection detected
           </span>
           <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-amber-200 font-mono text-[11px] font-semibold">
             {WAF_VENDOR_LABEL[vendor]}
@@ -577,13 +577,13 @@ function WafSurfacePanel({ surface }: { surface: NonNullable<ScanResult['attackS
         </div>
         {blocked && stealthOk && (
           <p className="mt-1.5 text-(--color-fg-muted)">
-            <span className="text-amber-200">Initial automated request was blocked, browser-like retry succeeded.</span>{' '}
-            The findings below cover the live site — Vguard adapted by sending stealth headers (Sec-Ch-Ua + Sec-Fetch-*) on the second try.
+            <span className="text-amber-200">The first attempt was blocked, but a retry that looks like a normal browser got through.</span>{' '}
+            The results below cover your live site — V-Guards simply tried again the way a real browser would.
           </p>
         )}
         {!blocked && (
           <p className="mt-1.5 text-(--color-fg-muted)">
-            Detected from response headers — the scan was not blocked. Recorded in the attack surface map.
+            We spotted it from the site's responses — the scan wasn't blocked.
           </p>
         )}
       </div>
@@ -1193,7 +1193,7 @@ export function ScanForm() {
             <div className="mt-5 pt-4 border-t border-(--color-border) flex items-start gap-2.5 text-xs text-(--color-fg-muted)">
               <Globe size={14} strokeWidth={2.25} className="text-(--color-accent) mt-0.5 flex-shrink-0" aria-hidden="true" />
               <p className="leading-relaxed">
-                <span className="font-semibold text-(--color-fg)">Stage 2 (browser-assisted)</span> runs automatically right after — a real headless Chromium loads your page, captures live cookies, network calls, and runtime globals to catch the things a static probe can&apos;t.
+                <span className="font-semibold text-(--color-fg)">Stage 2</span> runs automatically right after — a real browser opens your page in the background and watches how it actually behaves, to catch issues a quick scan can&apos;t see.
               </p>
             </div>
           </motion.div>
@@ -1218,13 +1218,12 @@ export function ScanForm() {
               </span>
               <div className="min-w-0 flex-1">
                 <h3 className="text-base font-semibold text-(--color-fg)">
-                  Target denied automated access
+                  This site blocked our scanner
                 </h3>
                 <p className="mt-1 text-sm text-(--color-fg-muted) leading-relaxed">
-                  This isn&apos;t a Vguard failure — the target&apos;s edge protection blocked
-                  our scanner&apos;s IP. Vercel Lambda IPs (where Vguard runs) are widely
-                  flagged as automated traffic. Real browsers and your visitors aren&apos;t
-                  affected.
+                  This isn&apos;t a V-Guards failure — the site you entered blocked our
+                  scanner because it treats automated visits as suspicious. Your real
+                  visitors and normal browsers aren&apos;t affected.
                 </p>
                 <div className="mt-3 flex items-center gap-2 flex-wrap">
                   {scanError.wafVendor && (
@@ -1248,7 +1247,7 @@ export function ScanForm() {
                       className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-(--color-accent) text-(--color-bg) hover:bg-(--color-accent-strong) font-mono text-xs font-semibold transition-colors cursor-pointer min-h-[36px]"
                     >
                       <Globe size={13} strokeWidth={2.5} aria-hidden="true" />
-                      Run Stage 2 (browser-assisted)
+                      Run Stage 2 (browser check)
                     </button>
                   )}
                   <button

@@ -21,29 +21,29 @@ interface Tier {
 const TIERS: Tier[] = [
   {
     name: 'Scan',
-    tagline: 'Passive + browser-assisted scanning, forever.',
+    tagline: 'A quick scan plus a real-browser check — free, forever.',
     cta: 'Scan a URL',
     popular: false,
     Icon: Zap,
     includes: [
-      'Stage 1 — 23 checks: TLS, exposed secrets & service-role keys, sensitive paths, cloud storage, XSS / SQLi / redirect',
-      'Stage 2 — browser-assisted: cookies, JWTs, runtime APIs',
-      'Vibe Score + letter grade + full breakdown',
-      'Paste-ready AI fix prompt for every finding',
-      'Unlimited public scans',
+      'Stage 1 — 23 checks: secure connection, leaked passwords & keys, exposed private files, cloud storage, and the common ways attackers break in',
+      'Stage 2 — we open your app in a real browser to catch issues a quick scan can’t see',
+      'One clear score, a letter grade, and the full breakdown',
+      'A ready-to-paste fix for every issue',
+      'Unlimited scans of any public site',
     ],
   },
   {
     name: 'Verified deep scan',
-    tagline: 'Everything in Scan, plus the verified deep scan — also free.',
-    cta: 'Run Stage 3',
+    tagline: 'Everything in Scan, plus the deep scan — also free.',
+    cta: 'Run the deep scan',
     popular: true,
     Icon: ShieldCheck,
     includes: [
       'Everything in Scan',
-      'Stage 3 — verified deep scan (you prove you own the domain)',
-      'Real RLS / XSS / SQLi / path-traversal probes',
-      'Supabase anon-key + storage write tests',
+      'Stage 3 — the deep scan (after you prove the site is yours)',
+      'Deeper, real-world break-in tests against your pages and database',
+      'Checks your database and file storage are properly locked down',
       'Re-scan free, any time',
     ],
   },
@@ -84,8 +84,8 @@ export function PricingSection() {
             Free. <span className="text-(--color-fg-muted)">Every stage, no catch.</span>
           </h2>
           <p className="mt-3 text-(--color-fg-muted) text-[13.5px] sm:text-base leading-relaxed">
-            All three stages are free for everyone. Stage 3 fires real attack payloads —
-            so it's gated behind a quick ownership check, never a paywall.
+            All three stages are free for everyone. Stage 3 runs real break-in tests
+            on your site — so we first ask you to prove it's yours. It's never behind a paywall.
           </p>
         </motion.div>
 

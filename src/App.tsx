@@ -28,19 +28,19 @@ const STEPS = [
     n: '01',
     title: 'Scan',
     Icon: Search,
-    body: 'Paste your URL. We check HTTPS/TLS, JS bundles for exposed secrets & service-role keys, sensitive paths, cloud storage, plus safe XSS / SQLi / redirect probes. Active login-rate-limit testing is consent-gated (Stage 3).',
+    body: "Paste your link. We check whether your connection is secure, whether any passwords or secret keys leaked into your code, whether private files are exposed, and we safely test the most common ways attackers get in. The deeper, more aggressive tests only run after you prove the site is yours.",
   },
   {
     n: '02',
     title: 'Report',
     Icon: FileCheck2,
-    body: 'One Vibe Score. P0 → P2 findings. Each with raw HTTP evidence so you can verify, not just trust.',
+    body: 'One simple score, and a list of issues ranked from most to least urgent. Each one comes with the exact proof we found — so you can check it yourself, not just take our word.',
   },
   {
     n: '03',
     title: 'Fix',
     Icon: Wrench,
-    body: "Every finding ships with a paste-ready prompt for Cursor / Claude / Lovable. Rescan to prove it's fixed.",
+    body: "Every issue comes with a ready-to-paste instruction for Cursor / Claude / Lovable. Scan again to confirm it's fixed.",
   },
 ]
 
@@ -137,6 +137,21 @@ export default function App() {
             >
               45% of AI-generated code <span className="text-(--color-fg-muted)">fails</span> security tests.
             </motion.h1>
+            <motion.p
+              variants={fadeUp}
+              transition={{ duration: 0.6 }}
+              className="mt-2 font-mono text-[11px] sm:text-xs text-(--color-fg-dim)"
+            >
+              Source:{' '}
+              <a
+                href="https://www.veracode.com/resources/analyst-reports/2025-genai-code-security-report/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline decoration-dotted underline-offset-2 hover:text-(--color-fg-muted) transition-colors"
+              >
+                Veracode 2025 GenAI Code Security Report
+              </a>
+            </motion.p>
             <motion.p
               variants={fadeUp}
               transition={{ duration: 0.6 }}
@@ -238,7 +253,7 @@ export default function App() {
                     23
                   </div>
                   <div className="font-mono text-[10px] tracking-widest uppercase text-(--color-fg-dim) mt-1">
-                    Canonical checks
+                    Security checks
                   </div>
                 </div>
                 <div>
@@ -251,10 +266,10 @@ export default function App() {
                 </div>
                 <div>
                   <div className="font-mono text-2xl font-semibold tabular-nums text-(--color-fg)">
-                    P0 → P2
+                    3
                   </div>
                   <div className="font-mono text-[10px] tracking-widest uppercase text-(--color-fg-dim) mt-1">
-                    Severity tiers
+                    Urgency levels
                   </div>
                 </div>
               </div>
@@ -296,10 +311,10 @@ export default function App() {
               Eight signal streams. <span className="text-(--color-fg-muted)">One verdict.</span>
             </h2>
             <p className="mt-3 text-(--color-fg-muted) text-[13.5px] sm:text-base leading-relaxed max-w-xl">
-              Every probe — transport &amp; TLS, exposed secrets &amp; keys,
-              cookies, exposed paths, cloud storage, injection (XSS / SQLi /
-              redirect), access control &amp; rate-limiting, recon leaks —
-              converges into a single Vibe Score you can act on.
+              Every check — is your connection safe, did any passwords or keys
+              leak, are private files exposed, is your login protected, is your
+              cloud storage locked down, and the classic ways attackers break in
+              — rolls up into one clear score you can act on.
             </p>
             <div className="mt-5 sm:mt-8 w-full max-w-[320px] sm:max-w-md aspect-[2/1] text-(--color-fg-dim)">
               <CpuArchitecture text="secure" />
