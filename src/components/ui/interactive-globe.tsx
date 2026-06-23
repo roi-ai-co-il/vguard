@@ -1,4 +1,5 @@
-import { useRef, useEffect, useCallback, type PointerEvent } from 'react'
+import { useRef, useEffect, type PointerEvent } from 'react'
+import * as THREE from 'three'
 import { cn } from '@/lib/utils'
 
 interface GlobeProps {
@@ -12,8 +13,8 @@ interface GlobeProps {
   markers?: { lat: number; lng: number; label?: string }[]
 }
 
-// Global hub coordinates — a denser, more real-world spread of cities so the
-// connection mesh reads like genuine cross-planet traffic.
+// Global hub coordinates — a real-world spread of cities so the connection
+// mesh reads like genuine cross-planet traffic.
 const CITY = {
   sf: [37.78, -122.42] as [number, number],
   la: [34.05, -118.24] as [number, number],
@@ -39,8 +40,6 @@ const CITY = {
   sydney: [-33.87, 151.21] as [number, number],
 }
 
-// Only the major hubs carry a text label — every city still renders a dot, but
-// labelling all 22 would clutter the sphere.
 const DEFAULT_MARKERS: { lat: number; lng: number; label?: string }[] = [
   { lat: CITY.sf[0], lng: CITY.sf[1], label: 'San Francisco' },
   { lat: CITY.la[0], lng: CITY.la[1] },
@@ -69,29 +68,19 @@ const DEFAULT_MARKERS: { lat: number; lng: number; label?: string }[] = [
 const DEFAULT_CONNECTIONS: { from: [number, number]; to: [number, number] }[] = [
   { from: CITY.sf, to: CITY.london },
   { from: CITY.sf, to: CITY.tokyo },
-  { from: CITY.sf, to: CITY.singapore },
   { from: CITY.sf, to: CITY.ny },
-  { from: CITY.la, to: CITY.mexico },
   { from: CITY.la, to: CITY.sydney },
   { from: CITY.ny, to: CITY.london },
   { from: CITY.ny, to: CITY.saopaulo },
-  { from: CITY.ny, to: CITY.toronto },
-  { from: CITY.toronto, to: CITY.paris },
   { from: CITY.saopaulo, to: CITY.lagos },
-  { from: CITY.mexico, to: CITY.saopaulo },
-  { from: CITY.london, to: CITY.berlin },
   { from: CITY.london, to: CITY.telaviv },
   { from: CITY.london, to: CITY.moscow },
   { from: CITY.paris, to: CITY.dubai },
-  { from: CITY.berlin, to: CITY.moscow },
   { from: CITY.moscow, to: CITY.delhi },
-  { from: CITY.cairo, to: CITY.london },
   { from: CITY.cairo, to: CITY.dubai },
   { from: CITY.telaviv, to: CITY.delhi },
-  { from: CITY.telaviv, to: CITY.lagos },
   { from: CITY.dubai, to: CITY.singapore },
   { from: CITY.dubai, to: CITY.joburg },
-  { from: CITY.lagos, to: CITY.joburg },
   { from: CITY.delhi, to: CITY.bangalore },
   { from: CITY.bangalore, to: CITY.singapore },
   { from: CITY.singapore, to: CITY.hongkong },
@@ -103,332 +92,269 @@ const DEFAULT_CONNECTIONS: { from: [number, number]; to: [number, number] }[] = 
   { from: CITY.joburg, to: CITY.sydney },
 ]
 
-function latLngToXYZ(lat: number, lng: number, radius: number): [number, number, number] {
+const GLOBE_RADIUS = 1
+
+// lat/lng → point on the sphere, oriented to match the equirectangular Earth
+// texture (so Tel Aviv, Tokyo, etc. land on the right country). The earth mesh
+// carries a -PI/2 Y rotation that this convention is calibrated against.
+function latLngToVec3(lat: number, lng: number, radius: number): THREE.Vector3 {
   const phi = ((90 - lat) * Math.PI) / 180
   const theta = ((lng + 180) * Math.PI) / 180
-  return [
+  return new THREE.Vector3(
     -(radius * Math.sin(phi) * Math.cos(theta)),
     radius * Math.cos(phi),
     radius * Math.sin(phi) * Math.sin(theta),
-  ]
+  )
 }
 
-function rotateY(x: number, y: number, z: number, angle: number): [number, number, number] {
-  const cos = Math.cos(angle)
-  const sin = Math.sin(angle)
-  return [x * cos + z * sin, y, -x * sin + z * cos]
+function parseRGB(s: string): THREE.Color {
+  const m = s.match(/(\d+(?:\.\d+)?)/g)
+  if (m && m.length >= 3) {
+    return new THREE.Color(+m[0] / 255, +m[1] / 255, +m[2] / 255)
+  }
+  return new THREE.Color(s)
 }
 
-function rotateX(x: number, y: number, z: number, angle: number): [number, number, number] {
-  const cos = Math.cos(angle)
-  const sin = Math.sin(angle)
-  return [x, y * cos - z * sin, y * sin + z * cos]
-}
-
-function project(
-  x: number,
-  y: number,
-  z: number,
-  cx: number,
-  cy: number,
-  fov: number,
-): [number, number, number] {
-  const scale = fov / (fov + z)
-  return [x * scale + cx, y * scale + cy, z]
+// Sprite label rendered from a small offscreen canvas — keeps the mono /
+// terminal type on the 3D globe without a separate CSS overlay renderer.
+function makeLabelSprite(text: string, color: THREE.Color): THREE.Sprite {
+  const pad = 8
+  const fontPx = 34
+  const canvas = document.createElement('canvas')
+  const ctx = canvas.getContext('2d')!
+  ctx.font = `500 ${fontPx}px ui-monospace, "JetBrains Mono", monospace`
+  const w = ctx.measureText(text).width
+  canvas.width = Math.ceil(w + pad * 2)
+  canvas.height = fontPx + pad * 2
+  ctx.font = `500 ${fontPx}px ui-monospace, "JetBrains Mono", monospace`
+  ctx.fillStyle = `rgba(${Math.round(color.r * 255)}, ${Math.round(color.g * 255)}, ${Math.round(color.b * 255)}, 0.9)`
+  ctx.textBaseline = 'middle'
+  ctx.fillText(text, pad, canvas.height / 2)
+  const tex = new THREE.CanvasTexture(canvas)
+  tex.minFilter = THREE.LinearFilter
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false })
+  const sprite = new THREE.Sprite(mat)
+  const scale = 0.0022
+  sprite.scale.set(canvas.width * scale, canvas.height * scale, 1)
+  return sprite
 }
 
 export function InteractiveGlobe({
   className,
   size = 600,
-  dotColor = 'rgba(34, 211, 238, ALPHA)',
-  arcColor = 'rgba(34, 211, 238, 0.5)',
+  arcColor = 'rgba(34, 211, 238, 0.6)',
   markerColor = 'rgba(125, 240, 255, 1)',
-  autoRotateSpeed = 0.002,
+  autoRotateSpeed = 0.0016,
   connections = DEFAULT_CONNECTIONS,
   markers = DEFAULT_MARKERS,
 }: GlobeProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const rotYRef = useRef(0.4)
-  const rotXRef = useRef(0.3)
-  const dragRef = useRef<{
-    active: boolean
-    startX: number
-    startY: number
-    startRotY: number
-    startRotX: number
-  }>({ active: false, startX: 0, startY: 0, startRotY: 0, startRotX: 0 })
-  const animRef = useRef<number>(0)
-  const timeRef = useRef(0)
-  const dotsRef = useRef<[number, number, number][]>([])
+  const mountRef = useRef<HTMLDivElement>(null)
+  const dragRef = useRef({ active: false, x: 0, y: 0, rotY: 0, rotX: 0 })
 
   useEffect(() => {
-    const dots: [number, number, number][] = []
-    const numDots = 1200
-    const goldenRatio = (1 + Math.sqrt(5)) / 2
-    for (let i = 0; i < numDots; i++) {
-      const theta = (2 * Math.PI * i) / goldenRatio
-      const phi = Math.acos(1 - (2 * (i + 0.5)) / numDots)
-      const x = Math.cos(theta) * Math.sin(phi)
-      const y = Math.cos(phi)
-      const z = Math.sin(theta) * Math.sin(phi)
-      dots.push([x, y, z])
-    }
-    dotsRef.current = dots
-  }, [])
+    const mount = mountRef.current
+    if (!mount) return
 
-  const draw = useCallback(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
+    const cyan = parseRGB(arcColor)
+    const markerCol = parseRGB(markerColor)
 
-    const dpr = window.devicePixelRatio || 1
-    // Guard against pre-layout zero dimensions — drawing with w=0 yields NaN
-    // in subsequent radius/cosine math and pollutes the console.
-    const w = canvas.clientWidth || size
-    const h = canvas.clientHeight || size
-    if (w < 1 || h < 1) return
-    if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
-      canvas.width = w * dpr
-      canvas.height = h * dpr
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    }
+    const scene = new THREE.Scene()
+    const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 100)
+    camera.position.set(0, 0, 3.1)
 
-    const cx = w / 2
-    const cy = h / 2
-    const radius = Math.min(w, h) * 0.38
-    const fov = 600
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true })
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
+    renderer.setSize(size, size)
+    renderer.outputColorSpace = THREE.SRGBColorSpace
+    mount.appendChild(renderer.domElement)
+    renderer.domElement.style.width = '100%'
+    renderer.domElement.style.height = '100%'
+    renderer.domElement.style.cursor = 'grab'
+    renderer.domElement.style.touchAction = 'pan-y'
 
-    if (!dragRef.current.active) {
-      rotYRef.current += autoRotateSpeed
-    }
+    // ── Lighting: a "sun" from the upper right gives a real day/night
+    //    terminator as the globe turns; gentle ambient keeps the night side
+    //    from going pure black.
+    scene.add(new THREE.AmbientLight(0x6b7a8f, 0.55))
+    const sun = new THREE.DirectionalLight(0xfff4e6, 1.6)
+    sun.position.set(3, 1.5, 2)
+    scene.add(sun)
+    const rim = new THREE.DirectionalLight(cyan.getHex(), 0.5)
+    rim.position.set(-2, -0.5, -1)
+    scene.add(rim)
 
-    timeRef.current += 0.015
-    const time = timeRef.current
+    // ── Earth — the group everything (texture, markers, arcs) lives in so it
+    //    all rotates together. The -PI/2 offset aligns the texture seam with
+    //    the latLngToVec3 convention.
+    const earthGroup = new THREE.Group()
+    earthGroup.rotation.y = -Math.PI / 2
+    earthGroup.rotation.x = 0.35
+    scene.add(earthGroup)
 
-    ctx.clearRect(0, 0, w, h)
+    const loader = new THREE.TextureLoader()
+    const dayMap = loader.load('/globe/earth-day.jpg', (t) => {
+      t.colorSpace = THREE.SRGBColorSpace
+    })
+    const specMap = loader.load('/globe/earth-bump.jpg')
 
-    const glowGrad = ctx.createRadialGradient(cx, cy, radius * 0.8, cx, cy, radius * 1.5)
-    glowGrad.addColorStop(0, 'rgba(34, 211, 238, 0.05)')
-    glowGrad.addColorStop(1, 'rgba(34, 211, 238, 0)')
-    ctx.fillStyle = glowGrad
-    ctx.fillRect(0, 0, w, h)
+    const earth = new THREE.Mesh(
+      new THREE.SphereGeometry(GLOBE_RADIUS, 96, 96),
+      new THREE.MeshPhongMaterial({
+        map: dayMap,
+        specularMap: specMap,
+        specular: new THREE.Color(0x223344),
+        shininess: 12,
+        emissive: new THREE.Color(0x0a1a2a),
+        emissiveIntensity: 0.55,
+      }),
+    )
+    earthGroup.add(earth)
 
-    ctx.beginPath()
-    ctx.arc(cx, cy, radius, 0, Math.PI * 2)
-    ctx.strokeStyle = 'rgba(34, 211, 238, 0.08)'
-    ctx.lineWidth = 1
-    ctx.stroke()
+    // ── Cyan atmosphere — a slightly larger back-side sphere with a fresnel
+    //    shader gives the glowing rim that ties the globe to the brand.
+    const atmosphere = new THREE.Mesh(
+      new THREE.SphereGeometry(GLOBE_RADIUS * 1.16, 64, 64),
+      new THREE.ShaderMaterial({
+        transparent: true,
+        side: THREE.BackSide,
+        blending: THREE.AdditiveBlending,
+        uniforms: { uColor: { value: cyan } },
+        vertexShader: `
+          varying vec3 vNormal;
+          void main() {
+            vNormal = normalize(normalMatrix * normal);
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }`,
+        fragmentShader: `
+          varying vec3 vNormal;
+          uniform vec3 uColor;
+          void main() {
+            float intensity = pow(0.62 - dot(vNormal, vec3(0.0, 0.0, 1.0)), 3.0);
+            gl_FragColor = vec4(uColor, 1.0) * intensity;
+          }`,
+      }),
+    )
+    scene.add(atmosphere)
 
-    const ry = rotYRef.current
-    const rx = rotXRef.current
-
-    // Graticule — meridians + parallels traced on the sphere give it a real
-    // globe's wireframe read (front hemisphere only, depth-faded). Drawn under
-    // the dot field so the dots sit on top like surface texture.
-    const drawGraticule = (samples: [number, number][]) => {
-      let prev: { sx: number; sy: number; z: number; front: boolean } | null = null
-      for (const [glat, glng] of samples) {
-        let [gx, gy, gz] = latLngToXYZ(glat, glng, radius)
-        ;[gx, gy, gz] = rotateX(gx, gy, gz, rx)
-        ;[gx, gy, gz] = rotateY(gx, gy, gz, ry)
-        const [sx, sy] = project(gx, gy, gz, cx, cy, fov)
-        const front = gz < 0
-        if (prev && prev.front && front) {
-          const meanZ = (gz + prev.z) / 2
-          const depthT = Math.max(0, Math.min(1, -meanZ / radius))
-          ctx.beginPath()
-          ctx.moveTo(prev.sx, prev.sy)
-          ctx.lineTo(sx, sy)
-          ctx.strokeStyle = `rgba(34, 211, 238, ${(0.05 + 0.13 * depthT).toFixed(2)})`
-          ctx.lineWidth = 0.6
-          ctx.stroke()
-        }
-        prev = { sx, sy, z: gz, front }
-      }
-    }
-    for (let lng = -180; lng < 180; lng += 30) {
-      const meridian: [number, number][] = []
-      for (let lat = -90; lat <= 90; lat += 4) meridian.push([lat, lng])
-      drawGraticule(meridian)
-    }
-    for (let lat = -60; lat <= 60; lat += 30) {
-      const parallel: [number, number][] = []
-      for (let lng = -180; lng <= 180; lng += 4) parallel.push([lat, lng])
-      drawGraticule(parallel)
-    }
-
-    const dots = dotsRef.current
-    for (let i = 0; i < dots.length; i++) {
-      const [dx, dy, dz] = dots[i]
-      let x = dx * radius
-      let y = dy * radius
-      let z = dz * radius
-
-      ;[x, y, z] = rotateX(x, y, z, rx)
-      ;[x, y, z] = rotateY(x, y, z, ry)
-
-      if (z > 0) continue
-
-      const [sx, sy] = project(x, y, z, cx, cy, fov)
-      const depthAlpha = Math.max(0.1, 1 - (z + radius) / (2 * radius))
-      const dotSize = 1 + depthAlpha * 0.8
-
-      ctx.beginPath()
-      ctx.arc(sx, sy, dotSize, 0, Math.PI * 2)
-      ctx.fillStyle = dotColor.replace('ALPHA', depthAlpha.toFixed(2))
-      ctx.fill()
-    }
-
-    // Occlusion threshold matches the markers below (z > radius * 0.1) so an
-    // arc only renders when BOTH endpoints will have a visible marker dot.
-    // The previous `z > 0.3 && z > 0.3` (AND) drew a line whenever even ONE
-    // endpoint was visible, leaving the other end floating in mid-air where
-    // the hidden marker would have been — visually broken.
-    const OCCLUDE_Z = radius * 0.1
-    for (const conn of connections) {
-      const [lat1, lng1] = conn.from
-      const [lat2, lng2] = conn.to
-
-      let [x1, y1, z1] = latLngToXYZ(lat1, lng1, radius)
-      let [x2, y2, z2] = latLngToXYZ(lat2, lng2, radius)
-
-      ;[x1, y1, z1] = rotateX(x1, y1, z1, rx)
-      ;[x1, y1, z1] = rotateY(x1, y1, z1, ry)
-      ;[x2, y2, z2] = rotateX(x2, y2, z2, rx)
-      ;[x2, y2, z2] = rotateY(x2, y2, z2, ry)
-
-      // Either endpoint hidden → drop the arc entirely. We accept a few
-      // missing connections rather than show "lines into nothing".
-      if (z1 > OCCLUDE_Z || z2 > OCCLUDE_Z) continue
-
-      const [sx1, sy1] = project(x1, y1, z1, cx, cy, fov)
-      const [sx2, sy2] = project(x2, y2, z2, cx, cy, fov)
-
-      const midX = (x1 + x2) / 2
-      const midY = (y1 + y2) / 2
-      const midZ = (z1 + z2) / 2
-      const midLen = Math.sqrt(midX * midX + midY * midY + midZ * midZ)
-      const arcHeight = radius * 1.25
-      const elevX = (midX / midLen) * arcHeight
-      const elevY = (midY / midLen) * arcHeight
-      const elevZ = (midZ / midLen) * arcHeight
-      const [scx, scy] = project(elevX, elevY, elevZ, cx, cy, fov)
-
-      // Depth-based alpha: arcs near the front are crisp, arcs that lean
-      // toward the visible horizon fade — gives the globe more "depth" feel.
-      const meanZ = (z1 + z2) / 2
-      const depthT = Math.max(0, Math.min(1, (radius - meanZ) / (2 * radius)))
-      const arcAlpha = 0.25 + 0.55 * depthT
-
-      ctx.beginPath()
-      ctx.moveTo(sx1, sy1)
-      ctx.quadraticCurveTo(scx, scy, sx2, sy2)
-      ctx.strokeStyle = arcColor.replace(/[\d.]+\)$/, `${arcAlpha.toFixed(2)})`)
-      ctx.lineWidth = 1.2
-      ctx.lineCap = 'round'
-      ctx.stroke()
-
-      // Anchor "studs" at both endpoints so each arc visibly terminates IN a
-      // dot — fixes the perception that lines are floating.
-      ctx.beginPath()
-      ctx.arc(sx1, sy1, 1.3, 0, Math.PI * 2)
-      ctx.fillStyle = arcColor.replace(/[\d.]+\)$/, '0.85)')
-      ctx.fill()
-      ctx.beginPath()
-      ctx.arc(sx2, sy2, 1.3, 0, Math.PI * 2)
-      ctx.fill()
-
-      // Travelling pulse along the arc.
-      const t = (Math.sin(time * 1.2 + lat1 * 0.1) + 1) / 2
-      const tx = (1 - t) * (1 - t) * sx1 + 2 * (1 - t) * t * scx + t * t * sx2
-      const ty = (1 - t) * (1 - t) * sy1 + 2 * (1 - t) * t * scy + t * t * sy2
-
-      // Glow halo around the moving pulse.
-      const glow = ctx.createRadialGradient(tx, ty, 0, tx, ty, 6)
-      glow.addColorStop(0, markerColor)
-      glow.addColorStop(1, markerColor.replace('1)', '0)'))
-      ctx.beginPath()
-      ctx.arc(tx, ty, 6, 0, Math.PI * 2)
-      ctx.fillStyle = glow
-      ctx.fill()
-
-      ctx.beginPath()
-      ctx.arc(tx, ty, 2, 0, Math.PI * 2)
-      ctx.fillStyle = markerColor
-      ctx.fill()
-    }
-
-    for (const marker of markers) {
-      let [x, y, z] = latLngToXYZ(marker.lat, marker.lng, radius)
-      ;[x, y, z] = rotateX(x, y, z, rx)
-      ;[x, y, z] = rotateY(x, y, z, ry)
-
-      if (z > radius * 0.1) continue
-
-      const [sx, sy] = project(x, y, z, cx, cy, fov)
-
-      const pulse = Math.sin(time * 2 + marker.lat) * 0.5 + 0.5
-      ctx.beginPath()
-      ctx.arc(sx, sy, 4 + pulse * 4, 0, Math.PI * 2)
-      ctx.strokeStyle = markerColor.replace('1)', `${0.2 + pulse * 0.15})`)
-      ctx.lineWidth = 1
-      ctx.stroke()
-
-      ctx.beginPath()
-      ctx.arc(sx, sy, 2.5, 0, Math.PI * 2)
-      ctx.fillStyle = markerColor
-      ctx.fill()
-
-      if (marker.label) {
-        ctx.font = '10px ui-monospace, "JetBrains Mono", monospace'
-        ctx.fillStyle = markerColor.replace('1)', '0.6)')
-        ctx.fillText(marker.label, sx + 8, sy + 3)
+    // ── Markers (city dots + labels) ─────────────────────────────────────
+    const markerGeo = new THREE.SphereGeometry(0.012, 12, 12)
+    const markerMat = new THREE.MeshBasicMaterial({ color: markerCol })
+    for (const m of markers) {
+      const pos = latLngToVec3(m.lat, m.lng, GLOBE_RADIUS * 1.005)
+      const dot = new THREE.Mesh(markerGeo, markerMat)
+      dot.position.copy(pos)
+      earthGroup.add(dot)
+      if (m.label) {
+        const sprite = makeLabelSprite(m.label, markerCol)
+        sprite.position.copy(latLngToVec3(m.lat, m.lng, GLOBE_RADIUS * 1.04))
+        earthGroup.add(sprite)
       }
     }
 
-    animRef.current = requestAnimationFrame(draw)
-  }, [dotColor, arcColor, markerColor, autoRotateSpeed, connections, markers])
+    // ── Connection arcs + travelling pulses ──────────────────────────────
+    const arcMat = new THREE.LineBasicMaterial({ color: cyan, transparent: true, opacity: 0.55 })
+    const pulseGeo = new THREE.SphereGeometry(0.018, 10, 10)
+    const pulseMat = new THREE.MeshBasicMaterial({ color: markerCol, transparent: true, opacity: 0.95 })
+    const pulses: { mesh: THREE.Mesh; curve: THREE.QuadraticBezierCurve3; speed: number; phase: number }[] = []
 
-  useEffect(() => {
-    animRef.current = requestAnimationFrame(draw)
-    return () => cancelAnimationFrame(animRef.current)
-  }, [draw])
+    for (let i = 0; i < connections.length; i++) {
+      const c = connections[i]
+      const start = latLngToVec3(c.from[0], c.from[1], GLOBE_RADIUS)
+      const end = latLngToVec3(c.to[0], c.to[1], GLOBE_RADIUS)
+      const mid = start.clone().add(end).multiplyScalar(0.5)
+      const lift = 1 + start.distanceTo(end) * 0.4
+      mid.normalize().multiplyScalar(GLOBE_RADIUS * lift)
+      const curve = new THREE.QuadraticBezierCurve3(start, mid, end)
+      const geo = new THREE.BufferGeometry().setFromPoints(curve.getPoints(48))
+      earthGroup.add(new THREE.Line(geo, arcMat))
 
-  const onPointerDown = useCallback((e: PointerEvent) => {
-    dragRef.current = {
-      active: true,
-      startX: e.clientX,
-      startY: e.clientY,
-      startRotY: rotYRef.current,
-      startRotX: rotXRef.current,
+      const pulse = new THREE.Mesh(pulseGeo, pulseMat)
+      earthGroup.add(pulse)
+      pulses.push({ mesh: pulse, curve, speed: 0.12 + (i % 5) * 0.03, phase: (i * 0.137) % 1 })
     }
-    ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
-  }, [])
 
-  const onPointerMove = useCallback((e: PointerEvent) => {
-    if (!dragRef.current.active) return
-    const dx = e.clientX - dragRef.current.startX
-    const dy = e.clientY - dragRef.current.startY
-    rotYRef.current = dragRef.current.startRotY + dx * 0.005
-    rotXRef.current = Math.max(-1, Math.min(1, dragRef.current.startRotX + dy * 0.005))
-  }, [])
+    // ── Animation loop ───────────────────────────────────────────────────
+    let raf = 0
+    let last = 0
+    let elapsed = 0
+    const render = (now: number) => {
+      if (!last) last = now
+      const dt = (now - last) / 1000
+      last = now
+      elapsed += dt
+      if (!dragRef.current.active) {
+        earthGroup.rotation.y += autoRotateSpeed * 60 * dt
+      }
+      for (const p of pulses) {
+        const u = (elapsed * p.speed + p.phase) % 1
+        p.mesh.position.copy(p.curve.getPoint(u))
+        p.mesh.scale.setScalar(0.7 + Math.sin(u * Math.PI) * 0.8)
+      }
+      renderer.render(scene, camera)
+      raf = requestAnimationFrame(render)
+    }
+    raf = requestAnimationFrame(render)
 
-  const onPointerUp = useCallback(() => {
-    dragRef.current.active = false
-  }, [])
+    // ── Drag to rotate ───────────────────────────────────────────────────
+    const el = renderer.domElement
+    const onDown = (e: globalThis.PointerEvent) => {
+      dragRef.current = {
+        active: true,
+        x: e.clientX,
+        y: e.clientY,
+        rotY: earthGroup.rotation.y,
+        rotX: earthGroup.rotation.x,
+      }
+      el.setPointerCapture(e.pointerId)
+      el.style.cursor = 'grabbing'
+    }
+    const onMove = (e: globalThis.PointerEvent) => {
+      if (!dragRef.current.active) return
+      earthGroup.rotation.y = dragRef.current.rotY + (e.clientX - dragRef.current.x) * 0.005
+      earthGroup.rotation.x = Math.max(
+        -1,
+        Math.min(1, dragRef.current.rotX + (e.clientY - dragRef.current.y) * 0.005),
+      )
+    }
+    const onUp = () => {
+      dragRef.current.active = false
+      el.style.cursor = 'grab'
+    }
+    el.addEventListener('pointerdown', onDown)
+    el.addEventListener('pointermove', onMove)
+    el.addEventListener('pointerup', onUp)
+    el.addEventListener('pointercancel', onUp)
 
+    return () => {
+      cancelAnimationFrame(raf)
+      el.removeEventListener('pointerdown', onDown)
+      el.removeEventListener('pointermove', onMove)
+      el.removeEventListener('pointerup', onUp)
+      el.removeEventListener('pointercancel', onUp)
+      renderer.dispose()
+      scene.traverse((o) => {
+        const any = o as THREE.Mesh
+        if (any.geometry) any.geometry.dispose()
+        const mat = (any as THREE.Mesh).material
+        if (Array.isArray(mat)) mat.forEach((m) => m.dispose())
+        else if (mat) (mat as THREE.Material).dispose()
+      })
+      dayMap.dispose()
+      specMap.dispose()
+      if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement)
+    }
+  }, [size, arcColor, markerColor, autoRotateSpeed, connections, markers])
+
+  // The pointer handlers live on the canvas itself (added in the effect); the
+  // wrapper just sizes the stage.
+  const noop = (_e: PointerEvent) => {}
   return (
-    <canvas
-      ref={canvasRef}
-      className={cn('cursor-grab active:cursor-grabbing', className)}
-      // touch-action: pan-y lets a vertical swipe scroll the page (instead of
-      // being trapped rotating the globe); horizontal drags still rotate it.
-      style={{ width: size, height: size, maxWidth: '100%', touchAction: 'pan-y' }}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      aria-label="Interactive globe of recent Vguard scans"
+    <div
+      ref={mountRef}
+      className={cn(className)}
+      style={{ width: size, height: size, maxWidth: '100%', aspectRatio: '1 / 1' }}
+      onPointerDown={noop}
+      aria-label="Interactive globe of recent V-Guards scans"
       role="img"
     />
   )
