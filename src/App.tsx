@@ -6,6 +6,7 @@ import {
   Wrench,
   ArrowRight,
   Activity,
+  ShieldCheck,
 } from 'lucide-react'
 import { ScanForm } from './components/ScanForm'
 import ContactSection from './components/ContactSection'
@@ -185,6 +186,17 @@ export default function App() {
               <ArrowRight size={11} className="text-(--color-accent)" aria-hidden="true" />
               First scan free. No card. No bullshit.
             </motion.div>
+            <motion.p
+              variants={fadeUp}
+              transition={{ duration: 0.6 }}
+              className="mt-3 text-[12px] sm:text-[13px] text-(--color-fg-dim) max-w-2xl leading-relaxed flex items-start gap-1.5"
+            >
+              <ShieldCheck size={13} className="text-(--color-accent) mt-0.5 flex-shrink-0" aria-hidden="true" />
+              <span>
+                We only read your public pages — we never log in, change anything, or store your
+                site. <a href="/privacy" className="underline decoration-dotted underline-offset-2 hover:text-(--color-fg-muted) transition-colors">How we handle your data</a>.
+              </span>
+            </motion.p>
           </motion.div>
         </section>
 
@@ -357,6 +369,31 @@ export default function App() {
         </section>
 
         <PricingSection />
+
+        <section className="border-t border-(--color-border) relative overflow-hidden">
+          <motion.div
+            initial={{ opacity: 0, y: 16 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true, amount: 'some' }}
+            transition={{ duration: 0.5 }}
+            className="max-w-3xl mx-auto px-4 sm:px-6 py-16 sm:py-24 flex flex-col items-center text-center"
+          >
+            <h2 className="text-[1.6rem] sm:text-4xl font-bold tracking-tight leading-[1.1] text-balance">
+              Find your leaks before attackers do.
+            </h2>
+            <p className="mt-3 text-(--color-fg-muted) text-[14px] sm:text-base leading-relaxed max-w-lg">
+              Paste your URL, get a clear score and ready-to-paste fixes in under a minute. Free —
+              no card, no account.
+            </p>
+            <a
+              href="#vguard-scan"
+              className="mt-7 inline-flex items-center justify-center gap-2 h-12 px-6 rounded-xl bg-(--color-accent) text-(--color-bg) font-mono text-sm font-semibold hover:opacity-90 active:scale-[0.99] transition-all"
+            >
+              Scan my app
+              <ArrowRight size={16} strokeWidth={2.5} aria-hidden="true" />
+            </a>
+          </motion.div>
+        </section>
 
         <ContactSection />
       </main>

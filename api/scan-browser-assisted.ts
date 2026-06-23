@@ -16,6 +16,7 @@ import type { Finding } from '../src/lib/scanner-types.js'
 import { enrichFindings } from './_lib/fix-prompt-composer.js'
 import { applyRisk, classifyRouteContext } from './_lib/risk-scorer.js'
 import { applyEngine, defaultContext } from './_lib/scoring-engine.js'
+import { computeDisplayScore, findingsHaveCritical } from './_lib/display-score.js'
 import { logAuditEvent, fireAndForget } from './_lib/audit-log.js'
 
 export const config = {
@@ -171,8 +172,18 @@ interface WorkerScanResult {
  * path pattern (/api/, /v1/, /v2/, /graphql, /trpc/).
  */
 function isApiCall(r: WorkerNetworkRequest): boolean {
-  if (r.resourceType === 'xhr' || r.resourceType === 'fetch') return true
   const ct = (r.contentType || '').toLowerCase()
+  // Static assets are NEVER API calls — even when served under a /v1/ or
+  // /api-www/ path (e.g. Apple's `.../v1/assets/globalheader.umd.js`). Without
+  // this guard a versioned JS/CSS path was misread as an unauth "API call",
+  // which dragged clean professional sites down. (2026-06-07 v5.4)
+  if (['script', 'stylesheet', 'image', 'font', 'media', 'manifest'].includes(r.resourceType)) {
+    return false
+  }
+  if (/^(text\/css|text\/javascript|application\/(javascript|x-javascript|font-woff|wasm)|image\/|font\/|audio\/|video\/)/.test(ct)) {
+    return false
+  }
+  if (r.resourceType === 'xhr' || r.resourceType === 'fetch') return true
   if (ct.startsWith('application/json')) return true
   if (ct.startsWith('application/graphql')) return true
   if (ct.startsWith('text/event-stream')) return true
@@ -261,8 +272,11 @@ function buildLiveApiMap(data: WorkerScanResult): LiveApiMap {
       e.status >= 200 &&
       e.status < 300 &&
       !e.hasAuth &&
-      // Skip GET on home / static-ish paths — only POST/PUT/PATCH/DELETE or /api/* are interesting unauth.
-      (e.method !== 'GET' || /\/(api|v1|v2|graphql|trpc)\//i.test(e.url)) &&
+      // Skip GET on home / static-ish paths. A GET is only "interesting unauth"
+      // when it hits a real API path (/api/, /graphql, /trpc) — NOT a bare
+      // /v1/ /v2/ which is also how CDNs version static assets. State-changing
+      // methods (POST/PUT/PATCH/DELETE) are always interesting.
+      (e.method !== 'GET' || /\/(api|graphql|trpc)\//i.test(e.url)) &&
       // Skip endpoints whose path matches conventional public-by-design names.
       // Health, status, version, manifests, and explicitly-public listings are
       // intended to be unauth — flagging them produces false positives the
@@ -538,7 +552,37 @@ function analyzeBrowserScan(data: WorkerScanResult): Finding[] {
 
   // 6.6. Stage 2.4 — Sensitive data in response bodies (S2+4). Worker
   //      scanned response bodies locally; sends back only `{type, redactedSample, sourceUrl}`.
-  const sd = data.sensitiveDataFindings ?? []
+  //
+  // False-positive guard: a site publishing its OWN public role mailbox
+  // (info@/support@/contact@…) on its own pages is not a PII leak — it's the
+  // contact address. Suppress only that exact case (role mailbox + same
+  // registrable domain as the scanned site). Real leaks stay: personal emails,
+  // emails returned by API/third-party endpoints, phones, IDs, and cards.
+  const ROLE_MAILBOX =
+    /^(info|contact|support|hello|hi|sales|admin|office|mail|team|help|press|careers|jobs|billing|hr|legal|privacy|security|no-?reply|noreply|donotreply)$/i
+  const registrableDomain = (host: string) =>
+    host.toLowerCase().split('.').slice(-2).join('.')
+  let scannedHost = ''
+  try {
+    scannedHost = new URL(data.finalUrl).hostname
+  } catch {
+    scannedHost = ''
+  }
+  const sd = (data.sensitiveDataFindings ?? []).filter((h) => {
+    if (h.type !== 'email') return true
+    let srcHost = ''
+    try {
+      srcHost = new URL(h.sourceUrl).hostname
+    } catch {
+      return true
+    }
+    const localPart = (h.redactedSample.match(/^[a-z0-9._%+-]+/i) ?? [''])[0]
+    const isOwnContactMailbox =
+      ROLE_MAILBOX.test(localPart) &&
+      !!scannedHost &&
+      registrableDomain(srcHost) === registrableDomain(scannedHost)
+    return !isOwnContactMailbox
+  })
   if (sd.length > 0) {
     const buckets = new Map<string, WorkerSensitiveDataHit[]>()
     for (const h of sd) {
@@ -858,6 +902,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       merged: merged
         ? {
             vibeScore: merged.vibeScore,
+            ...computeDisplayScore(merged.vibeScore, {
+              hasCritical:
+                merged.severityCounts.critical > 0 || findingsHaveCritical(merged.findings),
+            }),
             aggregateRiskBand: merged.aggregateBand,
             hasVerifiedImpact: merged.hasVerifiedImpact,
             findings: merged.findings,

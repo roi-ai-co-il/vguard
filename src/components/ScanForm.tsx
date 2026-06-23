@@ -391,8 +391,17 @@ function StageTracker({ stage1Done, stage1DurationMs, stage1FrameworkLabel, stag
   )
 }
 
+// A finding is "actionable" only if it has a fix prompt AND the engine put it
+// in a real bucket — NOT an informational observation. An info-level finding
+// (e.g. a public contact email matched by the PII pass) carries a fix prompt
+// but is "no action required", so it must never count toward the fix tally or
+// it contradicts a perfect score.
+function isActionable(f: ApiFinding): boolean {
+  return !!f.fixPrompt && uiGroupOf(f) !== 'informational-observations'
+}
+
 function buildBulkFixPrompt(result: ScanResult): string {
-  const actionable = result.findings.filter((f) => f.fixPrompt && f.severity !== 'ok')
+  const actionable = result.findings.filter(isActionable)
   if (actionable.length === 0) return ''
 
   // Bucket by ENGINE uiGroup, not detector severity.
@@ -511,7 +520,7 @@ function CopyAllFixPromptsButton({ result, prominent = false }: { result: ScanRe
   const [copied, setCopied] = useState(false)
   const bulk = buildBulkFixPrompt(result)
   if (!bulk) return null
-  const actionableCount = result.findings.filter((f) => f.fixPrompt && f.severity !== 'ok').length
+  const actionableCount = result.findings.filter(isActionable).length
 
   async function handleCopy() {
     const ok = await copyTextToClipboard(bulk)
@@ -982,7 +991,9 @@ export function ScanForm() {
     }
   }
 
-  function rescan() {
+  function rescan(targetUrl?: string) {
+    const scanTarget = targetUrl ? normalizeUrl(targetUrl) : url
+    if (targetUrl) setUrl(scanTarget)
     setStepIdx(0)
     setErrorMsg('')
     setScanError(null)
@@ -1008,7 +1019,7 @@ export function ScanForm() {
 
     let receivedResult: ScanResponse | null = null
     consumeScanStream(
-      url,
+      scanTarget,
       controller.signal,
       (phase) => {
         setStepIdx(Math.min(phase.step - 1, SCAN_STEPS.length - 1))
@@ -1252,7 +1263,7 @@ export function ScanForm() {
                   )}
                   <button
                     type="button"
-                    onClick={rescan}
+                    onClick={() => rescan()}
                     className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-(--color-surface-elevated) hover:bg-(--color-surface) border border-(--color-border) hover:border-(--color-accent-border) text-(--color-fg-muted) hover:text-(--color-fg) font-mono text-xs transition-colors cursor-pointer min-h-[36px]"
                   >
                     <RefreshCw size={13} strokeWidth={2.5} aria-hidden="true" />
@@ -1297,14 +1308,26 @@ export function ScanForm() {
                 <h3 className="text-base font-semibold text-(--color-fg)">Scan failed</h3>
                 <p className="mt-1 text-sm text-(--color-fg-muted) leading-relaxed">{errorMsg}</p>
                 <p className="mt-2 font-mono text-xs text-(--color-fg-dim) truncate">{url}</p>
+                <p className="mt-2 text-xs text-(--color-fg-muted) leading-relaxed">
+                  This usually means the site was slow or blocked us — not a problem with your code.
+                  Want to see what a report looks like? Scan a sample site.
+                </p>
                 <div className="mt-4 flex items-center gap-2 flex-wrap">
                   <button
                     type="button"
-                    onClick={rescan}
+                    onClick={() => rescan()}
                     className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-(--color-accent) text-(--color-bg) hover:bg-(--color-accent-strong) font-mono text-xs font-semibold transition-colors cursor-pointer min-h-[36px]"
                   >
                     <RefreshCw size={13} strokeWidth={2.5} aria-hidden="true" />
                     Retry
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => rescan('https://example.com')}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-(--color-surface-elevated) hover:bg-(--color-surface) border border-(--color-border) hover:border-(--color-accent-border) text-(--color-fg-muted) hover:text-(--color-fg) font-mono text-xs transition-colors cursor-pointer min-h-[36px]"
+                  >
+                    <Globe size={12} strokeWidth={2.5} aria-hidden="true" />
+                    Scan a sample site
                   </button>
                   <button
                     type="button"
@@ -1541,14 +1564,27 @@ export function ScanForm() {
             {/* Scan → prompt — the core value. Every issue ships with a
                 ready-to-paste fix prompt; this is the primary action. */}
             {(() => {
-              const fixCount = displayResult.findings.filter(
-                (f) => f.fixPrompt && f.severity !== 'ok',
-              ).length
+              const fixCount = displayResult.findings.filter(isActionable).length
               if (fixCount === 0) {
                 return (
-                  <div className="px-4 sm:px-6 py-4 border-b border-(--color-border) bg-(--color-bg) flex items-center gap-2 font-mono text-xs text-(--color-ok)">
-                    <Check size={14} strokeWidth={2.5} aria-hidden="true" />
-                    Nothing to fix right now — clean scan. 🎉
+                  <div className="px-4 sm:px-6 py-4 sm:py-5 border-b border-(--color-border) bg-(--color-bg)">
+                    <div className="rounded-xl border border-(--color-ok)/30 bg-(--color-ok)/10 p-4 sm:p-5 flex items-start gap-3">
+                      <span
+                        className="flex items-center justify-center w-9 h-9 rounded-full flex-shrink-0 bg-(--color-ok)/15 text-(--color-ok)"
+                        aria-hidden="true"
+                      >
+                        <Check size={18} strokeWidth={2.75} />
+                      </span>
+                      <div className="min-w-0">
+                        <div className="font-mono text-[10px] tracking-widest uppercase text-(--color-ok) mb-1">
+                          Passed
+                        </div>
+                        <p className="text-sm text-(--color-fg) leading-relaxed">
+                          Your site passed every check we ran — nothing to fix right now. Anything
+                          listed below is informational only. Re-scan any time after you ship changes.
+                        </p>
+                      </div>
+                    </div>
                   </div>
                 )
               }
@@ -1692,7 +1728,7 @@ export function ScanForm() {
                 <CopyAllFixPromptsButton result={displayResult} />
                 <button
                   type="button"
-                  onClick={rescan}
+                  onClick={() => rescan()}
                   className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-(--color-accent) text-(--color-bg) hover:bg-(--color-accent-strong) font-mono text-xs font-semibold transition-colors cursor-pointer min-h-[36px]"
                 >
                   <RefreshCw size={13} strokeWidth={2.5} aria-hidden="true" />

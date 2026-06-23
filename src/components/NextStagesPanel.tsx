@@ -283,8 +283,8 @@ function buildBookmarkletSource(uuid: string, collectorOrigin: string): string {
     `var g={hasSupabase:typeof w.supabase!=='undefined',hasFirebase:typeof w.firebase!=='undefined',hasFirebaseConfig:typeof w.firebaseConfig!=='undefined',hasAppConfig:typeof w.__APP_CONFIG!=='undefined'||typeof w.__NEXT_DATA__!=='undefined',hasReactRoot:!!document.getElementById('root')};`,
     `var p=performance.getEntriesByType('resource').map(function(e){return e.name}).slice(0,80);`,
     `var data={uuid:u,url:location.href,cookieKeys:ck,localStorageKeys:lk,sessionStorageKeys:sk,globals:g,performanceUrls:p,userAgent:navigator.userAgent};`,
-    `fetch('${collectorOrigin}/api/stage2-collect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}).then(function(r){return r.json()}).then(function(j){alert('Vguard Stage 2: data sent. Return to the scanner tab.')}).catch(function(e){alert('Vguard error: '+e.message)});`,
-    `}catch(e){alert('Vguard error: '+e.message)}`,
+    `fetch('${collectorOrigin}/api/stage2-collect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}).then(function(r){return r.json()}).then(function(j){alert('V-Guards Stage 2: data sent. Return to the scanner tab.')}).catch(function(e){alert('V-Guards error: '+e.message)});`,
+    `}catch(e){alert('V-Guards error: '+e.message)}`,
     `})()`,
   ].join('')
 }
@@ -598,7 +598,7 @@ export function Stage2Modal({ open, onClose }: { open: boolean; onClose: () => v
               Step 2 — open your site, click the bookmark
             </div>
             <p className="text-sm text-(--color-fg-muted) leading-relaxed">
-              Visit your app in a new tab — log in if you usually do. Then click the Vguard bookmark. The snippet will collect runtime data and POST it back to us. You'll see an alert when it's done.
+              Visit your app in a new tab — log in if you usually do. Then click the V-Guards bookmark. The snippet will collect runtime data and POST it back to us. You'll see an alert when it's done.
             </p>
           </div>
 

@@ -61,7 +61,7 @@ export default function Privacy() {
         </section>
 
         <p className="pt-6">
-          <a href="/" className="text-zinc-400 hover:text-zinc-200 underline">← Back to Vguard</a>
+          <a href="/" className="text-zinc-400 hover:text-zinc-200 underline">← Back to V-Guards</a>
         </p>
       </article>
     </div>

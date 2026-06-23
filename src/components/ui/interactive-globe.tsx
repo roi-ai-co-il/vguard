@@ -428,7 +428,7 @@ export function InteractiveGlobe({
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      aria-label="Interactive globe of recent Vguard scans"
+      aria-label="Interactive globe of recent V-Guards scans"
       role="img"
     />
   )
