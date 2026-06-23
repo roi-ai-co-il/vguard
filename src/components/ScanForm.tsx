@@ -391,13 +391,15 @@ function StageTracker({ stage1Done, stage1DurationMs, stage1FrameworkLabel, stag
   )
 }
 
-// A finding is "actionable" only if it has a fix prompt AND the engine put it
-// in a real bucket — NOT an informational observation. An info-level finding
-// (e.g. a public contact email matched by the PII pass) carries a fix prompt
-// but is "no action required", so it must never count toward the fix tally or
-// it contradicts a perfect score.
+// "Urgent" = a real gap the user should fix (confirmed exploit, likely risk,
+// or a review-worthy gap). These — and ONLY these — drive the prominent
+// "Fix it in one paste" CTA. Hardening recommendations are defense-in-depth
+// ("fix at your pace", not a vulnerability) and informational observations are
+// "no action required"; neither should fire the urgent fix bar next to a
+// perfect score.
+const URGENT_GROUPS: UiGroup[] = ['confirmed-vulnerabilities', 'likely-risks', 'needs-review']
 function isActionable(f: ApiFinding): boolean {
-  return !!f.fixPrompt && uiGroupOf(f) !== 'informational-observations'
+  return !!f.fixPrompt && URGENT_GROUPS.includes(uiGroupOf(f))
 }
 
 function buildBulkFixPrompt(result: ScanResult): string {
@@ -1580,8 +1582,9 @@ export function ScanForm() {
                           Passed
                         </div>
                         <p className="text-sm text-(--color-fg) leading-relaxed">
-                          Your site passed every check we ran — nothing to fix right now. Anything
-                          listed below is informational only. Re-scan any time after you ship changes.
+                          Your site passed every check we ran — no vulnerabilities to fix right now.
+                          Anything listed below is informational or an optional hardening tip you can
+                          do at your pace. Re-scan any time after you ship changes.
                         </p>
                       </div>
                     </div>

@@ -552,37 +552,7 @@ function analyzeBrowserScan(data: WorkerScanResult): Finding[] {
 
   // 6.6. Stage 2.4 — Sensitive data in response bodies (S2+4). Worker
   //      scanned response bodies locally; sends back only `{type, redactedSample, sourceUrl}`.
-  //
-  // False-positive guard: a site publishing its OWN public role mailbox
-  // (info@/support@/contact@…) on its own pages is not a PII leak — it's the
-  // contact address. Suppress only that exact case (role mailbox + same
-  // registrable domain as the scanned site). Real leaks stay: personal emails,
-  // emails returned by API/third-party endpoints, phones, IDs, and cards.
-  const ROLE_MAILBOX =
-    /^(info|contact|support|hello|hi|sales|admin|office|mail|team|help|press|careers|jobs|billing|hr|legal|privacy|security|no-?reply|noreply|donotreply)$/i
-  const registrableDomain = (host: string) =>
-    host.toLowerCase().split('.').slice(-2).join('.')
-  let scannedHost = ''
-  try {
-    scannedHost = new URL(data.finalUrl).hostname
-  } catch {
-    scannedHost = ''
-  }
-  const sd = (data.sensitiveDataFindings ?? []).filter((h) => {
-    if (h.type !== 'email') return true
-    let srcHost = ''
-    try {
-      srcHost = new URL(h.sourceUrl).hostname
-    } catch {
-      return true
-    }
-    const localPart = (h.redactedSample.match(/^[a-z0-9._%+-]+/i) ?? [''])[0]
-    const isOwnContactMailbox =
-      ROLE_MAILBOX.test(localPart) &&
-      !!scannedHost &&
-      registrableDomain(srcHost) === registrableDomain(scannedHost)
-    return !isOwnContactMailbox
-  })
+  const sd = data.sensitiveDataFindings ?? []
   if (sd.length > 0) {
     const buckets = new Map<string, WorkerSensitiveDataHit[]>()
     for (const h of sd) {
