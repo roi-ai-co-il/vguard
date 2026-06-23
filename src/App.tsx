@@ -184,7 +184,7 @@ export default function App() {
               className="mt-4 font-mono text-[11px] sm:text-xs text-(--color-fg-dim) flex items-center gap-1.5"
             >
               <ArrowRight size={11} className="text-(--color-accent)" aria-hidden="true" />
-              First scan free. No card. No bullshit.
+              Every scan free. No card. No bullshit.
             </motion.div>
             <motion.p
               variants={fadeUp}
