@@ -1,4 +1,4 @@
-import { useEffect, useState, lazy, Suspense } from 'react'
+import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import {
   Search,
@@ -11,11 +11,7 @@ import { ScanForm } from './components/ScanForm'
 import ContactSection from './components/ContactSection'
 import { VGuardsLogo, MascotScanMark } from '@/components/ui/vguards-logo'
 import { TypingEffect } from '@/components/ui/typing-effect'
-// Lazy — pulls Three.js into its own chunk so it never blocks first paint
-// (the globe sits below the fold).
-const InteractiveGlobe = lazy(() =>
-  import('@/components/ui/interactive-globe').then((m) => ({ default: m.InteractiveGlobe })),
-)
+import { InteractiveGlobe } from '@/components/ui/interactive-globe'
 import { CpuArchitecture } from '@/components/ui/cpu-architecture'
 import { PricingSection } from '@/components/PricingSection'
 
@@ -287,9 +283,7 @@ export default function App() {
               className="lg:col-span-7 flex items-center justify-center"
             >
               <div className="w-full max-w-[320px] sm:max-w-[520px] aspect-square">
-                <Suspense fallback={<div className="w-full h-full" aria-hidden="true" />}>
-                  <InteractiveGlobe size={520} className="!w-full !h-full" />
-                </Suspense>
+                <InteractiveGlobe size={520} className="!w-full !h-full" />
               </div>
             </motion.div>
           </div>
