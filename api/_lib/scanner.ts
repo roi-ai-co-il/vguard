@@ -4,6 +4,7 @@
  */
 import { promises as dns } from 'node:dns'
 import * as tls from 'node:tls'
+import { createHash } from 'node:crypto'
 import { getDomain } from 'tldts'
 import type { Finding, ScanResponse, Severity } from '../../src/lib/scanner-types.js'
 import { enrichFindings } from './fix-prompt-composer.js'
@@ -295,6 +296,322 @@ const EXTENDED_PATHS_TO_PROBE: { path: string; severity: Severity; label: string
   { path: '/.firebaserc', severity: 'info', label: '.firebaserc' },
   { path: '/api/admin', severity: 'warn', label: '/api/admin route' },
 ]
+
+// ───────────────────────────────────────────────────────────────────────────
+// TEMPORARY DEBUG INSTRUMENTATION (2026-06-25) — path-exposure false-positive
+// audit. OPT-IN ONLY: runs nothing unless `process.env.VGUARD_DEBUG_PATHS === '1'`.
+// Pure observation — it double-fetches the probed paths + two control paths and
+// console.logs structured evidence. It does NOT push findings, does NOT touch
+// scoring, and does NOT change the existing probe loop. Remove once the generic
+// soft-404 / denial-page fix lands. See docs/PATH-EXPOSURE-FP-AUDIT.md.
+// ───────────────────────────────────────────────────────────────────────────
+interface DebugProbeRow {
+  path: string
+  status: number | 'ERR'
+  finalUrl: string
+  redirected: boolean
+  contentType: string
+  bodyLen: number
+  bodyHead: string // first 300 chars, control-char-stripped
+  bodyHash: string // sha256(first 8192 bytes), 12 hex chars
+  isSpaShell: boolean
+  matchedRealSecret: boolean
+  looksLikeDenialOrSoft404: boolean
+}
+
+// Coarse, GENERIC denial / WAF / soft-404 / branded-error tells (no brand names,
+// no hardcoded hosts). Debug-only — informs the eventual real rule, scores nothing.
+const DENIAL_SOFT404_HINTS =
+  /access denied|request blocked|forbidden|not found|page (?:cannot be found|isn'?t available)|error 40\d|sign in|log ?in to continue|are you a robot|unusual traffic|security check|captcha|incident id|reference (?:#|number)|edgesuite|cloudfront|akamai/i
+
+function debugBodyHash(body: string): string {
+  return createHash('sha256').update(body).digest('hex').slice(0, 12)
+}
+
+async function debugProbeOne(
+  url: string,
+  finalUrl: string,
+  pathLabel: string,
+  html: string | null,
+): Promise<DebugProbeRow> {
+  try {
+    const r = await fetchWithTimeout(url, { method: 'GET' }, PROBE_TIMEOUT_MS)
+    const body = (await r.text()).slice(0, 8192)
+    return {
+      path: pathLabel,
+      status: r.status,
+      finalUrl: r.url || url,
+      redirected: r.redirected || (r.url ? r.url !== url : false),
+      contentType: r.headers.get('content-type') ?? '',
+      bodyLen: body.length,
+      // eslint-disable-next-line no-control-regex -- intentional: collapse control bytes for safe logging
+      bodyHead: body.replace(/[\x00-\x1f]+/g, " ").slice(0, 300),
+      bodyHash: debugBodyHash(body),
+      isSpaShell: isSpaShellBody(body, html),
+      matchedRealSecret: evidenceContainsRealSecret(body),
+      looksLikeDenialOrSoft404: DENIAL_SOFT404_HINTS.test(body.slice(0, 4096)),
+    }
+  } catch {
+    return {
+      path: pathLabel,
+      status: 'ERR',
+      finalUrl: url,
+      redirected: false,
+      contentType: '',
+      bodyLen: 0,
+      bodyHead: '',
+      bodyHash: '',
+      isSpaShell: false,
+      matchedRealSecret: false,
+      looksLikeDenialOrSoft404: false,
+    }
+  }
+}
+
+async function debugProbeSensitivePaths(
+  finalUrl: string,
+  paths: { path: string; severity: Severity; label: string }[],
+  html: string | null,
+): Promise<void> {
+  if (process.env.VGUARD_DEBUG_PATHS !== '1') return
+  // Two CONTROL paths, both guaranteed-nonexistent, in different shapes so we can
+  // see whether the origin's fallback is shape-dependent (a plain .txt 404 vs a
+  // dotfile that hits the same denial template as /.env*).
+  const rand = finalUrl.length.toString(36) + paths.length.toString(36)
+  const controlPlain = new URL(`/__vguards_control_404_${rand}.txt`, finalUrl).toString()
+  const controlDotfile = new URL(`/.vguards_control_${rand}`, finalUrl).toString()
+  const [ctrlPlainRow, ctrlDotRow] = await Promise.all([
+    debugProbeOne(controlPlain, finalUrl, '[CONTROL .txt]', html),
+    debugProbeOne(controlDotfile, finalUrl, '[CONTROL dotfile]', html),
+  ])
+  const rows = await Promise.all(
+    paths.map((p) =>
+      debugProbeOne(new URL(p.path, finalUrl).toString(), finalUrl, p.path, html),
+    ),
+  )
+  // Cross-path identical-body detection: a hash shared by ≥2 probed paths is a
+  // generic template (soft-404 / denial page), NOT distinct real files.
+  const hashCounts = new Map<string, number>()
+  for (const row of rows) {
+    if (row.bodyHash) hashCounts.set(row.bodyHash, (hashCounts.get(row.bodyHash) ?? 0) + 1)
+  }
+  const sharedHashes = new Set(
+    [...hashCounts.entries()].filter(([, n]) => n >= 2).map(([h]) => h),
+  )
+  // FUZZY shape match — exact-hash equality MISSES branded templates that embed
+  // the requested path / a nonce (PayPal: every dotfile gets the same ~7.8KB
+  // text/html shell, but hashes differ by a few bytes). Same content-type + body
+  // length within 5% + same leading template ⇒ same fallback page.
+  const sameShape = (a: DebugProbeRow, b: DebugProbeRow): boolean => {
+    if (a.bodyLen === 0 || b.bodyLen === 0) return false
+    const lenRatio = Math.min(a.bodyLen, b.bodyLen) / Math.max(a.bodyLen, b.bodyLen)
+    const ctA = a.contentType.split(';')[0].trim()
+    const ctB = b.contentType.split(';')[0].trim()
+    const headA = a.bodyHead.slice(0, 80)
+    const headB = b.bodyHead.slice(0, 80)
+    return lenRatio >= 0.95 && ctA === ctB && headA === headB
+  }
+  const annotate = (row: DebugProbeRow) => ({
+    ...row,
+    matchesControlPlainHash: !!row.bodyHash && row.bodyHash === ctrlPlainRow.bodyHash,
+    matchesControlDotfileHash: !!row.bodyHash && row.bodyHash === ctrlDotRow.bodyHash,
+    matchesControlDotfileShape: row.status === 200 && sameShape(row, ctrlDotRow),
+    matchesControlPlainShape: row.status === 200 && sameShape(row, ctrlPlainRow),
+    sharedHashAcrossProbes: !!row.bodyHash && sharedHashes.has(row.bodyHash),
+    // The actionable verdict the real rule should encode: a 200 that looks just
+    // like a guaranteed-nonexistent control of the same SHAPE is a fallback page.
+    likelyGenericFallback:
+      row.status === 200 &&
+      !row.matchedRealSecret &&
+      (sameShape(row, ctrlDotRow) ||
+        sameShape(row, ctrlPlainRow) ||
+        row.isSpaShell ||
+        row.looksLikeDenialOrSoft404),
+  })
+  console.log(
+    '[VGUARD_DEBUG_PATHS]',
+    JSON.stringify(
+      {
+        origin: finalUrl,
+        controls: { plain: ctrlPlainRow, dotfile: ctrlDotRow },
+        distinctBodyHashes: hashCounts.size,
+        sharedHashCount: sharedHashes.size,
+        probes: rows.map(annotate),
+      },
+      null,
+      2,
+    ),
+  )
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// GENERIC SOFT-404 / FALLBACK CLASSIFICATION (2026-06-25)
+// Brand-agnostic. No allowlists, no hardcoded hosts/CDNs. A sensitive-path 200
+// only counts as an exposure when it is DISTINGUISHABLE from a guaranteed-
+// nonexistent control of the SAME SHAPE *and* content-type-plausible for the
+// file kind. Real-secret evidence ALWAYS wins over every suppression here.
+// Exported for unit tests in api/__tests__/path-fallback.test.ts.
+// ───────────────────────────────────────────────────────────────────────────
+
+export type ControlFamily = 'dotfile' | 'sql' | 'json' | 'plain'
+
+export interface PathFingerprint {
+  bodyLen: number
+  /** sha256(body).slice(0,12) — exact-body identity. '' for empty bodies. */
+  bodyHash: string
+  /** sha256(normalized first 300 chars).slice(0,12) — template identity,
+   *  tolerant of nonces/paths the template echoes further down. */
+  headHash: string
+  contentTypeFamily: string
+  isHtml: boolean
+  title: string
+}
+
+export interface PathControl extends PathFingerprint {
+  family: ControlFamily
+  status: number | null
+  /** Returned a real, non-empty, non-SPA-shell 200 → a usable fallback template
+   *  to compare probes against. A 404/empty control means the origin DOES
+   *  distinguish nonexistent paths of this shape, so no suppression applies. */
+  active: boolean
+}
+
+function shortHash(s: string): string {
+  return createHash('sha256').update(s).digest('hex').slice(0, 12)
+}
+
+/** Coarse content-type family — drops charset/vendor noise so `text/html;
+ *  charset=utf-8` and `text/html` compare equal. */
+export function contentTypeFamily(ct: string | null | undefined): string {
+  const c = (ct ?? '').toLowerCase().split(';')[0].trim()
+  if (!c) return 'none'
+  if (c.includes('html')) return 'html'
+  if (c.includes('json')) return 'json'
+  if (c.includes('xml')) return 'xml'
+  if (c === 'text/plain' || c.includes('plain') || c.includes('x-env')) return 'plain'
+  if (
+    c.includes('octet-stream') ||
+    c.startsWith('image/') ||
+    c.startsWith('font/') ||
+    c.includes('zip') ||
+    c.includes('gzip') ||
+    c.includes('sqlite') ||
+    c.includes('x-sql') ||
+    c.includes('msdownload')
+  )
+    return 'binary'
+  return 'other'
+}
+
+function normalizeHead(body: string): string {
+  return body.slice(0, 300).replace(/\s+/g, ' ').trim().toLowerCase()
+}
+
+function isHtmlBody(body: string): boolean {
+  return /<html[\s>]|<!doctype html/i.test(body.slice(0, 512))
+}
+
+function extractTitle(body: string): string {
+  return (body.match(/<title[^>]*>([^<]{0,128})/i) ?? ['', ''])[1].trim().toLowerCase()
+}
+
+export function buildPathFingerprint(
+  body: string,
+  contentType: string | null | undefined,
+): PathFingerprint {
+  const head = normalizeHead(body)
+  return {
+    bodyLen: body.length,
+    bodyHash: body.length ? shortHash(body) : '',
+    headHash: head ? shortHash(head) : '',
+    contentTypeFamily: contentTypeFamily(contentType),
+    isHtml: isHtmlBody(body),
+    title: extractTitle(body),
+  }
+}
+
+/** Which shape-matched control a probe path should be compared against. */
+export function controlFamilyForPath(path: string): ControlFamily {
+  const p = path.toLowerCase()
+  const last = p.split('/').filter(Boolean).pop() ?? p
+  if (p.startsWith('/.') || last.startsWith('.')) return 'dotfile'
+  if (/\.(sql|sqlite|db|dump|bak|tar\.gz|tgz|zip|gz|backup)$/.test(last)) return 'sql'
+  if (/\.json$/.test(last)) return 'json'
+  return 'plain'
+}
+
+/**
+ * Fuzzy "is this probe materially the same page as a guaranteed-nonexistent
+ * control?". Exact body hash is a strong signal but NOT relied upon alone —
+ * fallback templates often echo the requested path / a nonce, so two real
+ * fallbacks differ by a few bytes. Same content-type family + length within ~5%
+ * (or 64 bytes) + same template head (or same <title>) is the robust signal.
+ */
+export function sameFallbackShape(a: PathFingerprint, b: PathControl | PathFingerprint): boolean {
+  if ('active' in b && !b.active) return false
+  if (a.bodyHash && a.bodyHash === b.bodyHash) return true // exact body identity
+  if (a.contentTypeFamily !== b.contentTypeFamily) return false
+  if (a.bodyLen === 0 || b.bodyLen === 0) return false
+  const lenRatio = Math.min(a.bodyLen, b.bodyLen) / Math.max(a.bodyLen, b.bodyLen)
+  const lenOk = lenRatio >= 0.95 || Math.abs(a.bodyLen - b.bodyLen) <= 64
+  if (!lenOk) return false
+  const headOk = a.headHash !== '' && a.headHash === b.headHash
+  const titleOk = a.title !== '' && a.title === b.title
+  return headOk || titleOk
+}
+
+export type PathProbeLane =
+  | 'empty' // <8 bytes
+  | 'real-secret' // strong secret evidence → CRITICAL verified (ALWAYS wins)
+  | 'spa-shell' // body is the SPA index.html
+  | 'generic-fallback' // == a shape-matched control, or shares a template across probes
+  | 'rendered-page' // sensitive raw-file path served as HTML w/ no secret → not the file
+  | 'catch-all' // legacy plain-200-for-everything origin
+  | 'exposed-needs-review' // sensitive critical path, real body, no secret → warn
+  | 'exposed' // non-critical configured severity (info/warn) reachable
+
+/**
+ * Pure classifier — the single decision point for a sensitive/probed path 200.
+ * No I/O. Order is the contract:
+ *   empty → real-secret → spa-shell → generic-fallback → rendered-page
+ *         → catch-all → exposed-needs-review / exposed
+ */
+export function classifyPathProbe(args: {
+  path: string
+  isSensitive: boolean
+  configuredSeverity: Severity
+  body: string
+  contentType: string | null | undefined
+  mainHtml: string | null
+  fingerprint: PathFingerprint
+  controls: PathControl[]
+  clustered: boolean
+  catchAll: boolean
+}): { lane: PathProbeLane; reason?: string } {
+  const { path, isSensitive, configuredSeverity, body, mainHtml, fingerprint, controls } = args
+  if (body.length < 8) return { lane: 'empty' }
+  // Real secret ALWAYS wins — never suppressed by any fallback heuristic below.
+  if (isSensitive && evidenceContainsRealSecret(body)) return { lane: 'real-secret' }
+  if (isSpaShellBody(body, mainHtml)) return { lane: 'spa-shell' }
+
+  const fam = controlFamilyForPath(path)
+  const matchedControl = controls.find((c) => c.family === fam && sameFallbackShape(fingerprint, c))
+  if (matchedControl) {
+    return { lane: 'generic-fallback', reason: `matches guaranteed-404 ${fam} control` }
+  }
+  if (args.clustered) {
+    return { lane: 'generic-fallback', reason: 'same template returned across multiple probed paths' }
+  }
+  // Content-type plausibility: a raw-secret file (.env*, .aws/credentials,
+  // .git/*, *.sql, config.json …) served as HTML with no secret is a rendered
+  // page, not the file. (text/plain / octet-stream / empty stay plausible.)
+  if (isSensitive && fingerprint.contentTypeFamily === 'html') {
+    return { lane: 'rendered-page' }
+  }
+  if (args.catchAll) return { lane: 'catch-all' }
+  if (isSensitive && configuredSeverity === 'critical') return { lane: 'exposed-needs-review' }
+  return { lane: 'exposed' }
+}
 
 const HEADER_REQS: {
   name: string
@@ -2631,26 +2948,65 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
   const pathsToProbe = expandedProbing
     ? [...PATHS_TO_PROBE, ...EXTENDED_PATHS_TO_PROBE]
     : PATHS_TO_PROBE
-  // CATCH-ALL / SOFT-404 DETECTION (2026-06-07 v5.3) — the fix for "Apple got
-  // 46". When a site (or its WAF/CDN, e.g. Akamai soft-blocking a datacenter IP)
-  // returns HTTP 200 for EVERY path instead of a real 404, the path prober reads
-  // ~31 non-existent files as "exposed" and the `paths` category maxes its
-  // penalty cap → a false F. We probe a guaranteed-nonexistent canary first; if
-  // it 200s (and isn't just the SPA shell, which is handled per-finding), the
-  // server is a catch-all and we DON'T trust any 200 as an exposure — only a
-  // body that actually contains a real secret still counts.
-  let catchAll = false
-  try {
-    const canaryUrl = new URL('/vguard-nonexistent-canary-9q7z2x.txt', finalUrl).toString()
-    const canaryResp = await fetchWithTimeout(canaryUrl, { method: 'GET' }, PROBE_TIMEOUT_MS)
-    if (canaryResp.status === 200) {
-      const canaryBody = (await canaryResp.text()).slice(0, 8192)
-      if (canaryBody.length >= 8 && !isSpaShellBody(canaryBody, html)) catchAll = true
-    }
-  } catch {
-    // canary fetch failed → assume normal (not catch-all)
-  }
-  let suppressedByCatchAll = 0
+  // SHAPE-AWARE SOFT-404 / FALLBACK SUPPRESSION (2026-06-25, supersedes the
+  // single-canary v5.3 catch-all). Many large sites/CDNs/WAFs return HTTP 200
+  // with a branded landing/error/denial page for nonexistent paths — and the
+  // fallback can be SHAPE-DEPENDENT (a `.txt` at root 404s, but any dotfile gets
+  // a 200 template — PayPal does exactly this). A single root `.txt` canary
+  // misses that. So we fetch a small set of guaranteed-nonexistent CONTROL paths
+  // in DIFFERENT shapes (dotfile / sql / json / plain) and only count a probe
+  // 200 as an exposure when it is DISTINGUISHABLE from the same-shape control
+  // AND content-type-plausible for the file kind. Real-secret evidence ALWAYS
+  // wins — a true .env leak is never suppressed. No brand/CDN allowlists.
+  const controlRand = shortHash(finalUrl + pathsToProbe.length).slice(0, 8)
+  const controlSpecs: { family: ControlFamily; path: string }[] = [
+    { family: 'plain', path: `/vguards_control_404_${controlRand}.txt` },
+    { family: 'dotfile', path: `/.vguards_control_${controlRand}` },
+    { family: 'sql', path: `/vguards_control_${controlRand}.sql` },
+    { family: 'json', path: `/vguards_control_${controlRand}.json` },
+  ]
+  const controls: PathControl[] = await Promise.all(
+    controlSpecs.map(async (spec): Promise<PathControl> => {
+      try {
+        const r = await fetchWithTimeout(
+          new URL(spec.path, finalUrl).toString(),
+          { method: 'GET' },
+          PROBE_TIMEOUT_MS,
+        )
+        const body = (await r.text()).slice(0, 8192)
+        const fp = buildPathFingerprint(body, r.headers.get('content-type'))
+        return {
+          ...fp,
+          family: spec.family,
+          status: r.status,
+          // A control is a usable "fallback template" only if it returned a real
+          // non-empty 200 that is NOT the SPA shell (the shell is handled per
+          // probe). A 404/empty control means the origin distinguishes
+          // nonexistent paths of this shape → no suppression for this family.
+          active: r.status === 200 && body.length >= 8 && !isSpaShellBody(body, html),
+        }
+      } catch {
+        return {
+          bodyLen: 0,
+          bodyHash: '',
+          headHash: '',
+          contentTypeFamily: 'none',
+          isHtml: false,
+          title: '',
+          family: spec.family,
+          status: null,
+          active: false,
+        }
+      }
+    }),
+  )
+  // Legacy catch-all flag preserved for the meta note: the plain `.txt` control
+  // returning a real 200 means the origin 200s for everything plain-shaped.
+  const catchAll = controls.find((c) => c.family === 'plain')?.active ?? false
+
+  // TEMP DEBUG (opt-in via VGUARD_DEBUG_PATHS=1) — logs per-path + control-path
+  // evidence for the path-exposure false-positive audit. No-op in production.
+  await debugProbeSensitivePaths(finalUrl, pathsToProbe, html)
 
   const probeResults = await Promise.allSettled(
     pathsToProbe.map(async (probe) => {
@@ -2658,16 +3014,65 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
       const r = await fetchWithTimeout(probeUrl, { method: 'GET' }, PROBE_TIMEOUT_MS)
       if (!r.ok) return null
       const body = (await r.text()).slice(0, 8192)
-      return { probe, status: r.status, statusText: r.statusText, probeUrl, body }
+      return {
+        probe,
+        status: r.status,
+        statusText: r.statusText,
+        probeUrl,
+        body,
+        contentType: r.headers.get('content-type'),
+        fingerprint: buildPathFingerprint(body, r.headers.get('content-type')),
+      }
     }),
   )
-  for (const res of probeResults) {
-    if (res.status !== 'fulfilled' || !res.value) continue
-    const { probe, status, statusText, probeUrl, body } = res.value
-    const idBase = `path-${probe.path.replaceAll('/', '-').replaceAll('.', '-')}`
+  // Cross-probe identity clamp — a template returned by ≥2 distinct probed paths
+  // (same exact body, OR same content-type-family + template head) is a generic
+  // fallback, not N real files. Compute shared exact-hash + shared shape-key over
+  // all non-empty, non-secret, non-shell 200s, then mark clustered probes.
+  const probeRows = probeResults
+    .map((r) => (r.status === 'fulfilled' ? r.value : null))
+    .filter((v): v is NonNullable<typeof v> => v != null)
+  const hashCount = new Map<string, number>()
+  const shapeCount = new Map<string, number>()
+  const clusterEligible = (row: (typeof probeRows)[number]): boolean =>
+    row.body.length >= 8 &&
+    !isSpaShellBody(row.body, html) &&
+    !(sensitivePathIds.has(row.probe.path) && evidenceContainsRealSecret(row.body))
+  for (const row of probeRows) {
+    if (!clusterEligible(row)) continue
+    const h = row.fingerprint.bodyHash
+    const sk = `${row.fingerprint.contentTypeFamily}|${row.fingerprint.headHash}`
+    if (h) hashCount.set(h, (hashCount.get(h) ?? 0) + 1)
+    if (row.fingerprint.headHash) shapeCount.set(sk, (shapeCount.get(sk) ?? 0) + 1)
+  }
+  const isClustered = (row: (typeof probeRows)[number]): boolean => {
+    if (!clusterEligible(row)) return false
+    const h = row.fingerprint.bodyHash
+    const sk = `${row.fingerprint.contentTypeFamily}|${row.fingerprint.headHash}`
+    return (!!h && (hashCount.get(h) ?? 0) >= 2) || (shapeCount.get(sk) ?? 0) >= 2
+  }
 
-    // (2) Empty or tiny body.
-    if (body.length < 8) {
+  let suppressedByCatchAll = 0
+  let suppressedByFallback = 0
+  for (const row of probeRows) {
+    const { probe, status, statusText, probeUrl, body, contentType, fingerprint } = row
+    const idBase = `path-${probe.path.replaceAll('/', '-').replaceAll('.', '-')}`
+    const isSensitivePath = sensitivePathIds.has(probe.path)
+
+    const { lane } = classifyPathProbe({
+      path: probe.path,
+      isSensitive: isSensitivePath,
+      configuredSeverity: probe.severity,
+      body,
+      contentType,
+      mainHtml: html,
+      fingerprint,
+      controls,
+      clustered: isClustered(row),
+      catchAll,
+    })
+
+    if (lane === 'empty') {
       findings.push({
         id: `${idBase}-empty-200`,
         severity: 'info',
@@ -2679,22 +3084,7 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
       })
       continue
     }
-    // (3) SPA shell suppression.
-    if (isSpaShellBody(body, html)) {
-      findings.push({
-        id: `${idBase}-spa-shell-200`,
-        severity: 'info',
-        category: 'paths',
-        title: `${probe.label} returned the SPA shell`,
-        description: `${probe.path} responds 200 but the body is the SPA's index.html. Not an exposure — the SPA's router will surface its own 404 client-side.`,
-        evidence: `GET ${probeUrl} → 200 (SPA shell, ${body.length} bytes)`,
-        fixPrompt: `Optional: add a server-side rewrite that returns 404 for /\\.env*, /\\.git/*, /backup.*, /\\.aws/* so probes don't even reach the SPA fallback.`,
-      })
-      continue
-    }
-    // (4) Real-secret match → keep configured critical severity, redact.
-    const isSensitivePath = sensitivePathIds.has(probe.path)
-    if (isSensitivePath && evidenceContainsRealSecret(body)) {
+    if (lane === 'real-secret') {
       // Redact: first 8 + last 4 chars of the longest credential-shaped line.
       const lines = body.split(/\r?\n/).filter((l) => l.length >= 12 && l.length <= 240)
       const sample = lines.find((l) => evidenceContainsRealSecret(l)) || lines[0] || ''
@@ -2714,31 +3104,74 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
       })
       continue
     }
-    // (4.5) Catch-all server: a 200 here is the soft-404 / WAF page, not a real
-    // exposure (step 4 already kept any body that contained a real secret). Drop
-    // it so we don't manufacture dozens of false "exposed path" findings.
-    if (catchAll) {
+    if (lane === 'spa-shell') {
+      findings.push({
+        id: `${idBase}-spa-shell-200`,
+        severity: 'info',
+        category: 'paths',
+        title: `${probe.label} returned the SPA shell`,
+        description: `${probe.path} responds 200 but the body is the SPA's index.html. Not an exposure — the SPA's router will surface its own 404 client-side.`,
+        evidence: `GET ${probeUrl} → 200 (SPA shell, ${body.length} bytes)`,
+        fixPrompt: `Optional: add a server-side rewrite that returns 404 for /\\.env*, /\\.git/*, /backup.*, /\\.aws/* so probes don't even reach the SPA fallback.`,
+      })
+      continue
+    }
+    // Generic fallback / soft-404 / denial / branded-error page → suppress. The
+    // body looked just like a guaranteed-nonexistent control of the same shape
+    // (or the same template came back for several probed paths). NOT an exposure.
+    if (lane === 'generic-fallback') {
+      suppressedByFallback++
+      continue
+    }
+    // Sensitive raw-file path served as HTML with no secret → a rendered page,
+    // not the raw file. Downgrade to info instead of a golden-kind warning.
+    if (lane === 'rendered-page') {
+      findings.push({
+        id: `${idBase}-rendered-page`,
+        severity: 'info',
+        category: 'paths',
+        title: `${probe.label} returns an HTML page, not the raw file`,
+        description: `${probe.path} responds ${status} with an HTML page (content-type ${fingerprint.contentTypeFamily}) and no secret content. A real ${probe.path} would be served as text/plain or a download, not rendered HTML — this is almost certainly a routing fallback / error page, not the exposed file. Confirm with curl if unsure.`,
+        evidence: `GET ${probeUrl} → ${status} ${statusText} (${fingerprint.contentTypeFamily}, ${body.length} bytes)`,
+        fixPrompt: `If ${probe.path} should 404, add a rewrite returning 404 for it. If it genuinely serves a file, confirm with: curl -i ${probeUrl} | head`,
+      })
+      continue
+    }
+    // Legacy plain catch-all (the plain `.txt` control 200s for everything).
+    if (lane === 'catch-all') {
       suppressedByCatchAll++
       continue
     }
-    // (5) Non-shell body, no sensitive pattern: downgrade `critical` to `warn`.
+    // Reachable. `critical`-configured sensitive paths → `warn` "needs review";
+    // others keep their configured severity.
     const finalSeverity: Severity = probe.severity === 'critical' ? 'warn' : probe.severity
     findings.push({
-      id: probe.severity === 'critical'
+      id: lane === 'exposed-needs-review'
         ? `path-${probe.path.replaceAll('/', '-').replaceAll('.', '-')}-exposed-needs-review`
         : `path-${probe.path.replaceAll('/', '-').replaceAll('.', '-')}`,
       severity: finalSeverity,
       category: 'paths',
       title: `${probe.label} is reachable at ${probe.path}`,
-      description: `${probe.path} responds with ${status}. ${probe.severity === 'critical' ? 'Body is not the SPA shell but no real secret patterns matched — needs manual review to confirm exposure.' : 'Files like this should never be public.'}`,
-      evidence: `GET ${probeUrl} → ${status} ${statusText} (${body.length} bytes)`,
+      description: `${probe.path} responds with ${status}. ${probe.severity === 'critical' ? 'Body is not the SPA shell, is content-type-plausible for the raw file, and does not match a guaranteed-nonexistent control — but no real secret patterns matched, so it needs manual review to confirm exposure.' : 'Files like this should never be public.'}`,
+      evidence: `GET ${probeUrl} → ${status} ${statusText} (${fingerprint.contentTypeFamily}, ${body.length} bytes)`,
       fixPrompt: `Make sure ${probe.path} is not being deployed. Confirm .gitignore excludes it and your deploy output (public/, dist/, .next/, etc.) does not contain it. Add a rewrite rule that returns 404 for ${probe.path} and similar paths (/.env*, /.git/*, /.DS_Store, *.bak, *.swp, *~). On Vercel put this in vercel.json under "redirects". Redeploy and verify with: curl -I ${probeUrl}`,
     })
   }
 
-  // One honest informational note when catch-all suppression kicked in, so the
-  // report explains why path probing was inconclusive instead of silently
-  // dropping it (or inventing exposures).
+  // One honest, ZERO-PENALTY meta note when shape-aware fallback suppression
+  // kicked in (category 'meta' = recon = no score impact, per the V6 engine).
+  if (suppressedByFallback > 0) {
+    findings.push({
+      id: 'paths-generic-fallback-200',
+      severity: 'info',
+      category: 'meta',
+      title: 'Sensitive-looking paths returned a generic fallback page — not counted as exposed',
+      description: `${suppressedByFallback} sensitive-looking path(s) returned a 200 page that is indistinguishable from a guaranteed-nonexistent control of the same shape (or the same template was returned for several paths) — i.e. a soft-404 / denial / branded-error / WAF page, not the actual file. These were NOT counted as exposed files and carry no score penalty. Only paths whose body contained an actual secret were kept. For reliable path-exposure testing, run a Stage 2 browser-assisted scan from your own origin.`,
+      evidence: `${suppressedByFallback} path(s) matched a same-shape soft-404 control`,
+      fixPrompt: '',
+    })
+  }
+  // Legacy catch-all note — kept for the plain-200-for-everything case.
   if (catchAll && suppressedByCatchAll > 0) {
     findings.push({
       id: 'paths-catch-all-200',
@@ -2746,7 +3179,7 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
       category: 'meta',
       title: 'Server returns 200 for unknown paths — path probing inconclusive',
       description: `This origin (or its CDN/WAF) responded 200 to a guaranteed-nonexistent path, so it returns 200 for everything rather than a real 404. ${suppressedByCatchAll} path probe(s) were suppressed to avoid false "exposed file" findings. Only paths whose body contained an actual secret were kept. For reliable path-exposure testing, run a Stage 2 browser-assisted scan from your own origin.`,
-      evidence: `GET /vguard-nonexistent-canary-9q7z2x.txt → 200 (catch-all / soft-404)`,
+      evidence: `GET /vguards_control_404_${controlRand}.txt → 200 (catch-all / soft-404)`,
       fixPrompt: '',
     })
   }
