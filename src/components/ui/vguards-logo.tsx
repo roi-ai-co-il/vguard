@@ -1,4 +1,5 @@
 import markUrl from '@/assets/vguards-mark.svg'
+import markLightUrl from '@/assets/vguards-mark-light.svg'
 import { cn } from '@/lib/utils'
 
 interface VGuardsLogoProps {
@@ -38,8 +39,10 @@ export function VGuardsLogo({ size = 18, className, ariaHidden = true }: VGuards
 export function MascotScanMark({ size, className }: { size: number; className?: string }) {
   return (
     <div className={cn('vg-mascot-scan', className)} style={{ width: size, height: size }} aria-hidden="true">
-      <img src={markUrl} alt="" draggable={false} className="vg-mascot-scan__base" />
-      <img src={markUrl} alt="" draggable={false} className="vg-mascot-scan__beam" />
+      {/* light-background variant: inner shield fill is white, not the dark
+          rgb(9,9,11), so the watermark has no black box on the white theme */}
+      <img src={markLightUrl} alt="" draggable={false} className="vg-mascot-scan__base" />
+      <img src={markLightUrl} alt="" draggable={false} className="vg-mascot-scan__beam" />
     </div>
   )
 }

@@ -1,13 +1,21 @@
 import { motion, useReducedMotion } from 'framer-motion'
 import { cn } from '@/lib/utils'
-import type { Grade } from '@/lib/scanner-types'
+import type { Grade, ScoreTier } from '@/lib/scanner-types'
 
 export type AggregateBand = 'low' | 'medium' | 'high' | 'severe'
 
+const TIER_LABELS: Record<ScoreTier, string> = {
+  excellent: 'Excellent security',
+  outstanding: 'Outstanding security',
+  exceptional: 'Exceptional security',
+}
+
 export interface VibeScoreGaugeProps {
   score: number
-  /** Letter grade (A+ … F) shown as a chip next to the band label. */
+  /** Letter grade (A … F) shown as a chip next to the band label. */
   grade?: Grade
+  /** V6 A-band qualifier — when present, replaces the generic band label. */
+  tier?: ScoreTier
   /**
    * Authoritative band from the scoring engine. When provided, the gauge
    * color + label come from the band — NOT from the score number. This is
@@ -33,36 +41,37 @@ function severityForScore(score: number) {
   return { color: 'var(--color-ok)', label: 'Healthy' }
 }
 
-export function VibeScoreGauge({ score, grade, band, className, size = 220 }: VibeScoreGaugeProps) {
+/**
+ * Clean single-hue score ring. The arc is ONE color — the one that matches the
+ * actual result band — so a perfect 100 reads as fully green, not a rainbow
+ * that still shows red/orange. No tick marks, no 0/25/50/75/100 labels, no
+ * blurred indicator dot: the number is the message, the ring is just its frame.
+ */
+export function VibeScoreGauge({ score, grade, tier, band, className, size = 220 }: VibeScoreGaugeProps) {
   const reduceMotion = useReducedMotion() ?? false
   const clamped = Math.max(0, Math.min(100, Math.round(score)))
   const severity = band ? severityForBand(band) : severityForScore(clamped)
+  const statusLabel = tier ? TIER_LABELS[tier] : severity.label
 
-  const stroke = 14
-  const r = (size - stroke) / 2
+  const stroke = Math.round(size * 0.07)
+  const r = (size - stroke) / 2 - 2
   const cx = size / 2
   const cy = size / 2
   const circumference = 2 * Math.PI * r
-  const arcSweep = 0.75
+  const arcSweep = 0.75 // 270° open-bottom ring
   const visible = circumference * arcSweep
   const fillFraction = clamped / 100
   const targetOffset = visible * (1 - fillFraction)
 
-  const startAngleDeg = 135
-  const endAngleDeg = startAngleDeg + 270 * fillFraction
-  const indicatorRad = (endAngleDeg * Math.PI) / 180
-  const ix = cx + r * Math.cos(indicatorRad)
-  const iy = cy + r * Math.sin(indicatorRad)
-
-  const ticks = [0, 25, 50, 75, 100]
-  const tickAngles = ticks.map((t) => 135 + 270 * (t / 100))
+  // Same-hue depth: a lighter tint of the band color into the band color.
+  const tint = `color-mix(in oklab, ${severity.color} 50%, white)`
 
   return (
     <div
       className={cn('relative inline-flex flex-col items-center justify-center', className)}
       role="img"
-      aria-label={`Vibe Score ${clamped} out of 100, ${severity.label}`}
-      style={{ width: size, height: size + 28 }}
+      aria-label={`Vibe Score ${clamped} out of 100, ${statusLabel}`}
+      style={{ width: size, height: size }}
     >
       <svg
         width={size}
@@ -72,46 +81,13 @@ export function VibeScoreGauge({ score, grade, band, className, size = 220 }: Vi
         aria-hidden="true"
       >
         <defs>
-          <linearGradient id="vibe-gauge-grad" x1="0%" y1="100%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="var(--color-danger)" />
-            <stop offset="40%" stopColor="var(--color-warning)" />
-            <stop offset="75%" stopColor="#eab308" />
-            <stop offset="100%" stopColor="var(--color-ok)" />
+          <linearGradient id="vibe-gauge-arc" x1="0%" y1="100%" x2="100%" y2="0%">
+            <stop offset="0%" style={{ stopColor: tint }} />
+            <stop offset="100%" style={{ stopColor: severity.color }} />
           </linearGradient>
-          <radialGradient id="vibe-gauge-glow" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor={severity.color} stopOpacity="0.22" />
-            <stop offset="70%" stopColor={severity.color} stopOpacity="0.05" />
-            <stop offset="100%" stopColor={severity.color} stopOpacity="0" />
-          </radialGradient>
-          <filter id="vibe-gauge-blur" x="-50%" y="-50%" width="200%" height="200%">
-            <feGaussianBlur stdDeviation="3" />
-          </filter>
         </defs>
 
-        <circle cx={cx} cy={cy} r={r * 0.92} fill="url(#vibe-gauge-glow)" />
-
-        {tickAngles.map((deg, i) => {
-          const rad = (deg * Math.PI) / 180
-          const inner = r - 4
-          const outer = r + 6
-          const x1 = cx + inner * Math.cos(rad)
-          const y1 = cy + inner * Math.sin(rad)
-          const x2 = cx + outer * Math.cos(rad)
-          const y2 = cy + outer * Math.sin(rad)
-          return (
-            <line
-              key={i}
-              x1={x1}
-              y1={y1}
-              x2={x2}
-              y2={y2}
-              stroke="var(--color-border-strong)"
-              strokeWidth={1.5}
-              strokeLinecap="round"
-            />
-          )
-        })}
-
+        {/* track — subtle, shows the ring is "out of" a full circle */}
         <circle
           cx={cx}
           cy={cy}
@@ -124,110 +100,54 @@ export function VibeScoreGauge({ score, grade, band, className, size = 220 }: Vi
           transform={`rotate(135 ${cx} ${cy})`}
         />
 
+        {/* progress — single hue, fills to the score */}
         <motion.circle
           cx={cx}
           cy={cy}
           r={r}
           fill="none"
-          stroke="url(#vibe-gauge-grad)"
+          stroke="url(#vibe-gauge-arc)"
           strokeWidth={stroke}
           strokeLinecap="round"
           strokeDasharray={`${visible} ${circumference}`}
           initial={{ strokeDashoffset: visible }}
           animate={{ strokeDashoffset: targetOffset }}
           transition={{
-            duration: reduceMotion ? 0 : 1.4,
+            duration: reduceMotion ? 0 : 1.3,
             ease: [0.16, 1, 0.3, 1],
             delay: 0.2,
           }}
           transform={`rotate(135 ${cx} ${cy})`}
-          style={{ filter: `drop-shadow(0 0 12px ${severity.color}66)` }}
         />
-
-        <motion.circle
-          cx={ix}
-          cy={iy}
-          r={10}
-          fill={severity.color}
-          opacity={0.18}
-          filter="url(#vibe-gauge-blur)"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 0.18 }}
-          transition={{ delay: reduceMotion ? 0 : 1.4, duration: 0.4 }}
-        />
-        <motion.circle
-          cx={ix}
-          cy={iy}
-          r={5}
-          fill={severity.color}
-          stroke="var(--color-bg)"
-          strokeWidth={2}
-          initial={{ scale: 0, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          transition={{ delay: reduceMotion ? 0 : 1.4, duration: 0.35, ease: 'backOut' }}
-          style={{ transformOrigin: `${ix}px ${iy}px` }}
-        />
-
-        {ticks.map((t, i) => {
-          const deg = tickAngles[i]
-          const rad = (deg * Math.PI) / 180
-          const labelR = r + 22
-          const lx = cx + labelR * Math.cos(rad)
-          const ly = cy + labelR * Math.sin(rad)
-          return (
-            <text
-              key={t}
-              x={lx}
-              y={ly}
-              textAnchor="middle"
-              dominantBaseline="middle"
-              className="font-mono"
-              fontSize={10}
-              fill="var(--color-fg-dim)"
-              letterSpacing={1}
-            >
-              {t}
-            </text>
-          )
-        })}
       </svg>
 
       <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
         <motion.div
-          initial={{ opacity: 0, y: 6 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: reduceMotion ? 0 : 0.6, duration: 0.4 }}
-          className="font-mono text-[10px] tracking-[0.2em] uppercase text-(--color-fg-dim) mb-1"
-        >
-          Vibe Score
-        </motion.div>
-        <motion.div
-          initial={{ opacity: 0, scale: 0.9 }}
+          initial={{ opacity: 0, scale: 0.92 }}
           animate={{ opacity: 1, scale: 1 }}
-          transition={{ delay: reduceMotion ? 0 : 0.7, duration: 0.5, ease: 'backOut' }}
-          className="font-bold tabular-nums tracking-tight leading-none"
-          style={{ color: severity.color, fontSize: size * 0.32 }}
+          transition={{ delay: reduceMotion ? 0 : 0.5, duration: 0.5, ease: 'backOut' }}
+          className="flex items-baseline font-bold tabular-nums tracking-tight leading-none"
+          style={{ color: severity.color, fontSize: size * 0.34 }}
         >
           {clamped}
           <span
-            className="ml-1 align-top text-(--color-fg-dim) font-mono font-medium"
-            style={{ fontSize: size * 0.1 }}
+            className="ml-0.5 text-(--color-fg-dim) font-mono font-medium"
+            style={{ fontSize: size * 0.095 }}
           >
             /100
           </span>
         </motion.div>
-        {/* Grade + status as one cohesive pill with its own surface — reads
-            cleanly and never looks like it's sitting on the gauge arc. */}
+
+        {/* grade + plain-language verdict, as one clear pill */}
         <motion.div
-          initial={{ opacity: 0, scale: 0.92 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ delay: reduceMotion ? 0 : 1.2, duration: 0.4, ease: 'backOut' }}
-          className="mt-2 inline-flex items-center gap-2 rounded-full pl-1.5 pr-3 py-1"
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: reduceMotion ? 0 : 0.85, duration: 0.4, ease: 'backOut' }}
+          className="mt-2.5 inline-flex items-center gap-1.5 rounded-full pl-1 pr-2.5 py-1"
           style={{
             color: severity.color,
-            background: `color-mix(in oklab, ${severity.color} 14%, var(--color-bg))`,
-            border: `1px solid color-mix(in oklab, ${severity.color} 32%, transparent)`,
-            boxShadow: `0 2px 12px -6px ${severity.color}`,
+            background: `color-mix(in oklab, ${severity.color} 13%, var(--color-bg))`,
+            border: `1px solid color-mix(in oklab, ${severity.color} 30%, transparent)`,
           }}
         >
           {grade && (
@@ -236,17 +156,15 @@ export function VibeScoreGauge({ score, grade, band, className, size = 220 }: Vi
               style={{
                 background: severity.color,
                 color: 'var(--color-bg)',
-                width: 20,
-                height: 20,
-                fontSize: 12,
+                width: 18,
+                height: 18,
+                fontSize: 11,
               }}
             >
               {grade}
             </span>
           )}
-          <span className="font-mono text-[10px] tracking-widest uppercase font-medium">
-            {severity.label}
-          </span>
+          <span className="text-[11px] font-semibold tracking-tight">{statusLabel}</span>
         </motion.div>
       </div>
     </div>

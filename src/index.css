@@ -16,6 +16,11 @@
   --color-accent-strong: #06b6d4;
   --color-accent-muted: rgba(34, 211, 238, 0.12);
   --color-accent-border: rgba(34, 211, 238, 0.45);
+  /* CTA — the glowing DNA cyan, identical in light + dark so the Scan button
+     always carries the brand glow (bright cyan fill + dark text on top). */
+  --color-cta: #22d3ee;
+  --color-cta-strong: #06b6d4;
+  --color-cta-fg: #04141a;
   --color-danger: #ff6b6b;
   --color-danger-muted: rgba(255, 107, 107, 0.12);
   --color-warning: #ffb84d;
@@ -43,6 +48,41 @@
   --color-destructive-foreground: var(--color-fg);
   --color-input: var(--color-border);
   --color-ring: var(--color-accent);
+}
+
+/* ── PREVIEW: light / white-background theme ──────────────────────────────
+   Non-destructive override. Activated by data-vg-theme="light" on <html>
+   (set in index.html for the localhost preview). Remove the attribute to
+   return to the canonical dark theme — no token below touches the @theme block. */
+html[data-vg-theme="light"] {
+  --color-bg: #ffffff;
+  --color-surface: #f7f7f9;
+  --color-surface-elevated: #ffffff;
+  --color-border: #e6e6ec;
+  --color-border-strong: #d4d4dc;
+  --color-fg: #0d0d12;
+  --color-fg-muted: #45454f;
+  --color-fg-dim: #70707c;
+  /* Brighter, more saturated cyan on white so accents read as our DNA glow —
+     not a muted steel-blue. Borders/tints use the literal DNA cyan rgba. */
+  --color-accent: #06b6d4;
+  --color-accent-strong: #0891b2;
+  --color-accent-muted: rgba(34, 211, 238, 0.14);
+  --color-accent-border: rgba(34, 211, 238, 0.55);
+  --color-primary-foreground: #ffffff;
+}
+/* On a light bg the ambient dot-grid must be dark, not white */
+html[data-vg-theme="light"] .bg-grid {
+  background-image:
+    radial-gradient(circle at 1px 1px, rgba(0, 0, 0, 0.05) 1px, transparent 0);
+}
+/* Light theme: keep the hero clean white — no blue wash, no cyan haze.
+   White reads as the more professional, trustworthy surface for the product. */
+html[data-vg-theme="light"] .hero-glow {
+  background: none;
+}
+html[data-vg-theme="light"] .smoke-field {
+  display: none;
 }
 
 html, body {

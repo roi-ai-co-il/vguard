@@ -134,22 +134,41 @@ describe('verified impact opens Critical', () => {
     assert.ok(out.vibeScore < 75)
   })
 
-  it('Confirmed reflected XSS IS critical', () => {
+  it('V6: reflected canary is POSSIBLE XSS — not verified, does not tank', () => {
+    // Spec: reflected input is NOT verified XSS; browser execution is required.
     const out = applyEngine(
       [f({ id: 'paths-xss-reflected', severity: 'critical', category: 'paths',
            evidence: 'param=q reflected vsxsscanary7q3 unencoded' })],
       baseCtx,
     )
-    assert.equal(out.findings[0].riskClass, 'critical-exploit')
+    assert.equal(out.findings[0].riskClass, 'high-impact-misconfig')
+    assert.equal(out.findings[0].confidence, 'possible')
+    assert.equal(out.hasVerifiedImpact, false)
+    assert.ok(out.vibeScore >= 80, `possible XSS alone must not tank, got ${out.vibeScore}`)
   })
 
-  it('Confirmed SQLi error IS critical', () => {
+  it('V6: browser-executed XSS (Stage 3 aggressive probe) IS verified critical', () => {
+    const out = applyEngine(
+      [f({ id: 'paths-aggressive-xss', severity: 'critical', category: 'paths',
+           evidence: 'payload executed in headless browser' })],
+      defaultContext({ pathname: '/', isHttps: true, stage: 3 }),
+    )
+    assert.equal(out.findings[0].riskClass, 'critical-exploit')
+    assert.equal(out.hasVerifiedImpact, true)
+    assert.ok(out.vibeScore < 50, `verified XSS is a golden finding, got ${out.vibeScore}`)
+  })
+
+  it('V6: SQL error signature is LIKELY SQLi — D territory, not auto-F', () => {
+    // Spec: suspected SQLi is NOT verified SQLi (exploitation evidence required).
     const out = applyEngine(
       [f({ id: 'paths-sqli', severity: 'critical', category: 'paths',
            evidence: "param=id triggered: ERROR: syntax error at or near \"'\"" })],
       baseCtx,
     )
-    assert.equal(out.findings[0].riskClass, 'critical-exploit')
+    assert.equal(out.findings[0].riskClass, 'high-impact-misconfig')
+    assert.equal(out.findings[0].confidence, 'likely')
+    assert.ok(out.vibeScore <= 65, `likely SQLi must dent hard, got ${out.vibeScore}`)
+    assert.ok(out.vibeScore >= 50, `but unverified ≠ F, got ${out.vibeScore}`)
   })
 
   it('Stage 3 confirmed RLS broken IS critical', () => {
@@ -279,19 +298,33 @@ describe('enterprise regression — apple.com / amazon.com profile must NOT scor
     assert.equal(out.aggregateBand, 'low')
   })
 
-  it('amazon.com-like + ONE confirmed exploit → Critical surfaces, score drops below floor', () => {
+  it('amazon.com-like + ONE verified .env exposure → Critical surfaces, score drops below floor', () => {
     const findings: Finding[] = [
       f({ id: 'headers-csp-missing', severity: 'warn', category: 'headers' }),
       f({ id: 'cookies-no-secure', severity: 'warn', category: 'cookies' }),
       f({ id: 'paths-api-public-2xx', severity: 'warn', category: 'paths' }),
+      f({ id: 'paths-env', severity: 'critical', category: 'paths',
+          evidence: 'DB_PASSWORD=super-secret\nSTRIPE_SECRET_KEY=sk_live_xxx' }),
+    ]
+    const out = applyEngine(findings, baseCtx)
+    const criticalCount = out.findings.filter((x) => x.riskClass === 'critical-exploit').length
+    assert.ok(criticalCount >= 1, 'expected at least 1 critical-exploit on verified .env')
+    assert.equal(out.hasVerifiedImpact, true)
+    assert.ok(out.vibeScore < 50, `score should reflect real exploit, got ${out.vibeScore}`)
+  })
+
+  it('amazon.com-like + Possible XSS (reflected canary) → dents but stays out of F', () => {
+    const findings: Finding[] = [
+      f({ id: 'headers-csp-missing', severity: 'warn', category: 'headers' }),
+      f({ id: 'cookies-no-secure', severity: 'warn', category: 'cookies' }),
       f({ id: 'paths-xss-reflected', severity: 'critical', category: 'paths',
           evidence: 'param=q reflected canary unencoded' }),
     ]
     const out = applyEngine(findings, baseCtx)
-    const criticalCount = out.findings.filter((x) => x.riskClass === 'critical-exploit').length
-    assert.ok(criticalCount >= 1, 'expected at least 1 critical-exploit on confirmed XSS')
-    assert.equal(out.hasVerifiedImpact, true)
-    assert.ok(out.vibeScore < 75, `score should reflect real exploit, got ${out.vibeScore}`)
+    assert.equal(out.hasVerifiedImpact, false)
+    const xss = out.findings.find((x) => x.id === 'paths-xss-reflected')
+    assert.equal(xss!.uiGroup, 'likely-risks')
+    assert.ok(out.vibeScore <= 99 && out.vibeScore >= 85, `possible XSS dents without tanking, got ${out.vibeScore}`)
   })
 })
 
@@ -303,8 +336,8 @@ describe('UI grouping', () => {
   it('confirmed-vulnerabilities only includes verifiedImpact findings', () => {
     const out = applyEngine(
       [
-        f({ id: 'paths-xss-reflected', severity: 'critical', category: 'paths',
-           evidence: 'reflected canary' }),
+        f({ id: 'paths-env', severity: 'critical', category: 'paths',
+           evidence: 'DB_PASSWORD=super-secret' }),
         f({ id: 'headers-csp-weak-script-src', severity: 'critical', category: 'headers' }),
         f({ id: 'headers-cross-origin-opener-policy', severity: 'info', category: 'headers' }),
       ],
@@ -367,10 +400,13 @@ describe('final-spec regressions — calm for noise, strict for real risk, hones
     assert.equal(out.hasVerifiedImpact, false)
   })
 
-  it('SCENARIO 3a — weak posture, no exploit: hardening + auth cookies + swagger → 55-78, not Healthy', () => {
-    // Per spec: missing HSTS/CSP/XFO + insecure AUTH cookies + exposed swagger.
-    // No verified exploit. Score should land in 55-78 — neither alarming
-    // (no Critical) nor falsely Healthy.
+  it('SCENARIO 3a — hardening + cookie flags + swagger, NO verified exploit → stays high (v5.5 philosophy)', () => {
+    // v5.5 (Royi's direction): missing HSTS/CSP/XFO + cookies missing flags +
+    // exposed swagger are all DEFENSE-IN-DEPTH. With no verified exploit, this
+    // must NOT be dragged down — cookie/header hygiene doesn't cap the grade.
+    // (Earlier v4 spec wanted 55-78 here; the product philosophy changed: only
+    // verified impact lowers the band. This is what stopped Apple/Palo Alto from
+    // being graded C for cookie hygiene.)
     const findings: Finding[] = [
       f({ id: 'headers-no-hsts', severity: 'warn', category: 'headers' }),
       f({ id: 'headers-csp-missing', severity: 'warn', category: 'headers' }),
@@ -389,9 +425,10 @@ describe('final-spec regressions — calm for noise, strict for real risk, hones
     ]
     const out = applyEngine(findings, baseCtx)
     const criticalCount = out.findings.filter((x) => x.riskClass === 'critical-exploit').length
-    assert.equal(criticalCount, 0, `weak posture without exploit shouldn't show Critical, got ${criticalCount}`)
-    assert.ok(out.vibeScore < 85, `expected weak posture < 85, got ${out.vibeScore}`)
-    assert.ok(out.vibeScore >= 50, `weak posture shouldn't crash below 50 without exploit, got ${out.vibeScore}`)
+    assert.equal(criticalCount, 0, `hardening-only shouldn't show Critical, got ${criticalCount}`)
+    assert.ok(out.vibeScore >= 85, `hardening/cookie hygiene must not cap the grade, got ${out.vibeScore}`)
+    assert.ok(out.findings.every((x) => x.riskClass === 'low-hardening' || x.riskClass === 'informational'),
+      'all of these are defense-in-depth')
   })
 
   it('SCENARIO 3b — weak site WITH confirmed CVE + dangerous CORS: Critical surfaces, score < 65', () => {
@@ -555,21 +592,24 @@ describe('scoring-policy overhaul — 20 scenarios', () => {
     assert.ok(out.vibeScore < 60, `got ${out.vibeScore}`)
   })
 
-  it('13. Reflected XSS confirmed → confirmed-vuln', () => {
+  it('13. Reflected XSS canary → Possible XSS (likely-risks), not confirmed-vuln', () => {
     const out = applyEngine([
       f({ id: 'paths-xss-reflected', severity: 'critical', category: 'paths',
           evidence: 'canary reflected' }),
     ], baseCtx)
-    assert.equal(out.findings[0].riskClass, 'critical-exploit')
-    assert.ok(out.vibeScore < 75)
+    assert.equal(out.findings[0].riskClass, 'high-impact-misconfig')
+    assert.equal(out.findings[0].uiGroup, 'likely-risks')
+    assert.ok(out.vibeScore >= 80, `got ${out.vibeScore}`)
   })
 
-  it('14. SQL error-based injection confirmed → confirmed-vuln', () => {
+  it('14. SQL error signature → likely SQLi (likely-risks), D-range alone', () => {
     const out = applyEngine([
       f({ id: 'paths-sqli', severity: 'critical', category: 'paths',
           evidence: "ERROR: syntax error at or near \"'\"" }),
     ], baseCtx)
-    assert.equal(out.findings[0].riskClass, 'critical-exploit')
+    assert.equal(out.findings[0].riskClass, 'high-impact-misconfig')
+    assert.equal(out.findings[0].confidence, 'likely')
+    assert.ok(out.vibeScore <= 65, `got ${out.vibeScore}`)
   })
 
   it('15. CORS * without credentials → informational or low', () => {
@@ -588,14 +628,18 @@ describe('scoring-policy overhaul — 20 scenarios', () => {
     assert.ok(['critical-exploit', 'high-impact-misconfig'].includes(out.findings[0].riskClass!))
   })
 
-  it('17. Auth cookie missing HttpOnly on sensitive route → medium or high', () => {
+  it('17. Auth cookie missing HttpOnly → hardening (v5.6), never caps the grade', () => {
+    // v5.6: a cookie missing HttpOnly is defense-in-depth (needs an XSS to
+    // exploit) — it is hardening on EVERY route, including /admin. Shown with a
+    // fix prompt, but it does not cap the grade. Verified session theft would
+    // surface via Stage 3.
     const sensitiveCtx = defaultContext({ pathname: '/admin', isHttps: true, stage: 1 })
     const out = applyEngine([
       f({ id: 'cookies-no-httponly', severity: 'warn', category: 'cookies',
           evidence: 'session=eyJ...; Path=/' }),
     ], sensitiveCtx)
-    assert.ok(['medium-weakness', 'high-impact-misconfig'].includes(out.findings[0].riskClass!))
-    assert.notEqual(out.findings[0].riskClass, 'critical-exploit')
+    assert.equal(out.findings[0].riskClass, 'low-hardening')
+    assert.ok(out.vibeScore >= 90, `cookie flag must not cap, got ${out.vibeScore}`)
   })
 
   it('18. Stage 2 localStorage auth token → high-impact-misconfig, score recomputed', () => {
@@ -660,8 +704,8 @@ describe('integration — stage 1 + stage 2 merge', () => {
     // We can't easily mock here, but we can verify the engine's outputs match
     // a hand-computed expectation with NO riskScore/riskBand on input.
     const input: Finding = {
-      id: 'paths-xss-reflected', severity: 'critical', category: 'paths',
-      title: 'x', description: 'x', evidence: 'canary reflected', fixPrompt: '',
+      id: 'paths-env', severity: 'critical', category: 'paths',
+      title: 'x', description: 'x', evidence: 'DB_PASSWORD=super-secret', fixPrompt: '',
     }
     const out = applyEngine([input], baseCtx)
     assert.equal(out.findings[0].riskClass, 'critical-exploit')
@@ -742,40 +786,52 @@ describe('v4 — effective severity is the single source of truth (badge ↔ sco
   })
 })
 
-describe('v4 — band ceilings: the worst severity caps the grade (SSL Labs mechanic)', () => {
+describe('V6 — penalty magnitudes by tier (caps replaced the band-ceiling mechanic)', () => {
   const sev = (rc: 'critical' | 'high' | 'medium' | 'low') => {
     if (rc === 'critical') return f({ id: 'paths-env', severity: 'critical', category: 'paths', evidence: 'DB_PASSWORD=secret\nSTRIPE_SECRET_KEY=sk_live_xxxxxxxxxxxxxxxx' })
-    if (rc === 'high') return f({ id: 'cookies-no-httponly', severity: 'warn', category: 'cookies', evidence: 'session=eyJ; auth_token=eyJ' })
-    if (rc === 'medium') return f({ id: 'cookies-no-secure', severity: 'critical', category: 'cookies', evidence: 'prefs=dark' })
+    if (rc === 'high') return f({ id: 'stage2-localstorage-auth-tokens', severity: 'warn', category: 'cookies', evidence: 'sb-xyz-auth-token in localStorage' })
+    if (rc === 'medium') return f({ id: 'mixed-content', severity: 'warn', category: 'mixed-content', evidence: 'http://cdn.example.com/app.js on an https page' })
     return f({ id: 'headers-cross-origin-opener-policy', severity: 'info', category: 'headers' })
   }
-  it('a Critical caps at F (≤49)', () => {
+  it('a verified golden Critical (.env) → F, and the grade-cap rule binds', () => {
     const out = applyEngine([sev('critical')], baseCtx)
     assert.ok(out.vibeScore <= 49, `got ${out.vibeScore}`)
     assert.equal(out.grade, 'F')
+    assert.ok(out.scoreBreakdown.hardCap, 'grade-cap rule must surface in the breakdown')
+    assert.ok(out.findings[0].isGoldenFinding, 'verified .env is a Golden Finding')
   })
-  it('a High caps at C (≤70)', () => {
+  it('a runtime token exposure (high, data category) → B-range dent', () => {
     const out = applyEngine([sev('high')], baseCtx)
-    assert.ok(out.vibeScore <= 70 && out.vibeScore >= 60, `got ${out.vibeScore}`)
-    assert.equal(out.grade, 'C')
-  })
-  it('a Medium caps at C (≤79)', () => {
-    const out = applyEngine([sev('medium')], baseCtx)
-    assert.ok(out.vibeScore <= 79 && out.vibeScore >= 70, `got ${out.vibeScore}`)
-    assert.equal(out.grade, 'C')
-  })
-  it('Low-only caps at B (≤89)', () => {
-    const out = applyEngine([sev('low')], baseCtx)
-    assert.ok(out.vibeScore <= 89 && out.vibeScore >= 80, `got ${out.vibeScore}`)
+    assert.ok(out.vibeScore >= 80 && out.vibeScore <= 89, `got ${out.vibeScore}`)
     assert.equal(out.grade, 'B')
   })
-  it('clean (info/ok only) earns A+ (100)', () => {
+  it('mixed content (medium, posture) → minimal influence, stays A', () => {
+    // V6: posture findings carry the literal 5% weight — mixed content is shown
+    // in needs-review but barely moves the number.
+    const out = applyEngine([sev('medium')], baseCtx)
+    assert.equal(out.findings[0].riskClass, 'medium-weakness')
+    assert.ok(out.vibeScore >= 90, `got ${out.vibeScore}`)
+  })
+  it('a hardening-only gap DEDUCTS minimally — clean site stays in the A band', () => {
+    const out = applyEngine([sev('low')], baseCtx)
+    assert.ok(out.vibeScore >= 90, `hardening-only should stay in A band, got ${out.vibeScore}`)
+    assert.ok(out.findings[0].riskClass === 'low-hardening')
+  })
+  it('clean (info/ok only) earns 100 — grade A, tier exceptional', () => {
     const out = applyEngine([
       f({ id: 'secrets-clean', severity: 'ok', category: 'secrets' }),
       f({ id: 'paths-robots', severity: 'info', category: 'paths' }),
     ], baseCtx)
     assert.equal(out.vibeScore, 100)
-    assert.equal(out.grade, 'A+')
+    assert.equal(out.grade, 'A')
+    assert.equal(out.scoreBreakdown.scoreTier, 'exceptional')
+  })
+  it('perfect-score gate: ANY deduction (even one hardening gap) means ≤ 99', () => {
+    const out = applyEngine([
+      f({ id: 'headers-cross-origin-opener-policy', severity: 'info', category: 'headers' }),
+    ], baseCtx)
+    assert.ok(out.vibeScore <= 99, `got ${out.vibeScore}`)
+    assert.ok(out.vibeScore >= 90)
   })
 })
 
@@ -785,20 +841,26 @@ describe('v4 — discrimination: real sites spread instead of clustering at 85-1
     f({ id: 'headers-cross-origin-opener-policy', severity: 'info', category: 'headers', evidence: `h${i}` }))
   const infos = (n: number) => Array.from({ length: n }, (_, i) =>
     f({ id: 'paths-robots', severity: 'info', category: 'paths', evidence: `r${i}` }))
+  // v5.6: genuine grade-capping findings — mixed content (medium) and a real
+  // runtime token exposure (high). Cookie/header hygiene is hardening (no cap).
   const meds = (n: number) => Array.from({ length: n }, (_, i) =>
-    f({ id: 'cookies-no-secure', severity: 'critical', category: 'cookies', evidence: `p${i}=x` }))
+    f({ id: 'mixed-content', severity: 'warn', category: 'mixed-content', evidence: `http://cdn/${i}.js on https` }))
   const highs = (n: number) => Array.from({ length: n }, (_, i) =>
-    f({ id: 'cookies-no-httponly', severity: 'warn', category: 'cookies', evidence: `session_${i}=eyJ; auth_token=eyJ` }))
+    f({ id: 'stage2-localstorage-auth-tokens', severity: 'warn', category: 'cookies', evidence: `sb-${i}-auth-token in localStorage` }))
 
-  it('apple-profile (2 medium) → C, ~75-79', () => {
+  it('V6: posture-only findings (mixed content + hardening) stay in the A band', () => {
+    // Posture carries the literal 5% weight — checklist findings can no longer
+    // drag a site to C on their own.
     const out = applyEngine([...meds(2), ...lows(7), ...infos(5)], ctx)
-    assert.equal(out.grade, 'C')
-    assert.ok(out.vibeScore >= 72 && out.vibeScore <= 79, `got ${out.vibeScore}`)
+    assert.equal(out.grade, 'A')
+    assert.ok(out.vibeScore >= 90 && out.vibeScore <= 99, `got ${out.vibeScore}`)
   })
-  it('amazon-profile (2 high cookies) → C, ~68-72', () => {
+  it('site with 2 real high exposures (auth tokens in localStorage) → C', () => {
+    // Genuine data exposure (runtime token observation) DOES spread the score
+    // down, even surrounded by hardening — discrimination comes from real risk.
     const out = applyEngine([...highs(2), ...lows(8), ...infos(7)], ctx)
-    assert.equal(out.grade, 'C')
-    assert.ok(out.vibeScore >= 65 && out.vibeScore <= 74, `got ${out.vibeScore}`)
+    assert.equal(out.grade, 'C', `got ${out.grade}`)
+    assert.ok(out.vibeScore <= 79, `real exposure should pull the grade down, got ${out.vibeScore}`)
   })
   it('vibe app with exposed .env → F, ≤49', () => {
     const out = applyEngine([

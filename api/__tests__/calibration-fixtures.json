@@ -1,0 +1,724 @@
+[
+  {
+    "url": "https://apple.com",
+    "kind": "professional",
+    "liveScore": 90,
+    "findings": [
+      {
+        "id": "headers-csp-weak",
+        "severity": "warn",
+        "category": "headers",
+        "evidence": "Issues:\n  - script-src includes 'unsafe-inline' (no 'strict-dynamic'+nonce to ne"
+      },
+      {
+        "id": "integrity-no-sri",
+        "severity": "warn",
+        "category": "integrity",
+        "evidence": "https://www.apple.com/metrics/ac-target/latest/ac-target.js\nhttps://www.apple.co"
+      },
+      {
+        "id": "js-ast-dom-sink",
+        "severity": "warn",
+        "category": "html",
+        "evidence": "innerHTML: ?.innerHTML = ...\ninnerHTML: i.innerHTML = ...\ninnerHTML: n.innerHTML"
+      },
+      {
+        "id": "js-ast-hardcoded-creds",
+        "severity": "warn",
+        "category": "secrets",
+        "evidence": "{ token: \"app_stor…-apl\" }\n{ token: \"books-0-…-apl\" }\n{ token: \"fitness-…-apl\" }"
+      },
+      {
+        "id": "headers-permissions-policy",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "GET https://www.apple.com/ → response is missing permissions-policy"
+      },
+      {
+        "id": "headers-cross-origin-opener-policy",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "GET https://www.apple.com/ → response is missing cross-origin-opener-policy"
+      },
+      {
+        "id": "headers-cross-origin-embedder-policy",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "GET https://www.apple.com/ → response is missing cross-origin-embedder-policy"
+      },
+      {
+        "id": "headers-cross-origin-resource-policy",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "GET https://www.apple.com/ → response is missing cross-origin-resource-policy"
+      },
+      {
+        "id": "cookie-geo",
+        "severity": "info",
+        "category": "cookies",
+        "evidence": "geo=us; path=/; domain=.apple.com"
+      },
+      {
+        "id": "html-inline-xss-surface",
+        "severity": "info",
+        "category": "html",
+        "evidence": "(inline <script> blocks present)"
+      },
+      {
+        "id": "dns-no-dnssec",
+        "severity": "info",
+        "category": "dns",
+        "evidence": "dns.resolve(\"apple.com\", \"DNSKEY\") → no records"
+      },
+      {
+        "id": "email-spf-soft-fail",
+        "severity": "info",
+        "category": "email",
+        "evidence": "v=spf1 include:_spf.apple.com include:_spf-txn.apple.com ~all"
+      },
+      {
+        "id": "js-ast-template-url-fetch",
+        "severity": "info",
+        "category": "meta",
+        "evidence": "3 call sites in 4 parsed bundles"
+      }
+    ]
+  },
+  {
+    "url": "https://www.paloaltonetworks.com",
+    "kind": "professional",
+    "liveScore": 86,
+    "findings": [
+      {
+        "id": "integrity-no-sri",
+        "severity": "warn",
+        "category": "integrity",
+        "evidence": "https://assets.adobedtm.com/9273d4aedcd2/0d76ae0322d7/launch-425c423d843b.min.js"
+      },
+      {
+        "id": "html-form-no-csrf",
+        "severity": "warn",
+        "category": "html",
+        "evidence": "/apps/pan/public/formsubmithandler.submitform.json"
+      },
+      {
+        "id": "js-ast-runtime-codegen",
+        "severity": "warn",
+        "category": "html",
+        "evidence": "Direct evaluator calls: 1\nFunction-constructor uses: 37\nParsed bundles: 1, skipp"
+      },
+      {
+        "id": "js-ast-dom-sink",
+        "severity": "warn",
+        "category": "html",
+        "evidence": "innerHTML: a.innerHTML = ...\ninnerHTML: o.innerHTML = ...\ninnerHTML: ?.innerHTML"
+      },
+      {
+        "id": "headers-referrer-policy",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "GET https://www.paloaltonetworks.com/ → response is missing referrer-policy"
+      },
+      {
+        "id": "headers-cross-origin-opener-policy",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "GET https://www.paloaltonetworks.com/ → response is missing cross-origin-opener-"
+      },
+      {
+        "id": "headers-cross-origin-embedder-policy",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "GET https://www.paloaltonetworks.com/ → response is missing cross-origin-embedde"
+      },
+      {
+        "id": "headers-cross-origin-resource-policy",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "GET https://www.paloaltonetworks.com/ → response is missing cross-origin-resourc"
+      },
+      {
+        "id": "headers-csp-weak",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "Issues:\n  - missing base-uri directive (use 'self')\n  - missing form-action dire"
+      },
+      {
+        "id": "headers-hsts-weak",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "Strict-Transport-Security: max-age=31536000"
+      },
+      {
+        "id": "cookie-AKA_A2",
+        "severity": "info",
+        "category": "cookies",
+        "evidence": "aka_a2=a; expires=sun, 07-jun-2026 19:51:49 gmt; path=/; domain=paloaltonetworks"
+      },
+      {
+        "id": "dns-no-caa",
+        "severity": "info",
+        "category": "dns",
+        "evidence": "dns.resolveCaa(\"paloaltonetworks.com\") → no records"
+      },
+      {
+        "id": "auth-enum-surface",
+        "severity": "info",
+        "category": "auth-enum",
+        "evidence": "login: /login\nlogin: /login?screenToRender=traditionalRegistration\nlogin: /login"
+      },
+      {
+        "id": "meta-waf-detected",
+        "severity": "info",
+        "category": "meta",
+        "evidence": "Vendor detected: Akamai\nDetected from response headers; the scan was not blocked"
+      }
+    ]
+  },
+  {
+    "url": "https://www.nvidia.com",
+    "kind": "professional",
+    "liveScore": 90,
+    "findings": [
+      {
+        "id": "headers-strict-transport-security",
+        "severity": "warn",
+        "category": "headers",
+        "evidence": "GET https://www.nvidia.com/en-us/ → response is missing strict-transport-securit"
+      },
+      {
+        "id": "headers-x-frame-options",
+        "severity": "warn",
+        "category": "headers",
+        "evidence": "GET https://www.nvidia.com/en-us/ → response is missing x-frame-options"
+      },
+      {
+        "id": "integrity-no-sri",
+        "severity": "warn",
+        "category": "integrity",
+        "evidence": "https://cdn.cookielaw.org/scripttemplates/otSDKStub.js\nhttps://images.nvidia.com"
+      },
+      {
+        "id": "methods-trace-enabled",
+        "severity": "warn",
+        "category": "methods",
+        "evidence": "OPTIONS / → Allow: OPTIONS, TRACE, GET, HEAD"
+      },
+      {
+        "id": "js-ast-runtime-codegen",
+        "severity": "warn",
+        "category": "html",
+        "evidence": "Direct evaluator calls: 0\nFunction-constructor uses: 1\nParsed bundles: 4, skippe"
+      },
+      {
+        "id": "js-ast-dom-sink",
+        "severity": "warn",
+        "category": "html",
+        "evidence": "innerHTML: l.innerHTML = ...\ninnerHTML: ?.innerHTML = ...\ninnerHTML: b.innerHTML"
+      },
+      {
+        "id": "headers-referrer-policy",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "GET https://www.nvidia.com/en-us/ → response is missing referrer-policy"
+      },
+      {
+        "id": "headers-permissions-policy",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "GET https://www.nvidia.com/en-us/ → response is missing permissions-policy"
+      },
+      {
+        "id": "headers-cross-origin-opener-policy",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "GET https://www.nvidia.com/en-us/ → response is missing cross-origin-opener-poli"
+      },
+      {
+        "id": "headers-cross-origin-embedder-policy",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "GET https://www.nvidia.com/en-us/ → response is missing cross-origin-embedder-po"
+      },
+      {
+        "id": "headers-cross-origin-resource-policy",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "GET https://www.nvidia.com/en-us/ → response is missing cross-origin-resource-po"
+      },
+      {
+        "id": "headers-csp-weak",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "Issues:\n  - missing base-uri directive (use 'self')\n  - missing form-action dire"
+      },
+      {
+        "id": "headers-cors-wildcard",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "Access-Control-Allow-Origin: *"
+      },
+      {
+        "id": "cookie-c_code",
+        "severity": "info",
+        "category": "cookies",
+        "evidence": "c_code=us; domain=nvidia.com; path=/; secure"
+      },
+      {
+        "id": "html-target-blank-no-rel",
+        "severity": "info",
+        "category": "html",
+        "evidence": "https://build.nvidia.com/\nhttps://docs.nvidia.com/ngc/latest/ngc-private-registr"
+      },
+      {
+        "id": "dns-no-dnssec",
+        "severity": "info",
+        "category": "dns",
+        "evidence": "dns.resolve(\"nvidia.com\", \"DNSKEY\") → no records"
+      },
+      {
+        "id": "dns-no-caa",
+        "severity": "info",
+        "category": "dns",
+        "evidence": "dns.resolveCaa(\"nvidia.com\") → no records"
+      },
+      {
+        "id": "email-spf-soft-fail",
+        "severity": "info",
+        "category": "email",
+        "evidence": "v=spf1 include:%{i}._ip.%{h}._ehlo.%{d}._spf.vali.email ~all"
+      },
+      {
+        "id": "paths-robots-disclosure",
+        "severity": "info",
+        "category": "paths",
+        "evidence": "/admin/"
+      }
+    ]
+  },
+  {
+    "url": "https://www.dell.com",
+    "kind": "professional",
+    "liveScore": 86,
+    "findings": [
+      {
+        "id": "headers-content-security-policy",
+        "severity": "warn",
+        "category": "headers",
+        "evidence": "GET https://www.dell.com/en-us → response is missing content-security-policy"
+      },
+      {
+        "id": "headers-x-frame-options",
+        "severity": "warn",
+        "category": "headers",
+        "evidence": "GET https://www.dell.com/en-us → response is missing x-frame-options"
+      },
+      {
+        "id": "html-inline-xss-surface",
+        "severity": "warn",
+        "category": "html",
+        "evidence": "onload=\"this.media='"
+      },
+      {
+        "id": "headers-x-content-type-options",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "GET https://www.dell.com/en-us → response is missing x-content-type-options"
+      },
+      {
+        "id": "headers-referrer-policy",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "GET https://www.dell.com/en-us → response is missing referrer-policy"
+      },
+      {
+        "id": "headers-cross-origin-opener-policy",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "GET https://www.dell.com/en-us → response is missing cross-origin-opener-policy"
+      },
+      {
+        "id": "headers-cross-origin-embedder-policy",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "GET https://www.dell.com/en-us → response is missing cross-origin-embedder-polic"
+      },
+      {
+        "id": "headers-cross-origin-resource-policy",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "GET https://www.dell.com/en-us → response is missing cross-origin-resource-polic"
+      },
+      {
+        "id": "headers-hsts-weak",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "Strict-Transport-Security: max-age=86400 ; preload"
+      },
+      {
+        "id": "cookie-akGD",
+        "severity": "info",
+        "category": "cookies",
+        "evidence": "akgd=%7b%22country%22%3a%22us%22%2c%22region%22%3a%22va%22%7d; expires=mon, 31-d"
+      },
+      {
+        "id": "cookie-um_g_uc",
+        "severity": "info",
+        "category": "cookies",
+        "evidence": "um_g_uc=false; path=/; domain=.dell.com; secure"
+      },
+      {
+        "id": "dns-no-dnssec",
+        "severity": "info",
+        "category": "dns",
+        "evidence": "dns.resolve(\"dell.com\", \"DNSKEY\") → no records"
+      },
+      {
+        "id": "email-spf-soft-fail",
+        "severity": "info",
+        "category": "email",
+        "evidence": "v=spf1 include:%{ir}.%{v}.%{d}.spf.has.pphosted.com ~all"
+      },
+      {
+        "id": "auth-enum-surface",
+        "severity": "info",
+        "category": "auth-enum",
+        "evidence": "signup: https://www.dell.com/dci/idp/dwa/register?response_type=id_token&amp;cli"
+      },
+      {
+        "id": "meta-waf-detected",
+        "severity": "info",
+        "category": "meta",
+        "evidence": "Vendor detected: Akamai\nDetected from response headers; the scan was not blocked"
+      }
+    ]
+  },
+  {
+    "url": "https://www.microsoft.com",
+    "kind": "professional",
+    "liveScore": 81,
+    "findings": [
+      {
+        "id": "headers-content-security-policy",
+        "severity": "warn",
+        "category": "headers",
+        "evidence": "GET https://www.microsoft.com/en-us → response is missing content-security-polic"
+      },
+      {
+        "id": "headers-x-frame-options",
+        "severity": "warn",
+        "category": "headers",
+        "evidence": "GET https://www.microsoft.com/en-us → response is missing x-frame-options"
+      },
+      {
+        "id": "integrity-no-sri",
+        "severity": "warn",
+        "category": "integrity",
+        "evidence": "https://rum.hlx.page/.rum/@adobe/helix-rum-js@%5E2/dist/micro.js\nhttps://uhf.mic"
+      },
+      {
+        "id": "path---git-HEAD-exposed-needs-review",
+        "severity": "warn",
+        "category": "paths",
+        "evidence": "GET https://www.microsoft.com/.git/HEAD → 200 OK (8192 bytes)"
+      },
+      {
+        "id": "path---git-config",
+        "severity": "warn",
+        "category": "paths",
+        "evidence": "GET https://www.microsoft.com/.git/config → 200 OK (8192 bytes)"
+      },
+      {
+        "id": "path--server-status",
+        "severity": "warn",
+        "category": "paths",
+        "evidence": "GET https://www.microsoft.com/server-status → 200 OK (8192 bytes)"
+      },
+      {
+        "id": "html-inline-xss-surface",
+        "severity": "warn",
+        "category": "html",
+        "evidence": "(inline <script> blocks present)"
+      },
+      {
+        "id": "tls-no-http-redirect",
+        "severity": "warn",
+        "category": "tls",
+        "evidence": "GET http://www.microsoft.com/ → 200 (no 301/302 to https)"
+      },
+      {
+        "id": "js-ast-runtime-codegen",
+        "severity": "warn",
+        "category": "html",
+        "evidence": "Direct evaluator calls: 0\nFunction-constructor uses: 1\nParsed bundles: 4, skippe"
+      },
+      {
+        "id": "js-ast-dom-sink",
+        "severity": "warn",
+        "category": "html",
+        "evidence": "innerHTML: va.innerHTML = ...\ninnerHTML: k.innerHTML = ...\ninnerHTML: ?.innerHTM"
+      },
+      {
+        "id": "headers-x-content-type-options",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "GET https://www.microsoft.com/en-us → response is missing x-content-type-options"
+      },
+      {
+        "id": "headers-referrer-policy",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "GET https://www.microsoft.com/en-us → response is missing referrer-policy"
+      },
+      {
+        "id": "headers-permissions-policy",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "GET https://www.microsoft.com/en-us → response is missing permissions-policy"
+      },
+      {
+        "id": "headers-cross-origin-opener-policy",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "GET https://www.microsoft.com/en-us → response is missing cross-origin-opener-po"
+      },
+      {
+        "id": "headers-cross-origin-embedder-policy",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "GET https://www.microsoft.com/en-us → response is missing cross-origin-embedder-"
+      },
+      {
+        "id": "headers-cross-origin-resource-policy",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "GET https://www.microsoft.com/en-us → response is missing cross-origin-resource-"
+      },
+      {
+        "id": "headers-hsts-weak",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "Strict-Transport-Security: max-age=31536000; includeSubDomains"
+      },
+      {
+        "id": "cookie-bStore",
+        "severity": "info",
+        "category": "cookies",
+        "evidence": "bstore=y; expires=sun, 07-jun-2026 18:52:11 gmt"
+      },
+      {
+        "id": "html-target-blank-no-rel",
+        "severity": "info",
+        "category": "html",
+        "evidence": "https://www.facebook.com/Microsoft\nhttps://x.com/microsoft\nhttps://www.linkedin."
+      },
+      {
+        "id": "dns-no-dnssec",
+        "severity": "info",
+        "category": "dns",
+        "evidence": "dns.resolve(\"microsoft.com\", \"DNSKEY\") → no records"
+      },
+      {
+        "id": "dns-no-caa",
+        "severity": "info",
+        "category": "dns",
+        "evidence": "dns.resolveCaa(\"microsoft.com\") → no records"
+      }
+    ]
+  },
+  {
+    "url": "https://www.cloudflare.com",
+    "kind": "professional",
+    "liveScore": 90,
+    "findings": [
+      {
+        "id": "headers-csp-weak",
+        "severity": "warn",
+        "category": "headers",
+        "evidence": "Issues:\n  - script-src includes 'unsafe-inline' (no 'strict-dynamic'+nonce to ne"
+      },
+      {
+        "id": "integrity-no-sri",
+        "severity": "warn",
+        "category": "integrity",
+        "evidence": "https://ot.www.cloudflare.com/ot/scripttemplates/otSDKStub.js"
+      },
+      {
+        "id": "paths-openapi-spec-public",
+        "severity": "warn",
+        "category": "paths",
+        "evidence": "https://www.cloudflare.com/openapi.json\n  GET /llms.txt\n  GET /llms-full.txt\n  G"
+      },
+      {
+        "id": "headers-cross-origin-embedder-policy",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "GET https://www.cloudflare.com/ → response is missing cross-origin-embedder-poli"
+      },
+      {
+        "id": "headers-hsts-weak",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "Strict-Transport-Security: max-age=31536000; includeSubDomains"
+      },
+      {
+        "id": "cookie-_ga",
+        "severity": "info",
+        "category": "cookies",
+        "evidence": "_ga=ga1.1.22733fdf-9dd3-41a3-9760-f257b43918e3; domain=.cloudflare.com; expires="
+      },
+      {
+        "id": "path--openapi-json",
+        "severity": "info",
+        "category": "paths",
+        "evidence": "GET https://www.cloudflare.com/openapi.json → 200 OK (1218 bytes)"
+      },
+      {
+        "id": "html-inline-xss-surface",
+        "severity": "info",
+        "category": "html",
+        "evidence": "(inline <script> blocks present)"
+      },
+      {
+        "id": "auth-enum-surface",
+        "severity": "info",
+        "category": "auth-enum",
+        "evidence": "login: https://dash.cloudflare.com/login\nlogin: https://dash.cloudflare.com/logi"
+      },
+      {
+        "id": "meta-waf-detected",
+        "severity": "info",
+        "category": "meta",
+        "evidence": "Vendor detected: Cloudflare\nDetected from response headers; the scan was not blo"
+      }
+    ]
+  },
+  {
+    "url": "https://stripe.com",
+    "kind": "professional",
+    "liveScore": 89,
+    "findings": [
+      {
+        "id": "integrity-no-sri",
+        "severity": "warn",
+        "category": "integrity",
+        "evidence": "https://b.stripecdn.com/mkt-ssr-statics/assets/_next/static/chunks/polyfills-423"
+      },
+      {
+        "id": "headers-permissions-policy",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "GET https://stripe.com/ → response is missing permissions-policy"
+      },
+      {
+        "id": "headers-cross-origin-embedder-policy",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "GET https://stripe.com/ → response is missing cross-origin-embedder-policy"
+      },
+      {
+        "id": "headers-cross-origin-resource-policy",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "GET https://stripe.com/ → response is missing cross-origin-resource-policy"
+      },
+      {
+        "id": "dns-no-dnssec",
+        "severity": "info",
+        "category": "dns",
+        "evidence": "dns.resolve(\"stripe.com\", \"DNSKEY\") → no records"
+      },
+      {
+        "id": "email-spf-soft-fail",
+        "severity": "info",
+        "category": "email",
+        "evidence": "v=spf1 ip4:198.2.180.60/32 ip4:13.111.2.227/32 include:spf1.stripe.com include:g"
+      },
+      {
+        "id": "auth-enum-surface",
+        "severity": "info",
+        "category": "auth-enum",
+        "evidence": "login: https://dashboard.stripe.com/login\nlogin: https://dashboard.stripe.com/lo"
+      }
+    ]
+  },
+  {
+    "url": "https://vercel.com",
+    "kind": "professional",
+    "liveScore": 90,
+    "findings": [
+      {
+        "id": "headers-csp-weak",
+        "severity": "warn",
+        "category": "headers",
+        "evidence": "Issues:\n  - script-src includes 'unsafe-inline' (no 'strict-dynamic'+nonce to ne"
+      },
+      {
+        "id": "headers-permissions-policy",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "GET https://vercel.com/ → response is missing permissions-policy"
+      },
+      {
+        "id": "headers-cross-origin-opener-policy",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "GET https://vercel.com/ → response is missing cross-origin-opener-policy"
+      },
+      {
+        "id": "headers-cross-origin-embedder-policy",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "GET https://vercel.com/ → response is missing cross-origin-embedder-policy"
+      },
+      {
+        "id": "headers-cross-origin-resource-policy",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "GET https://vercel.com/ → response is missing cross-origin-resource-policy"
+      },
+      {
+        "id": "paths-catch-all-200",
+        "severity": "info",
+        "category": "meta",
+        "evidence": "GET /vguard-nonexistent-canary-9q7z2x.txt → 200 (catch-all / soft-404)"
+      },
+      {
+        "id": "html-inline-xss-surface",
+        "severity": "info",
+        "category": "html",
+        "evidence": "(inline <script> blocks present)"
+      },
+      {
+        "id": "headers-x-powered-by",
+        "severity": "info",
+        "category": "headers",
+        "evidence": "X-Powered-By: Next.js, Payload"
+      },
+      {
+        "id": "dns-no-dnssec",
+        "severity": "info",
+        "category": "dns",
+        "evidence": "dns.resolve(\"vercel.com\", \"DNSKEY\") → no records"
+      },
+      {
+        "id": "email-spf-soft-fail",
+        "severity": "info",
+        "category": "email",
+        "evidence": "v=spf1 include:_netblocks.google.com include:_netblocks2.google.com include:_net"
+      },
+      {
+        "id": "ai-endpoint-detected",
+        "severity": "info",
+        "category": "ai",
+        "evidence": "/api/ai"
+      },
+      {
+        "id": "auth-enum-surface",
+        "severity": "info",
+        "category": "auth-enum",
+        "evidence": "login: /login\nsignup: /signup\nsignup: /signup"
+      }
+    ]
+  }
+]

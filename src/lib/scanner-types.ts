@@ -15,8 +15,94 @@ export type Severity = 'critical' | 'warn' | 'info' | 'ok'
  */
 export type EffectiveSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info'
 
-/** Letter grade shown alongside the 0–100 number (SSL Labs / Observatory style). */
-export type Grade = 'A+' | 'A' | 'B' | 'C' | 'D' | 'F'
+/**
+ * Letter grade shown alongside the 0–100 number (SSL Labs / Observatory style).
+ * V6 scale: A 90–100 · B 80–89 · C 70–79 · D 60–69 · F 0–59. `A+` was retired
+ * in V6 — the 90+ band is qualified by `ScoreTier` instead.
+ */
+export type Grade = 'A' | 'B' | 'C' | 'D' | 'F'
+
+/** Qualifier inside the A band: 90–94 excellent · 95–99 outstanding · 100 exceptional. */
+export type ScoreTier = 'excellent' | 'outstanding' | 'exceptional'
+
+// ---------------------------------------------------------------------------
+// Professional exposure-scoring dimensions (2026-06-07 v5)
+// Inspired by CVSS / EPSS / OWASP risk methodology. Deterministic "Smart
+// Scoring" — NO telemetry, NO ML. Every field is derived from observable scan
+// evidence in `api/_lib/finding-traits.ts`.
+// ---------------------------------------------------------------------------
+
+/** How realistically an attacker can use this finding. */
+export type Exploitability = 'none' | 'theoretical' | 'plausible' | 'easy' | 'confirmed'
+
+/** What an attacker needs before this finding is usable. */
+export type AttackPrerequisite =
+  | 'none'
+  | 'userInteraction'
+  | 'authRequired'
+  | 'ownershipRequired'
+  | 'unknown'
+
+/** The kind of impact if the finding is real. */
+export type ImpactType =
+  | 'none'
+  | 'hardening'
+  | 'infoDisclosure'
+  | 'credentialExposure'
+  | 'authBypass'
+  | 'dataExposure'
+  | 'codeExecution'
+  | 'transportBreak'
+  | 'supplyChain'
+  | 'abusePath'
+
+/** How the evidence for this finding was obtained. */
+export type EvidenceKind =
+  | 'passive'
+  | 'heuristic'
+  | 'runtime'
+  | 'activeProbe'
+  | 'ownershipVerifiedDeepScan'
+
+/** Strength of the evidence behind the finding. */
+export type EvidenceStrength = 'weak' | 'moderate' | 'strong' | 'confirmed'
+
+/**
+ * V6 risk category — the four weighted buckets the score is computed over,
+ * plus `recon` (visibility-only, zero score impact):
+ *   data    (40%) — secret/data exposure (.env, keys, dumps, public buckets)
+ *   access  (30%) — access control & authorization (IDOR, RLS, admin, rate limits)
+ *   exploit (25%) — exploitable vulnerabilities (XSS, SQLi, SSRF, traversal, RCE)
+ *   posture (5%)  — defense-in-depth hardening (headers, cookies, SPF, CVEs, WAF)
+ *   recon   (0%)  — fingerprinting/tech-detection observations
+ */
+export type RiskCategory = 'data' | 'access' | 'exploit' | 'posture' | 'recon'
+
+/**
+ * Business-impact sensitivity of the asset a finding touches. Multiplies the
+ * technical penalty: public 0.7× · userData 1.0× · financial 1.3× ·
+ * adminInternal 1.6×. Derived from observable signals only — never a brand list.
+ */
+export type BusinessImpact = 'public' | 'userData' | 'financial' | 'adminInternal'
+
+/** Observable classification of the scanned target (NOT a brand list). */
+export type TargetProfile =
+  | 'staticMarketingSite'
+  | 'smallBusinessSite'
+  | 'vibeCodedApp'
+  | 'spaAppShell'
+  | 'saasLoginApp'
+  | 'ecommerceCheckout'
+  | 'apiHeavyApp'
+  | 'enterpriseProfessionalSite'
+  | 'wafLimitedTarget'
+  | 'unknown'
+
+/** Separate from the security score: how much we were able to verify. */
+export type ScanConfidence = 'low' | 'medium' | 'high'
+
+/** How hard the orchestrator decided to work on this target. */
+export type ScanIntensity = 'concise' | 'standard' | 'expanded' | 'deep'
 
 export type Category =
   | 'secrets'
@@ -75,8 +161,12 @@ export interface Finding {
    * "what's scored" in lockstep. Falls back to `severity` for legacy data.
    */
   effectiveSeverity?: EffectiveSeverity
-  /** Confidence the finding is real and actionable. */
-  confidence?: 'confirmed' | 'likely' | 'informational'
+  /**
+   * Confidence the finding is real and actionable (V6 vocabulary):
+   * verified (exploitation/observation evidence, 100% weight) ·
+   * likely (strong signal, 60%) · possible (detection only, 20%).
+   */
+  confidence?: 'verified' | 'likely' | 'possible'
   /**
    * Coarse UI section for grouped report rendering. New 5-bucket model
    * (2026-05-08 v2 strict-Critical-gate):
@@ -89,6 +179,30 @@ export interface Finding {
     | 'needs-review'
     | 'hardening-recommendations'
     | 'informational-observations'
+  // -------------------------------------------------------------------------
+  // Professional scoring traits (v5). Set by `deriveFindingTraits`. Optional so
+  // legacy data + detector emit-sites that don't set them still type-check; the
+  // engine derives them from id/category/severity/evidence when absent.
+  // -------------------------------------------------------------------------
+  /** True ONLY with evidence of real impact — the strict gate. */
+  verifiedImpact?: boolean
+  exploitability?: Exploitability
+  attackPrerequisite?: AttackPrerequisite
+  /** Reachable from the public internet (vs requiring local/internal access). */
+  remoteReachable?: boolean
+  /** Exposed on the public internet surface (vs auth-gated). */
+  publicInternetExposure?: boolean
+  /** Confirmed by an active probe / runtime / deep scan (not inferred). */
+  activeProbeConfirmed?: boolean
+  impactType?: ImpactType
+  evidenceKind?: EvidenceKind
+  evidenceStrength?: EvidenceStrength
+  /** V6 — which of the four weighted risk buckets this finding scores under. */
+  riskCategory?: RiskCategory
+  /** V6 — sensitivity of the affected asset (multiplies the penalty). */
+  businessImpact?: BusinessImpact
+  /** V6 — true when this is a verified Golden Finding (major security failure). */
+  isGoldenFinding?: boolean
 }
 
 /**
@@ -150,19 +264,61 @@ export interface ScoreCategoryContribution {
   capped: boolean
 }
 
+/** One V6 risk category's contribution to the score. */
+export interface RiskCategoryContribution {
+  category: RiskCategory
+  label: string
+  /** The category's weight in the model (0.40 / 0.30 / 0.25 / 0.05 / 0). */
+  weight: number
+  /** Points removed by this risk category (positive number, post-decay). */
+  penalty: number
+  findingCount: number
+  /** True when the posture total clamp limited this category's penalty. */
+  capped: boolean
+}
+
 /** Full, attributable score derivation — the scorecard the UI renders. */
 export interface ScoreBreakdown {
   base: 100
   categories: ScoreCategoryContribution[]
-  /** Raw score after deductions, before the band ceiling / hard cap. */
+  /** V6 — the four weighted risk buckets behind the number (recon shown as 0). */
+  riskCategories?: RiskCategoryContribution[]
+  /** Raw score after deductions (and WAF bonus), before any cap. */
   rawScore: number
-  /** Worst effective severity present (drives the band ceiling). */
+  /** Worst effective severity present (drives the per-category dot colors). */
   worstSeverity: EffectiveSeverity | null
-  /** Ceiling imposed by the worst severity (e.g. a Critical caps at 49). */
+  /** Legacy field — V6 always 100; caps are expressed via `hardCap`. */
   bandCeiling: number
-  /** Non-negotiable hard cap that overrode everything, if any. */
+  /**
+   * Non-negotiable cap that overrode the subtotal, if any: no-HTTPS (49) or a
+   * verified Golden Finding from the grade-cap set (max grade C → 79).
+   */
   hardCap?: { reason: string; cap: number }
+  /** Small bonus applied because a WAF fronts the origin (never a penalty). */
+  wafBonus?: number
+  /** Qualifier inside the A band (excellent/outstanding/exceptional). */
+  scoreTier?: ScoreTier
   finalScore: number
+  // -------------------------------------------------------------------------
+  // Self-explaining score (v5). Plain-language drivers so a non-security user
+  // understands WHY the number is what it is.
+  // -------------------------------------------------------------------------
+  /** The findings that pulled the score down, worst first. */
+  riskDrivers?: string[]
+  /** Concrete good things the scan observed (HTTPS, no exposed secrets, …). */
+  positiveSignals?: string[]
+  /** What the scan could NOT verify (passive only, WAF block, auth areas …). */
+  coverageLimitations?: string[]
+  /** Why the score isn't higher. */
+  whyNotHigher?: string
+  /** Why the score isn't lower. */
+  whyNotLower?: string
+  /** The single most useful next action for this result. */
+  recommendedNextStep?: string
+  /** How hard the orchestrator decided to work. */
+  scanIntensityUsed?: ScanIntensity
+  /** Observable target classification. */
+  targetProfile?: TargetProfile
 }
 
 export interface ScanResult {
@@ -171,13 +327,34 @@ export interface ScanResult {
   scannedAt: string
   durationMs: number
   vibeScore: number
-  /** Letter grade derived from `vibeScore` (A+ … F). */
+  /**
+   * Customer-facing score the UI renders. Display-only cosmetic of `vibeScore`:
+   * a clean 96–99 (with NO critical finding) shows as a premium 100; everything
+   * else is identical to `vibeScore`. The raw `vibeScore` / `scoreBreakdown` are
+   * never changed — see `api/_lib/display-score.ts`.
+   */
+  displayScore?: number
+  /** True only when `displayScore` was rounded up from a 96–99 `vibeScore`. */
+  scoreAdjustedForDisplay?: boolean
+  /** Letter grade derived from `vibeScore` (A … F). */
   grade?: Grade
   totals: { critical: number; warn: number; info: number; ok: number }
   /** 5-tier reconciled counts (the honest histogram behind the badges). */
   severityCounts?: { critical: number; high: number; medium: number; low: number; info: number; ok: number }
   /** Attributable per-category score derivation for the "why this score" card. */
   scoreBreakdown?: ScoreBreakdown
+  // -------------------------------------------------------------------------
+  // Coverage / confidence (v5) — kept SEPARATE from `vibeScore`. "How secure it
+  // looks" (vibeScore) is not "how much we could verify" (coverage/confidence).
+  // -------------------------------------------------------------------------
+  /** Observable target classification (drives adaptive intensity + copy). */
+  targetProfile?: TargetProfile
+  /** How much confidence to place in this scan's coverage. */
+  scanConfidence?: ScanConfidence
+  /** 0–100 — how much of the relevant surface this scan type could examine. */
+  coverageScore?: number
+  /** How hard the orchestrator worked on this target. */
+  scanIntensityUsed?: ScanIntensity
   findings: Finding[]
   meta: {
     finalUrl: string
@@ -204,6 +381,12 @@ export interface ScanResult {
     s3BucketHosts: string[]
     firebaseIds: string[]
     aiEndpoints: string[]
+    /**
+     * Passively-detected login/signup/password-reset endpoints. Stage 1 only
+     * DETECTS them; the active rate-limit test (Stage 3, ownership-verified)
+     * probes exactly these — never arbitrary pasted URLs.
+     */
+    authEndpoints?: string[]
   }
   /** When true, the result already includes Stage 3 findings appended. */
   stage?: 1 | 3

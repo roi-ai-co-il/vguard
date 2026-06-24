@@ -29,15 +29,40 @@ URL → Stage 1: Passive Scan
 ### Stage 1 — Passive Scan (✅ live)
 External-only checks, nothing that looks like an attack. The user pastes a URL and we go.
 
-- HTTPS / TLS version + cipher / cert expiry
-- Security headers (CSP depth, HSTS strength, X-Frame-Options, COOP/COEP/CORP, …)
-- Public JS bundle inspection (secrets, source maps, npm CVE matching)
-- Supabase / Firebase / S3 detection (passive references)
-- DNS records (DNSSEC, CAA, DMARC, SPF, DKIM, takeover-prone CNAME)
-- Forms + endpoints discovery (CSRF tokens, AI endpoints, auth signup probes)
-- Active probing: Open Redirect canary, reflected XSS canary, SQLi error-based
+**🟦 Canonical 23-check report (2026-06-22) — the customer-facing list.** The
+main URL-scan report + Vibe Score are based on EXACTLY 23 checks. The single
+source of truth is [`api/_lib/canonical-checks.ts`](api/_lib/canonical-checks.ts);
+full spec in [`docs/CANONICAL-CHECKS.md`](docs/CANONICAL-CHECKS.md). The 23:
+HTTPS/TLS reachability · exposed secrets in JS · Supabase service-role key ·
+TLS version · weak ciphers · cert expiry · mixed content · HTTP→HTTPS redirect ·
+cookie/session hardening · CSRF on POST forms · sensitive path exposure ·
+robots.txt analysis · sitemap.xml leak · TRACE method · Supabase Storage ·
+Firebase RTDB · Firebase Storage · S3 ListBucket · **login rate-limit (new,
+safe/defensive)** · open redirect · reflected XSS · SQL injection · subdomain
+takeover.
 
-**~75 detectors, ~99% of URL-only spec coverage.** See [`Knowledge/04 פרויקטים/V-Guards - Attack Catalog.md`](../../Knowledge/04%20פרויקטים/V-Guards%20-%20Attack%20Catalog.md) for the live list.
+**The other detectors still run but are INTERNAL-ONLY** — dropped from the report
++ score at the scanner-pipeline boundary (`isCustomerFacingFinding`), never shown
+as website vulnerabilities. Excluded: CORS, server/version disclosure, framework
+fingerprinting, dep CVEs, DMARC/DKIM/SPF/CAA/DNSSEC, CSP/HSTS/SRI/generic-header
+hardening, source maps, inline scripts, reverse tabnabbing, hardcoded localhost,
+Supabase Edge Function / auth-signup / AI-endpoint discovery, SSRF (as a customer
+finding), URL normalization, WAF detection, JS-AST heuristics. Several are kept
+because they feed canonical checks (Supabase discovery → #3/#19) or protect the
+scanner (the SSRF/private-host guard — never relax it). The legacy ~75-detector
+list lives in [`Knowledge/04 פרויקטים/V-Guards - Attack Catalog.md`](../../Knowledge/04%20פרויקטים/V-Guards%20-%20Attack%20Catalog.md).
+
+Passive + safe-active surface the canonical checks cover:
+
+- HTTPS / TLS version + cipher / cert expiry / HTTP→HTTPS redirect / mixed content
+- Public JS bundle inspection (provider secrets, Supabase service-role JWT)
+- Supabase Storage / Firebase RTDB + Storage / S3 ListBucket exposure
+- Sensitive path probing (.env, .git, backups, dumps, admin, swagger/openapi)
+- robots.txt + sitemap.xml leak analysis · TRACE method · subdomain takeover
+- Forms (CSRF token check) · login rate-limit — **Stage 1 only DETECTS auth
+  surfaces (passive) + shows a "requires ownership/consent" notice; the active
+  5-request test is Stage-3, ownership-verified, V-Guards UA, invalid creds only**
+- Active probing: Open Redirect canary, reflected XSS canary, SQLi error-based
 
 The current `api/scan.ts` is Stage 1. Stages 2 and 3 are separate endpoints + UI flows.
 
@@ -104,6 +129,8 @@ Detail + detection methods in the Catalog `🔵 Planned Stage 2 enhancements` se
 
 ### Stage 3 — Verified Deep Scan (🟢 LIVE — verification flow ready; deep-scan execution not yet end-to-end verified against a real verified domain)
 Aggressive probing that's only legal/ethical when the user proves they own the target.
+
+> **💸 Fully free, no paywall (decision 2026-06-12).** The old frontend-only $29 "unlock" on Stage 3 was removed — `Stage3Modal` (`src/components/NextStagesPanel.tsx`) goes straight from ownership-verify to the deep scan, and `PricingSection.tsx` advertises every stage as free ("Free — every stage, no catch"). Stage 3 is still gated by **ownership proof** (legal/ethical requirement), never by payment. If a paid tier is ever reintroduced, re-add the `paywall`/`unlockStage3` state that was stripped here and the `STAGE3_PRICE_CENTS` constant.
 
 **Three verification methods (any one suffices) — all three UI flows live:**
 
@@ -469,12 +496,30 @@ The deploy itself also got hardening headers (CSP / COOP / COEP=credentialless /
 - No prompt-injection canaries against `/api/chat`-style endpoints. Catalog ready in [`Vguard - Attack Catalog`](../../Knowledge/04%20פרויקטים/V-Guards%20-%20Attack%20Catalog.md), no execution yet.
 - The "Live · scanning the world" section uses 4 hardcoded findings + a decorative globe. When `vs_scans` table exists with ≥50 real scans, wire this to a tail of recent findings.
 
+## Scoring V6 — risk-category model (2026-06-13)
+
+Full spec: [`docs/SCORING-V6-IMPLEMENTATION.md`](docs/SCORING-V6-IMPLEMENTATION.md) (supersedes the V5 band-ceiling model).
+
+The score measures **real-world risk**, not checklist completeness:
+
+- **4 weighted risk categories:** data & secret exposure (40%), access control (30%), exploitable vulns (25%), posture/hardening (5%, clamped to a literal 5 points), recon (0% — visibility only: robots, framework/WAF detection, swagger, server headers, public client ids).
+- **Confidence:** `verified` ×1.0 / `likely` ×0.6 / `possible` ×0.2. Detection ≠ verification: a reflected canary is *Possible XSS* (only browser-executed XSS verifies), an SQL error signature is *likely* SQLi.
+- **Business impact:** public ×0.7 / userData ×1.0 / financial ×1.3 / adminInternal ×1.6 — observable signals only; floored at ×1.0 for verified golden findings.
+- **Golden Findings** (RLS, IDOR, SQLi, .env, DB dump, service-role, AWS creds, verified XSS, SSRF, traversal, secrets-in-responses, anon write, public buckets w/ data, RCE) carry heavy bases (60–70 pts when verified → F on their own).
+- **Score-cap rule:** any *verified* IDOR/RLS/SQLi/.env/DB-dump/service-role/RCE caps the grade at **C (79)** until fixed.
+- **WAF:** bonus-only (+2 when clean); absence never penalizes. Cloudflare + exposed .env is still F.
+- **Grades:** A 90–100 · B 80–89 · C 70–79 · D 60–69 · F 0–59. **`A+` removed**; the A band shows a tier (excellent 90–94 / outstanding 95–99 / exceptional 100). 100 requires literally zero deductions.
+- Breaking-but-contained renames: `Finding.confidence` vocabulary is now `verified|likely|possible` (was `confirmed|likely|informational`; `normalizeConfidence()` shim accepts legacy), `Grade` no longer includes `'A+'`.
+
+Tests: `api/__tests__/scoring-v6.test.ts` + updated v5/calibration suites — 183/183 passing.
+
 ## Adding a new detector
 
 Add to `api/_lib/scanner.ts`:
 
 1. New regex/pattern in the appropriate section (`SECRET_PATTERNS`, `HEADER_REQS`, `PATHS_TO_PROBE`).
 2. The detector pushes to the local `findings: Finding[]` array with: `id`, `severity`, `category`, `title`, `description`, `evidence` (with the actual evidence — file path, header value, redacted token), `fixPrompt` (templated with the actual finding, mentioning Cursor / Claude / Lovable as the AI).
-3. Severity weights for the score: `critical = -20`, `warn = -7`, `info = -2`. Don't add new severities without updating `scoreFromTotals` AND the gauge gradient.
+3. **Scoring is owned by the V6 engine, not the detector.** The detector's raw `severity` is only an input; the engine derives `riskClass`, `confidence` (verified/likely/possible), `riskCategory` (data/access/exploit/posture/recon) and the penalty. **Register the new finding id in `api/_lib/finding-ids.ts` first** (new predicate or extend an existing one) — that contract is the ONLY way the engine recognizes what your id means. If the finding is a major failure kind, also check `isGoldenKindId` / `isGradeCapGoldenId`. See [`docs/SCORING-V6-IMPLEMENTATION.md`](docs/SCORING-V6-IMPLEMENTATION.md).
+4. **Customer-facing or internal?** A new id is INVISIBLE in the Stage-1 report + score unless `canonicalCheckForFinding` in [`api/_lib/canonical-checks.ts`](api/_lib/canonical-checks.ts) maps it to one of the 23 canonical checks. If the detector is a new customer-facing check, map its id there (and add the check to `CANONICAL_CHECKS` + a test case in `api/__tests__/canonical-checks.test.ts`). If it's internal-only (recon, a supporting detector, a safety guard), leave it unmapped — it will run but be partitioned out. See [`docs/CANONICAL-CHECKS.md`](docs/CANONICAL-CHECKS.md).
 
 The frontend doesn't need changes — `CATEGORY_META` in `ScanForm.tsx` already maps every category to an icon, and rendering is data-driven.

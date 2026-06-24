@@ -12,7 +12,11 @@ import { applyEngine, defaultContext } from './scoring-engine.js'
 import { evidenceContainsRealSecret, isSpaShellBody } from './scoring-policy.js'
 import { oastEnabled, makeOastToken, oastUrl, checkOastHits } from './oast.js'
 import { buildAttackSurface, discoverSubdomainsFromCT } from './attack-surface.js'
+import { isCustomerFacingFinding } from './canonical-checks.js'
+import { withDisplayScore } from './display-score.js'
 import { analyzeBundles as analyzeBundlesAst } from './js-ast.js'
+import { deriveTargetProfile, computeCoverage, type TargetSignals } from './target-profile.js'
+import { decideScanIntensity, buildScoreExplanation, decideProbeExpansion } from './scan-orchestrator-policy.js'
 
 const FETCH_TIMEOUT_MS = 4000
 const PROBE_TIMEOUT_MS = 2500
@@ -268,6 +272,28 @@ const PATHS_TO_PROBE: { path: string; severity: Severity; label: string }[] = [
   { path: '/.svn/entries', severity: 'critical', label: '.svn/entries' },
   { path: '/.hg/hgrc', severity: 'warn', label: '.hg/hgrc (Mercurial)' },
   { path: '/web.config', severity: 'info', label: 'web.config (IIS)' },
+]
+
+/**
+ * Extended probe set (2026-06-07 v5.3) — additive "work harder" depth. Only run
+ * when early signals flag the target as risky (backend / login / app shell / a
+ * secret already found). The baseline set above ALWAYS runs, so detection is
+ * consistent for everyone; this just looks harder where it's warranted. Tuned
+ * for the vibe-coder audience (the dotfiles/configs/DB dumps those stacks leak).
+ */
+const EXTENDED_PATHS_TO_PROBE: { path: string; severity: Severity; label: string }[] = [
+  { path: '/.env.development', severity: 'critical', label: '.env.development' },
+  { path: '/.env.staging', severity: 'critical', label: '.env.staging' },
+  { path: '/.env.backup', severity: 'critical', label: '.env.backup' },
+  { path: '/.git/credentials', severity: 'critical', label: '.git/credentials' },
+  { path: '/.vscode/sftp.json', severity: 'critical', label: '.vscode/sftp.json (SFTP creds)' },
+  { path: '/db.sqlite', severity: 'critical', label: 'db.sqlite' },
+  { path: '/database.sqlite', severity: 'critical', label: 'database.sqlite' },
+  { path: '/backup.tar.gz', severity: 'critical', label: 'backup.tar.gz' },
+  { path: '/.npmrc', severity: 'warn', label: '.npmrc (may hold auth tokens)' },
+  { path: '/firebase.json', severity: 'info', label: 'firebase.json' },
+  { path: '/.firebaserc', severity: 'info', label: '.firebaserc' },
+  { path: '/api/admin', severity: 'warn', label: '/api/admin route' },
 ]
 
 const HEADER_REQS: {
@@ -2397,6 +2423,10 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
           description: `A live ${pat.name.toLowerCase()} is shipped in your client-side bundle. Anyone visiting the site can extract and abuse it.`,
           evidence: `${fileSlug} → "${redactSecret(sample)}"`,
           fixPrompt: `Remove the hardcoded ${pat.name} from the JS bundle. Find every direct call to the ${pat.fixHint} SDK from the client and move them behind a server endpoint (Vercel Edge Function or Supabase Edge Function) that reads the key from process.env. The client should call your own /api/* endpoint, never the ${pat.fixHint} API directly.${rotateLine}`,
+          // The detector matched a real provider-key regex on the unredacted
+          // bundle → self-declare verified impact (only for `critical` patterns;
+          // lower-severity provider keys like Google API keys stay unflagged).
+          ...(pat.severity === 'critical' ? { verifiedImpact: true as const } : {}),
         })
       }
     }
@@ -2426,6 +2456,8 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
               'The Supabase service-role key bypasses ALL row-level security. With this in the client bundle, anyone can read, write, or delete every row in your database.',
             evidence: `${fileSlug} → "${redactSecret(jwt)}" (role=service_role)`,
             fixPrompt: `Remove the hardcoded Supabase service-role key from your client bundle immediately. Move every call that needs the service role to a server endpoint (Edge Function or Vercel API route) and read the key from process.env.SUPABASE_SERVICE_ROLE_KEY. The client must only ever use the anon key. Then go to Supabase Dashboard → Project Settings → API and rotate the service_role key — assume it is fully compromised.`,
+            // Decoded a real JWT with role=service_role → verified impact.
+            verifiedImpact: true,
           })
         }
       } catch {
@@ -2571,9 +2603,57 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
     '/database.sql',
     '/dump.sql',
     '/config.json',
+    // extended-set sensitive files
+    '/.env.development',
+    '/.env.staging',
+    '/.env.backup',
+    '/.git/credentials',
+    '/.vscode/sftp.json',
+    '/db.sqlite',
+    '/database.sqlite',
+    '/backup.tar.gz',
+    '/.npmrc',
   ])
+
+  // Adaptive depth: the baseline set always runs; add the extended set only when
+  // early signals say the target is risky (work harder the less safe it looks).
+  const expandedProbing = decideProbeExpansion({
+    secretAlreadyFound: findings.some((f) => f.category === 'secrets' && f.severity === 'critical'),
+    hasBackend:
+      supabaseProjectIds.size > 0 ||
+      s3BucketHosts.size > 0 ||
+      /firebaseio\.com|firebaseapp\.com/i.test(bundleTextAll),
+    hasLoginSurface: /type=["']password["']/i.test(html),
+    hasAppShell:
+      !!detectedFramework ||
+      /__next_data__|<div[^>]+id=["'](?:root|app|__next)["']/i.test(html),
+  })
+  const pathsToProbe = expandedProbing
+    ? [...PATHS_TO_PROBE, ...EXTENDED_PATHS_TO_PROBE]
+    : PATHS_TO_PROBE
+  // CATCH-ALL / SOFT-404 DETECTION (2026-06-07 v5.3) — the fix for "Apple got
+  // 46". When a site (or its WAF/CDN, e.g. Akamai soft-blocking a datacenter IP)
+  // returns HTTP 200 for EVERY path instead of a real 404, the path prober reads
+  // ~31 non-existent files as "exposed" and the `paths` category maxes its
+  // penalty cap → a false F. We probe a guaranteed-nonexistent canary first; if
+  // it 200s (and isn't just the SPA shell, which is handled per-finding), the
+  // server is a catch-all and we DON'T trust any 200 as an exposure — only a
+  // body that actually contains a real secret still counts.
+  let catchAll = false
+  try {
+    const canaryUrl = new URL('/vguard-nonexistent-canary-9q7z2x.txt', finalUrl).toString()
+    const canaryResp = await fetchWithTimeout(canaryUrl, { method: 'GET' }, PROBE_TIMEOUT_MS)
+    if (canaryResp.status === 200) {
+      const canaryBody = (await canaryResp.text()).slice(0, 8192)
+      if (canaryBody.length >= 8 && !isSpaShellBody(canaryBody, html)) catchAll = true
+    }
+  } catch {
+    // canary fetch failed → assume normal (not catch-all)
+  }
+  let suppressedByCatchAll = 0
+
   const probeResults = await Promise.allSettled(
-    PATHS_TO_PROBE.map(async (probe) => {
+    pathsToProbe.map(async (probe) => {
       const probeUrl = new URL(probe.path, finalUrl).toString()
       const r = await fetchWithTimeout(probeUrl, { method: 'GET' }, PROBE_TIMEOUT_MS)
       if (!r.ok) return null
@@ -2627,8 +2707,18 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
         title: `${probe.label} is reachable at ${probe.path} (contains real secrets)`,
         description: `${probe.path} responds 200 with a body containing a real secret pattern (DB password, PEM key, provider live key, or service-role token). Treat all secrets in this file as compromised — rotate now.`,
         evidence: `GET ${probeUrl} → ${status} ${statusText}\nMatched redacted: ${redacted}`,
+        // `evidenceContainsRealSecret(body)` matched the unredacted body before
+        // we redacted it for display → self-declare verified impact.
+        verifiedImpact: true,
         fixPrompt: `1) Rotate every secret in ${probe.path} at its issuing service. 2) Remove ${probe.path} from deploy output (Vercel: add to .vercelignore; Next.js: ensure not under public/). 3) Add a 404 rewrite for /\\.env*, /\\.git/*, /backup.*. 4) curl -I ${probeUrl} → expect 404.`,
       })
+      continue
+    }
+    // (4.5) Catch-all server: a 200 here is the soft-404 / WAF page, not a real
+    // exposure (step 4 already kept any body that contained a real secret). Drop
+    // it so we don't manufacture dozens of false "exposed path" findings.
+    if (catchAll) {
+      suppressedByCatchAll++
       continue
     }
     // (5) Non-shell body, no sensitive pattern: downgrade `critical` to `warn`.
@@ -2643,6 +2733,21 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
       description: `${probe.path} responds with ${status}. ${probe.severity === 'critical' ? 'Body is not the SPA shell but no real secret patterns matched — needs manual review to confirm exposure.' : 'Files like this should never be public.'}`,
       evidence: `GET ${probeUrl} → ${status} ${statusText} (${body.length} bytes)`,
       fixPrompt: `Make sure ${probe.path} is not being deployed. Confirm .gitignore excludes it and your deploy output (public/, dist/, .next/, etc.) does not contain it. Add a rewrite rule that returns 404 for ${probe.path} and similar paths (/.env*, /.git/*, /.DS_Store, *.bak, *.swp, *~). On Vercel put this in vercel.json under "redirects". Redeploy and verify with: curl -I ${probeUrl}`,
+    })
+  }
+
+  // One honest informational note when catch-all suppression kicked in, so the
+  // report explains why path probing was inconclusive instead of silently
+  // dropping it (or inventing exposures).
+  if (catchAll && suppressedByCatchAll > 0) {
+    findings.push({
+      id: 'paths-catch-all-200',
+      severity: 'info',
+      category: 'meta',
+      title: 'Server returns 200 for unknown paths — path probing inconclusive',
+      description: `This origin (or its CDN/WAF) responded 200 to a guaranteed-nonexistent path, so it returns 200 for everything rather than a real 404. ${suppressedByCatchAll} path probe(s) were suppressed to avoid false "exposed file" findings. Only paths whose body contained an actual secret were kept. For reliable path-exposure testing, run a Stage 2 browser-assisted scan from your own origin.`,
+      evidence: `GET /vguard-nonexistent-canary-9q7z2x.txt → 200 (catch-all / soft-404)`,
+      fixPrompt: '',
     })
   }
 
@@ -3205,6 +3310,47 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
       fixPrompt: hasSupabase
         ? `Decide whether you want open public signup. If NO — go to Supabase Dashboard → Authentication → Providers → Email and disable "Enable email signups". For internal apps, also restrict via RLS: every protected table should check auth.jwt() ->> 'email' against a whitelist (allowed_emails table) — never rely on auth.uid() IS NOT NULL alone. If YES (you want public signup) — at minimum enable Email confirmation, set rate limits in Supabase Auth settings, and consider Turnstile/hCaptcha on the signup page to block automated abuse.`
         : `Audit each detected signup endpoint and decide if open registration is intended. If yes — add CAPTCHA, email verification, and rate limiting. If no — return 404 for unauthenticated callers and only allow signup via authenticated invite flow.`,
+    })
+  }
+
+  // === LOGIN RATE-LIMIT / BRUTE-FORCE PROTECTION — PASSIVE (canonical #19) ===
+  // Stage 1 is PASSIVE ONLY. We may DETECT login/signup/password-reset surfaces
+  // (passive GET discovery + HTML signals) but we NEVER send active invalid
+  // login attempts to a URL the user hasn't proven they own. The actual
+  // 5-request rate-limit test is gated to Stage 3 (ownership-verified) — see
+  // `probeAuthRateLimit` in `deep-scanner.ts`. This avoids legal risk, WAF
+  // blocks, abuse reports, and being misclassified as an attack tool.
+  const authEndpoints: string[] = []
+  for (const s of signupResults) {
+    try {
+      authEndpoints.push(new URL(s.path, url.origin).toString())
+    } catch {
+      // skip un-parseable
+    }
+  }
+  if (detectedAnonKey && supabaseProjectIds.size > 0) {
+    const pid = Array.from(supabaseProjectIds)[0]
+    authEndpoints.push(`https://${pid}.supabase.co/auth/v1/token?grant_type=password`)
+  }
+  const authHtmlSignal =
+    /type=["']password["']/i.test(html) ||
+    /\/(login|sign-?in|sign-?up|register|forgot-?password|reset-?password|password-reset)\b/i.test(
+      html,
+    )
+  if (authEndpoints.length > 0 || authHtmlSignal) {
+    findings.push({
+      id: 'auth-rate-limit-needs-consent',
+      severity: 'info',
+      category: 'auth',
+      title: 'Brute-force / login rate-limit check available (Stage 3)',
+      description:
+        'We detected a login / signup / password-reset surface. Brute-force protection check requires domain ownership verification or explicit consent. Stage 1 is passive only — V-Guards will not send test login attempts to a URL you have not verified you own.',
+      evidence:
+        authEndpoints.length > 0
+          ? authEndpoints.slice(0, 5).join('\n')
+          : 'Login / auth surface detected in page HTML (password field or auth route).',
+      fixPrompt:
+        'No action needed for this notice. To actively test brute-force protection, verify domain ownership (Stage 3): V-Guards then sends at most 5 deliberately-invalid logins (throwaway @example.invalid address, never a real credential — no password lists, no real usernames, no credential stuffing) and reports whether the endpoint throttles (429 / Retry-After / lockout / CAPTCHA). Meanwhile, harden every login / signup / password-reset endpoint with per-IP + per-account rate limiting, lockout / exponential backoff, and a CAPTCHA after repeated failures.',
     })
   }
 
@@ -3814,11 +3960,21 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
     })
   }
 
+  // -------------------------------------------------------------------------
+  // Canonical-check partition (2026-06-22). The Stage-1 main report + Vibe
+  // Score are based on EXACTLY the 23 canonical customer-facing checks. Every
+  // other detector above still RAN (the SSRF/private-host guard, framework /
+  // edge / signup / WAF discovery, JS-AST heuristics, DNS/email/header posture
+  // checks) because several feed the canonical findings or protect the scanner
+  // itself — but their findings are dropped here so they never reach the
+  // customer report or the scoring engine. See `canonical-checks.ts`.
+  const customerFindings = findings.filter(isCustomerFacingFinding)
+
   const totals = {
-    critical: findings.filter((f) => f.severity === 'critical').length,
-    warn: findings.filter((f) => f.severity === 'warn').length,
-    info: findings.filter((f) => f.severity === 'info').length,
-    ok: findings.filter((f) => f.severity === 'ok').length,
+    critical: customerFindings.filter((f) => f.severity === 'critical').length,
+    warn: customerFindings.filter((f) => f.severity === 'warn').length,
+    info: customerFindings.filter((f) => f.severity === 'info').length,
+    ok: customerFindings.filter((f) => f.severity === 'ok').length,
   }
   // Legacy static score kept as a debug fallback only — replaced below by
   // the dynamic engine. Don't read this for the live response.
@@ -3826,9 +3982,9 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
   void _legacyVibeScore
 
   const sevOrder: Record<Severity, number> = { critical: 0, warn: 1, info: 2, ok: 3 }
-  findings.sort((a, b) => sevOrder[a.severity] - sevOrder[b.severity])
+  customerFindings.sort((a, b) => sevOrder[a.severity] - sevOrder[b.severity])
 
-  const enriched = enrichFindings(findings, { finalUrl, detectedFramework })
+  const enriched = enrichFindings(customerFindings, { finalUrl, detectedFramework })
   // S1+5 — content-aware risk: classify the route from the final URL path
   // and let the scorer bump risk for sensitive contexts (admin/auth/checkout).
   const routeContext = classifyRouteContext(new URL(finalUrl).pathname)
@@ -3852,6 +4008,9 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
     isHttps: finalUrl.startsWith('https://'),
     cspHasUnsafe,
     stage: 1,
+    // V6 — WAF presence grants a small bonus (the synthetic `meta-waf-detected`
+    // finding is appended after the engine runs, so it must travel via ctx).
+    wafPresent: Boolean(wafState.vendor && wafState.vendor !== 'unknown'),
   })
   const legacyScored = applyRisk(enriched, routeContext)
   const engineOut = applyEngine(legacyScored, engineCtx)
@@ -3892,51 +4051,15 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
         : null,
   })
 
-  // Push a synthetic `info` finding when a WAF is in front of the origin.
-  // Keeping it as `info` (not `warn`) — having a WAF is a defense, not a
-  // problem. The value is informational: the user knows what's there, and
-  // sees whether our scan had to bypass an initial block to even reach them.
-  if (wafState.vendor && wafState.vendor !== 'unknown') {
-    const vendorLabel = VENDOR_LABELS[wafState.vendor]
-    const evidenceLines: string[] = [`Vendor detected: ${vendorLabel}`]
-    if (wafState.blocked && wafState.stealthRetrySucceeded) {
-      evidenceLines.push(
-        'Initial automated request was blocked, browser-like retry succeeded.',
-      )
-    } else if (wafState.blocked && wafState.stealthRetryAttempted && !wafState.stealthRetrySucceeded) {
-      evidenceLines.push(
-        'Both the initial and the stealth retry were blocked — only Stage 2 (browser-assisted) can scan past this layer.',
-      )
-    } else if (!wafState.blocked) {
-      evidenceLines.push('Detected from response headers; the scan was not blocked.')
-    }
-    scored.push({
-      id: 'meta-waf-detected',
-      severity: 'info',
-      category: 'meta',
-      title: `${vendorLabel} edge protection in front of your origin`,
-      description: `Your site sits behind ${vendorLabel}, which provides bot/DDoS mitigation before requests reach the origin. ${
-        wafState.blocked
-          ? `Vguard's initial automated request was blocked; we ${wafState.stealthRetrySucceeded ? 'completed the scan via a stealth retry that mimicked a real browser' : 'were not able to bypass the block — Stage 2 (browser-assisted) is the recommended next step'}.`
-          : 'Real users are unaffected.'
-      } Having edge protection is a defense, not a problem — this finding is informational.`,
-      evidence: evidenceLines.join('\n'),
-      fixPrompt: '',
-      riskScore: 0,
-      riskBand: 'low',
-      // Synthetic finding pushed AFTER the engine runs — tag it so the UI
-      // doesn't fall back to severity-based grouping (would land it in
-      // hardening-recommendations otherwise; informational is more honest
-      // since "WAF present" is a defense, not a finding).
-      riskClass: 'informational',
-      effectiveSeverity: 'info',
-      confidence: 'informational',
-      uiGroup: 'informational-observations',
-    })
-    // Re-roll counts to reflect the new info finding so the panel matches.
-    totals.info += 1
-    severityCounts.info += 1
-  }
+  // WAF presence is NOT one of the 23 canonical customer-facing checks, so it
+  // is no longer pushed as a finding into the report (it would read as an
+  // "excluded check"). The signal is still preserved where it belongs:
+  //   • the score still gets its small WAF bonus via `engineCtx.wafPresent`
+  //   • `attackSurface.wafVendor` carries the vendor for the attack-surface map
+  //   • the WAF-block error UI (ScanForm) handles the "denied automated access"
+  //     case separately.
+  // Detecting the target's WAF stays internal context, never a website
+  // vulnerability. (`VENDOR_LABELS` + `wafState` remain used by those paths.)
 
   // Reconciled totals — the legacy 4-bucket shape the UI/CLI/badge consume,
   // but now sourced from the ENGINE'S reconciled severities, not raw detector
@@ -3949,7 +4072,89 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
     ok: severityCounts.ok,
   }
 
-  return {
+  // -------------------------------------------------------------------------
+  // v5 — Target profile + coverage/confidence + self-explaining score.
+  // All from OBSERVABLE signals (never the brand). Coverage is reported
+  // SEPARATELY from vibeScore: a limited passive scan lowers confidence, not
+  // the score; a famous brand gets no boost.
+  // -------------------------------------------------------------------------
+  const sharedPlatformProfile = detectSharedPlatform(url.hostname)
+  const haystack = `${html}\n${bundleTextAll}`.toLowerCase()
+  const targetSignals: TargetSignals = {
+    framework: detectedFramework,
+    hasAppShell:
+      bundlesFetched > 0 &&
+      (/<div[^>]+id=["'](root|app|__next|__nuxt|svelte)["']/i.test(html) ||
+        /__next_data__|__nuxt__|window\.__remixcontext|astro-island/i.test(html) ||
+        !!detectedFramework),
+    hasLoginSurface:
+      attackSurface.authProviders.length > 0 ||
+      /type=["']password["']/i.test(html) ||
+      attackSurface.endpoints.some((e) => /\/(login|signin|sign-in|signup|register|auth)\b/i.test(e.path)),
+    hasApiSurface:
+      aiEndpoints.length > 0 ||
+      supabaseProjectIds.size > 0 ||
+      attackSurface.endpoints.some((e) => /(^\/api\/|\/graphql\b|openapi|swagger)/i.test(e.path)),
+    hasCheckout:
+      /\bpk_live_/.test(haystack) ||
+      /js\.stripe\.com|checkout\.stripe|paypal\.com\/sdk/i.test(haystack) ||
+      attackSurface.endpoints.some((e) => /\/(checkout|cart|payment|billing|order)\b/i.test(e.path)),
+    hasAdminRoute:
+      scored.some((f) => f.category === 'paths' && /admin/i.test(f.id)) ||
+      attackSurface.endpoints.some((e) => /\/(admin|dashboard|backoffice|wp-admin)\b/i.test(e.path)),
+    usesSupabase: supabaseProjectIds.size > 0,
+    usesFirebase: firebaseIdsCollected.size > 0,
+    usesS3: s3BucketHosts.size > 0,
+    vibeStackTrace:
+      /lovable|bolt\.new|gptengineer|stackblitz|replit|cursor\.sh|v0\.dev|webcontainer/i.test(haystack),
+    thirdPartyScriptCount: attackSurface.thirdPartyScripts.length,
+    bundleCount: bundlesFetched,
+    isSharedPlatform: !!sharedPlatformProfile,
+    hasProfessionalEdge: !!attackSurface.cdn || (!!wafState.vendor && wafState.vendor !== 'unknown'),
+    coverageBlocked: wafState.blocked && !wafState.stealthRetrySucceeded,
+    subdomainCount: subdomains.length,
+  }
+  const targetProfile = deriveTargetProfile(targetSignals)
+  const coverage = computeCoverage(targetSignals, engineOut.hasVerifiedImpact)
+  const intensity = decideScanIntensity(
+    dynamicVibeScore,
+    targetProfile,
+    engineOut.hasVerifiedImpact,
+    false, // Stage 1 is never ownership-verified
+  )
+  // Reflect the REAL work done: if the adaptive prober expanded its depth, the
+  // brain already worked harder than "concise".
+  const scanIntensityUsed =
+    expandedProbing && intensity.scanIntensityUsed === 'concise'
+      ? ('standard' as const)
+      : intensity.scanIntensityUsed
+  const hasExposedSecrets = scored.some(
+    (f) => f.category === 'secrets' && f.severity === 'critical',
+  )
+  const explanation = buildScoreExplanation({
+    findings: scored,
+    breakdown: scoreBreakdown,
+    profile: targetProfile,
+    coverage,
+    hasVerifiedImpact: engineOut.hasVerifiedImpact,
+    httpsActive: finalUrl.startsWith('https://'),
+    hasExposedSecrets,
+  })
+  if (expandedProbing) {
+    explanation.coverageLimitations = [
+      'Extended probe set used (target showed app/backend/login signals — scanned harder).',
+      ...explanation.coverageLimitations,
+    ]
+  }
+  const enrichedBreakdown = {
+    ...scoreBreakdown,
+    ...explanation,
+    recommendedNextStep: intensity.recommendedNextStep,
+    scanIntensityUsed,
+    targetProfile,
+  }
+
+  return withDisplayScore({
     ok: true,
     url: rawUrl,
     scannedAt: new Date().toISOString(),
@@ -3960,7 +4165,11 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
     aggregateRiskBand: engineOut.aggregateBand,
     totals: reconciledTotals,
     severityCounts,
-    scoreBreakdown,
+    scoreBreakdown: enrichedBreakdown,
+    targetProfile,
+    scanConfidence: coverage.scanConfidence,
+    coverageScore: coverage.coverageScore,
+    scanIntensityUsed,
     findings: scored,
     attackSurface,
     stage: 1 as const,
@@ -3987,6 +4196,9 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
           return p
         }
       }),
+      // Passively-detected auth endpoints — Stage 3 uses these (and ONLY these,
+      // on an ownership-verified domain) for the active login rate-limit test.
+      authEndpoints: Array.from(new Set(authEndpoints)),
     },
-  }
+  })
 }

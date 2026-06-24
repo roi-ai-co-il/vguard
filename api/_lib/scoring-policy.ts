@@ -12,7 +12,47 @@
  * than emitting `critical` and relying on the engine to demote.
  */
 
-import type { Category, EffectiveSeverity, Finding, Grade, Severity } from '../../src/lib/scanner-types.js'
+import type {
+  BusinessImpact,
+  Category,
+  EffectiveSeverity,
+  Finding,
+  Grade,
+  RiskCategory,
+  ScoreTier,
+  Severity,
+} from '../../src/lib/scanner-types.js'
+import {
+  isRealProviderSecretId,
+  isSensitiveFileId,
+  isPublicDataStoreId,
+  isAdminUnauthDataId,
+  isOpenRedirectId,
+  isStage3ConfirmationId,
+  isCorsId,
+  isBrokenTlsId,
+  isSourceMapWithSecretsId,
+  isCriticalDepId,
+  isSubdomainTakeoverId,
+  isPublicClientIdentifier as isPublicClientIdentifierById,
+  isAdvancedHardeningHeaderId,
+  isAnonymousWriteId,
+  isCsrfId,
+  isGoldenKindId,
+  isGradeCapGoldenId,
+  isIdorId,
+  isPathTraversalId,
+  isPromptInjectionId,
+  isRateLimitId,
+  isRceId,
+  isReconFindingId,
+  isReflectedXssId,
+  isRlsBypassId,
+  isSourceMapId,
+  isSqliId,
+  isSsrfId,
+  isVerifiedXssId,
+} from './finding-ids.js'
 
 // ---------------------------------------------------------------------------
 // Enums (kept here for SSOT; engine re-exports for back-compat)
@@ -25,7 +65,29 @@ export type RiskClass =
   | 'low-hardening'
   | 'informational'
 
-export type Confidence = 'confirmed' | 'likely' | 'informational'
+/**
+ * V6 confidence vocabulary. Every finding gets exactly one:
+ *   verified — exploitation / direct-observation evidence (browser-executed
+ *              XSS, file content returned, Stage-3 confirmation, real secret
+ *              the detector saw unredacted)
+ *   likely   — strong signal short of exploitation (runtime observation,
+ *              SQL error signature, critical detector finding unverified)
+ *   possible — detection only (reflected canary, pattern match, heuristic)
+ */
+export type Confidence = 'verified' | 'likely' | 'possible'
+
+/** Accept legacy spellings from persisted data / older callers. */
+export function normalizeConfidence(c: string | undefined | null): Confidence {
+  switch (c) {
+    case 'verified':
+    case 'confirmed':
+      return 'verified'
+    case 'likely':
+      return 'likely'
+    default:
+      return 'possible'
+  }
+}
 
 export type UiGroup =
   | 'confirmed-vulnerabilities'
@@ -37,54 +99,23 @@ export type UiGroup =
 export type RouteContext = 'sensitive' | 'public' | 'unknown'
 
 // ---------------------------------------------------------------------------
-// Numeric constants
-// ---------------------------------------------------------------------------
-
-/** Per-finding 0–10 base score by risk class. */
-export const CLASS_BASE: Record<RiskClass, number> = {
-  'critical-exploit': 9.0,
-  'high-impact-misconfig': 6.0,
-  'medium-weakness': 3.5,
-  'low-hardening': 1.2,
-  informational: 0.4,
-}
-
-/** Aggregate score-penalty per first-hit per risk class. */
-export const CLASS_DAMAGE: Record<RiskClass, number> = {
-  // 35 (not 30) so a single confirmed critical lands the score below 60
-  // per Royi's spec. With CONFIDENCE_MULT.confirmed=1.0 and an avg
-  // riskScore→penalty multiplier of ~1.3, one critical ≈ 45 pts off → ~55.
-  'critical-exploit': 35,
-  'high-impact-misconfig': 15,
-  'medium-weakness': 6,
-  'low-hardening': 1.5,
-  informational: 0.2,
-}
-
-/**
- * Confidence down-weighting (Snyk reachability / OWASP likelihood). A passive,
- * version-inferred, or heuristic finding must dent far less than a confirmed
- * exploit — this is the single biggest lever against false-positive complaints.
- * Retuned 2026-06-01 (was 1.0 / 0.85 / 0.6) for sharper separation.
- */
-export const CONFIDENCE_MULT: Record<Confidence, number> = {
-  confirmed: 1.0,
-  likely: 0.7,
-  informational: 0.45,
-}
-
-/** Diminishing-returns factor applied per additional finding in a class. */
-export const DECAY_FACTOR = 0.6
-
-// ---------------------------------------------------------------------------
-// Score v4 — band-anchored hybrid (2026-06-01)
+// V6 — risk-based scoring model (2026-06-13)
 //
-// Grounded in how the field's leaders grade (researched 2026-06-01):
-//   • SSL Labs  → the worst issue CAPS the grade (band ceiling).
-//   • ImmuniWeb → per-category swing caps stop one noisy category dominating.
-//   • CVSS      → 5 severity tiers map to score ranges.
-//   • Observatory → clean = baseline-high, the top grade is EARNED, not default.
-//   • Snyk/OWASP → confidence/likelihood down-weights unconfirmed findings.
+// The score measures REAL-WORLD RISK: data exposure, unauthorized access,
+// account/system compromise, business impact. It does NOT measure checklist
+// completeness — fingerprinting, tech detection, and header presence have
+// little or no influence.
+//
+//   Score = 100 − Σ penalties (+ WAF bonus) → grade-cap rule → grade
+//
+// Four weighted risk categories (weights express through penalty magnitudes
+// and the literal posture clamp — NOT through divided budgets, because a
+// single verified .env must be able to reach F on its own):
+//   data    40% — secret & data exposure
+//   access  30% — access control & authorization
+//   exploit 25% — exploitable vulnerabilities
+//   posture  5% — defense-in-depth hardening (clamped to 5 points total)
+//   recon    0% — visibility only
 // ---------------------------------------------------------------------------
 
 /** riskClass → the single reconciled severity shown AND scored. */
@@ -96,53 +127,95 @@ export const RISKCLASS_TO_EFFECTIVE: Record<RiskClass, EffectiveSeverity> = {
   informational: 'info',
 }
 
-/** Base point deduction per finding, by reconciled severity (pre confidence/decay). */
-export const SEVERITY_PENALTY: Record<EffectiveSeverity, number> = {
-  critical: 45,
-  high: 22,
-  medium: 10,
-  low: 3,
-  info: 0,
+/** The model weights (documentation + breakdown display). */
+export const RISK_CATEGORY_WEIGHT: Record<RiskCategory, number> = {
+  data: 0.4,
+  access: 0.3,
+  exploit: 0.25,
+  posture: 0.05,
+  recon: 0,
+}
+
+export const RISK_CATEGORY_LABELS: Record<RiskCategory, string> = {
+  data: 'Data & secret exposure',
+  access: 'Access control & authorization',
+  exploit: 'Exploitable vulnerabilities',
+  posture: 'Security posture & hardening',
+  recon: 'Recon & visibility',
 }
 
 /**
- * Band ceiling — the worst severity present caps the maximum achievable score
- * (SSL Labs mechanic). A site with a Critical CANNOT score above 49 no matter
- * how clean the rest is. `info` imposes no ceiling.
+ * Penalty BASE for a Golden-Finding kind (major security failure) at verified
+ * confidence and baseline business impact. Confidence scales it down for
+ * likely (×0.6) / possible (×0.2) detections of the same kind.
  */
-export const BAND_CEILING: Record<EffectiveSeverity, number> = {
-  // A CONFIRMED exploit/leak fails outright. Unconfirmed-but-serious
-  // misconfigs (high) land at C, not D/F — a real gap, not "you're owned".
-  // This is what stops a mature site (e.g. Amazon, whose session cookie lacks
-  // HttpOnly) from being graded D for one hardening miss. Mozilla Observatory
-  // similarly grades most major sites B/C/D, not F.
-  critical: 49, // → F
-  high: 70, // → C (low end)
-  medium: 79, // → C (high end)
-  low: 89, // → B
-  info: 100, // → A / A+
+export const GOLDEN_PENALTY: Record<RiskCategory, number> = {
+  data: 70, // verified .env / service-role / AWS creds / DB dump → F on its own
+  access: 60, // verified IDOR / RLS bypass / anonymous write
+  exploit: 65, // verified XSS / SQLi / SSRF / traversal / RCE
+  posture: 0, // no golden posture kinds exist
+  recon: 0,
 }
 
 /**
- * Per-category swing cap — the maximum penalty a single category may contribute
- * (ImmuniWeb mechanic). Applied ONLY to categories whose worst finding is
- * medium-or-below; a category that carries a real critical/high is never capped
- * (we never want to mute confirmed risk). Categories absent here use
- * `DEFAULT_CATEGORY_CAP`.
+ * Penalty BASE for non-golden findings, by risk category × tier. Tier comes
+ * from the riskClass: critical-exploit→critical, high-impact-misconfig→high,
+ * medium-weakness→medium, low-hardening→low.
  */
-export const CATEGORY_CAP: Partial<Record<Category, number>> = {
-  headers: 22,
-  cookies: 14,
-  html: 12,
-  integrity: 8,
-  dns: 8,
-  email: 8,
-  methods: 10,
-  'mixed-content': 18,
-  sourcemaps: 14,
-  meta: 0,
+export const REGULAR_PENALTY: Record<
+  RiskCategory,
+  { critical: number; high: number; medium: number; low: number }
+> = {
+  data: { critical: 32, high: 24, medium: 12, low: 5 },
+  access: { critical: 28, high: 20, medium: 10, low: 4 },
+  exploit: { critical: 26, high: 18, medium: 9, low: 4 },
+  posture: { critical: 12, high: 4, medium: 2.5, low: 1.5 },
+  recon: { critical: 0, high: 0, medium: 0, low: 0 },
 }
-export const DEFAULT_CATEGORY_CAP = 30
+
+/**
+ * V6 confidence multipliers (the spec's 100% / 60% / 20%). Detection alone is
+ * never verification — this is the single biggest lever against both
+ * false-positive complaints and detection-inflated scores.
+ */
+export const CONFIDENCE_MULT: Record<Confidence, number> = {
+  verified: 1.0,
+  likely: 0.6,
+  possible: 0.2,
+}
+
+/**
+ * Business-impact multipliers — the same technical finding is worth more on a
+ * sensitive asset. For VERIFIED golden findings the multiplier is floored at
+ * 1.0 (business context can never rescue a verified critical).
+ */
+export const BUSINESS_IMPACT_MULT: Record<BusinessImpact, number> = {
+  public: 0.7,
+  userData: 1.0,
+  financial: 1.3,
+  adminInternal: 1.6,
+}
+
+/** Diminishing-returns factor applied per additional finding in a risk category. */
+export const DECAY_FACTOR = 0.6
+
+/**
+ * The posture category's 5% weight, enforced literally: all unverified
+ * defense-in-depth gaps together can never remove more than 5 points.
+ * (A VERIFIED posture finding — e.g. a critical CVE match — penalizes via the
+ * table outside this clamp; we never mute confirmed risk.)
+ */
+export const POSTURE_TOTAL_CAP = 5
+
+/** WAF present → small bonus. WAF absent → no penalty, ever. */
+export const WAF_BONUS = 2
+
+/**
+ * SCORE-CAP RULE: any VERIFIED finding in the grade-cap golden subset (IDOR,
+ * RLS bypass, SQLi, .env, DB dump, service-role key, RCE) caps the score at 79
+ * (max grade C) until fixed. Overrides all other calculations.
+ */
+export const GOLDEN_CAP_SCORE = 79
 
 /** Human labels for the breakdown card. */
 export const CATEGORY_LABELS: Record<Category, string> = {
@@ -167,28 +240,28 @@ export const CATEGORY_LABELS: Record<Category, string> = {
   meta: 'Informational',
 }
 
-/** finalScore → letter grade. Aligned to the band ceilings above. */
-export function gradeForScore(score: number, isClean: boolean): Grade {
-  if (score >= 90) return isClean && score >= 100 ? 'A+' : 'A'
+/**
+ * finalScore → letter grade. V6 scale:
+ * A 90–100 · B 80–89 · C 70–79 · D 60–69 · F 0–59.
+ */
+export function gradeForScore(score: number): Grade {
+  if (score >= 90) return 'A'
   if (score >= 80) return 'B'
-  if (score >= 65) return 'C'
-  if (score >= 50) return 'D'
+  if (score >= 70) return 'C'
+  if (score >= 60) return 'D'
   return 'F'
 }
 
-/** Caps when `hasVerifiedImpact === false`. */
-export const CAPS = {
-  hardeningTotal: 10,
-  informationalTotal: 1,
-  /** Cookie/header/CSP-only combined cap (medium + hardening + info). */
-  headerCspOnlyCombined: 15,
-}
-
-/** Aggregate band thresholds (read off 100 - vibeScore). */
-export const BAND_THRESHOLDS = {
-  medium: 15,
-  high: 36,
-  severe: 61,
+/**
+ * Qualifier inside the A band. 100 is reserved for exceptional cases — it is
+ * only reachable with literally zero deductions (see the perfect-score gate in
+ * the engine).
+ */
+export function scoreTierForScore(score: number): ScoreTier | undefined {
+  if (score >= 100) return 'exceptional'
+  if (score >= 95) return 'outstanding'
+  if (score >= 90) return 'excellent'
+  return undefined
 }
 
 // ---------------------------------------------------------------------------
@@ -310,14 +383,17 @@ export const WELL_KNOWN_PUBLIC_PATHS: RegExp[] = [
 const ID = (s: string, ...ps: string[]) =>
   ps.some((p) => s.startsWith(p) || s.includes(p))
 
-/** True if the id/evidence/description looks like a publishable client ID. */
+/**
+ * True if the id/evidence/description looks like a publishable client ID.
+ * Delegates to the shared finding-ids contract (single source of truth) so the
+ * detectors and the engine can never disagree on what counts as "public".
+ */
 export function isPublicClientIdentifier(
   id: string,
   evidence: string,
   description: string,
 ): boolean {
-  const hay = `${id} ${evidence} ${description}`.toLowerCase()
-  return PUBLIC_CLIENT_ID_TOKENS.some((t) => hay.includes(t))
+  return isPublicClientIdentifierById(id, evidence, description)
 }
 
 export function isAdvancedHardeningHeader(
@@ -325,8 +401,7 @@ export function isAdvancedHardeningHeader(
   evidence: string,
   description: string,
 ): boolean {
-  const hay = `${id} ${evidence} ${description}`.toLowerCase()
-  return ADVANCED_HARDENING_TOKENS.some((t) => hay.includes(t))
+  return isAdvancedHardeningHeaderId(id, evidence, description)
 }
 
 /**
@@ -384,6 +459,12 @@ export interface ScoringContext {
   cspHasUnsafe?: boolean
   httpsActive: boolean
   stage: 1 | 2 | 3
+  /**
+   * V6 — a WAF/edge protection fronts the origin. Grants a small score bonus
+   * (never a penalty when absent). Passed by the scanner because the synthetic
+   * `meta-waf-detected` finding is appended AFTER the engine runs.
+   */
+  wafPresent?: boolean
 }
 
 export interface FindingTraits {
@@ -420,127 +501,235 @@ export function verifiedImpactPredicate(
   const cat = finding.category
   const sev = finding.severity
   const ev = finding.evidence || ''
-  const detectorFlaggedCritical = sev === 'critical'
+  const critical = sev === 'critical'
 
-  // Active-probe hits — these are confirmed exploits at the network level.
-  const activeProbeHit = ID(
-    id,
-    'paths-xss-reflected',
-    'paths-sqli',
-    'paths-open-redirect',
-    'paths-traversal',
-    'paths-ssrf',
-  )
-  if (activeProbeHit) return true
+  // v5.2 — a detector that saw the unredacted evidence can SELF-DECLARE verified
+  // impact. Honoured first so the security decision no longer depends solely on
+  // id-string matching (closes the architecture gap from the audit). Detectors
+  // only set this when they are certain (real secret / confirmed probe / Stage-3
+  // hit), never for public client identifiers.
+  if (finding.verifiedImpact === true) return true
 
-  // Provider-specific secret detectors that committed to `critical`.
-  // The AST heuristic (`js-ast-hardcoded-creds`) is excluded by NOT being
-  // in PROVIDER_SPECIFIC_SECRET_IDS — it stays as `warn` per the new spec.
-  const isProviderSpecificSecret = PROVIDER_SPECIFIC_SECRET_IDS.some((p) => id.startsWith(p))
-  if (isProviderSpecificSecret && detectorFlaggedCritical && !traits.knownPublicAsset) {
-    return true
-  }
+  // -------------------------------------------------------------------------
+  // 2026-06-07 v5 REWRITE — all matching now goes through the shared
+  // finding-ids contract, so the gate fires on the REAL emitted ids
+  // (`secret-stripe-<file>`, `path--env`, `paths-reflected-xss`,
+  // `headers-cors-wildcard`, `auth-rls-leak`, …) and the legacy spellings.
+  //
+  // Detector severity is trusted here: the detector saw the UNREDACTED body and
+  // only committed to `critical` after confirming a real secret/listing. The
+  // `evidence` field is redacted (first 8 + last 4), so re-running
+  // `evidenceContainsRealSecret` on it would FALSE-negative every real leak —
+  // that double-bug is exactly what kept .env/secret leaks at "medium".
+  // -------------------------------------------------------------------------
 
-  // Sensitive-file exposures. Detector must have flagged critical AND the
-  // evidence must contain a real secret pattern. The detector is responsible
-  // for putting the matching content in `evidence`; if it didn't, we don't
-  // pass the gate (no body, no proof).
-  const isSensitiveFile = ID(
-    id,
-    'paths-env',
-    'paths-git',
-    'paths-aws-credentials',
-    'paths-database-sql',
-    'paths-backup',
-    'paths-firebase-rtdb-root',
-    'paths-s3-list',
-    'paths-supabase-storage-public',
-    'paths-firebase-storage-public',
-    'paths-phpinfo',
-  )
-  if (isSensitiveFile && detectorFlaggedCritical) {
-    if (cat === 'paths' && (id.startsWith('paths-env') || id.startsWith('paths-git') || id.startsWith('paths-database-sql') || id.startsWith('paths-backup') || id.startsWith('paths-aws-credentials'))) {
-      // For env/git/db/backup — REQUIRE a real-secret pattern in evidence.
-      // The detector is supposed to embed the matched line.
-      return evidenceContainsRealSecret(ev)
-    }
-    // Public buckets / RTDB-root / phpinfo — the detector observation alone
-    // (200 + listing/dump shape) is the verified impact.
-    return true
-  }
+  // Stage-3 ownership-verified confirmations — always real impact.
+  if (isStage3ConfirmationId(id)) return true
 
-  // Source maps — REMOVED from the bare `sourcemaps-exposed` id; only the
-  // `-with-secrets` variant verifies.
-  if (id === 'sourcemaps-exposed-with-secrets' && detectorFlaggedCritical) return true
+  // V6 — detection is NOT verification. A reflected canary is Possible XSS
+  // (browser execution required for Verified XSS) and an SQL error signature
+  // is suspected SQLi — neither verifies here; they score via likely/possible
+  // confidence instead. Traversal (actual file content returned), SSRF
+  // (out-of-band confirmation), browser-executed XSS, and RCE ARE exploitation
+  // evidence. Open redirect never verifies (graded high, not critical).
+  if (isVerifiedXssId(id)) return true
+  if (isPathTraversalId(id) && !isOpenRedirectId(id)) return true
+  if (isSsrfId(id)) return true
+  if (isRceId(id)) return true
 
-  // Plain HTTP serving credentials form / mixed-content credentialed form.
-  if (cat === 'mixed-content' && (ID(id, 'mixed-content-form-credentials') || ID(id, 'mixed-content-form'))) {
-    return true
-  }
+  // Real provider/credential secret shipped to the client, detector-confirmed.
+  if (isRealProviderSecretId(id) && critical && !traits.knownPublicAsset) return true
+
+  // Sensitive file reachable with a confirmed real secret in the body.
+  if (isSensitiveFileId(id) && critical) return true
+
+  // Public, listable cloud bucket / DB root — observation IS the impact.
+  if (isPublicDataStoreId(id) && critical) return true
+
+  // Admin route returning real data without auth.
+  if (isAdminUnauthDataId(id) && critical) return true
+
+  // Source map shipping real secret material.
+  if (isSourceMapWithSecretsId(id) && critical) return true
+
+  // Broken transport (no HTTPS / expired cert / TLS 1.0-1.1 / weak cipher).
+  if (isBrokenTlsId(id)) return true
   if (!ctx.httpsActive && cat === 'tls' && sev !== 'ok') return true
 
-  // TLS broken in a way that allows real downgrade.
-  if (ID(id, 'tls-cert-expired', 'tls-old-version', 'tls-weak-cipher', 'tls-weak-cipher-real')) {
+  // Plain-HTTP / mixed-content credential form.
+  if (cat === 'mixed-content' && ID(id, 'mixed-content-form-credentials', 'mixed-content-form')) {
     return true
   }
 
-  // Stage 3 confirmations.
-  if (
-    ID(
-      id,
-      'stage3-rls-broken',
-      'stage3-storage-public-write',
-      'stage3-admin-unauth-data',
-      'stage3-mass-assignment',
-      'stage3-idor',
-      'stage3-path-traversal',
-    )
-  ) {
+  // Dangerous CORS — wildcard + credentials makes the detector emit `critical`.
+  if (isCorsId(id) && critical) return true
+
+  // Subdomain takeover ready.
+  if (isSubdomainTakeoverId(id)) return true
+
+  // Vulnerable dependency with a critical CVE match.
+  if (isCriticalDepId(id) && critical) return true
+
+  // Runtime-confirmed auth bypass / anon RLS select.
+  if (traits.authImpact && traits.runtimeConfirmed && ID(id, 'auth-bypass-confirmed', 'rls-anon-select')) {
     return true
   }
 
-  // Admin unauth-data observation from Stage 1 detector.
-  if (id === 'paths-admin-unauth-data' && detectorFlaggedCritical) return true
-  // Existing admin detector ID — bundle-discovered admin route 200 unauth.
-  if (id === 'paths-admin-route-public' && detectorFlaggedCritical) return true
-
-  // Auth bypass confirmed at runtime.
-  if (
-    traits.authImpact &&
-    traits.runtimeConfirmed &&
-    ID(id, 'auth-bypass-confirmed', 'rls-anon-select')
-  ) {
-    return true
-  }
-
-  // Subdomain takeover.
-  if (ID(id, 'dns-subdomain-takeover-ready')) return true
-
-  // Vulnerable dependency with CVE match.
-  if (detectorFlaggedCritical && ID(id, 'deps-server-cve-', 'deps-npm-')) return true
-
-  // Dangerous CORS — `*` + Allow-Credentials: true.
-  if (
-    detectorFlaggedCritical &&
-    ID(id, 'cors-credentials-wildcard', 'cors-creds-wildcard')
-  ) {
-    return true
-  }
-
-  // Directory listing exposed.
-  if (detectorFlaggedCritical && ID(id, 'paths-directory-listing', 'paths-dir-listing')) {
-    return true
-  }
-
-  // Public write/delete confirmed.
-  if (
-    detectorFlaggedCritical &&
-    ID(id, 'paths-supabase-storage-public-write', 'paths-s3-public-write')
-  ) {
-    return true
-  }
+  // (kept for completeness — `ev` still consumed so lint stays quiet)
+  void ev
 
   return false
+}
+
+// ---------------------------------------------------------------------------
+// V6 — risk-category mapping + golden/recon classification
+// ---------------------------------------------------------------------------
+
+const AUTH_CATEGORIES: ReadonlySet<string> = new Set([
+  'auth',
+  'auth-enum',
+  'auth-weak',
+  'auth-disclosure',
+])
+
+const POSTURE_CATEGORIES: ReadonlySet<string> = new Set([
+  'headers',
+  'cookies',
+  'tls',
+  'integrity',
+  'mixed-content',
+  'html',
+  'dns',
+  'email',
+  'methods',
+  'deps',
+  'sourcemaps',
+])
+
+/**
+ * True for recon / fingerprinting observations — visibility only, zero score
+ * impact (robots, sitemap, framework/WAF detection, GraphQL/Swagger presence,
+ * server headers, health endpoints, public client identifiers, …).
+ */
+export function isReconFinding(
+  finding: Pick<Finding, 'id' | 'category' | 'severity' | 'evidence' | 'description'>,
+  opts: { knownPublicAsset: boolean },
+): boolean {
+  if (finding.severity === 'ok') return true
+  if (finding.category === 'meta') return true
+  if (opts.knownPublicAsset) return true
+  const id = finding.id || ''
+  if (isReconFindingId(id)) return true
+  // "AI endpoint detected" is recon; an actual prompt-injection hit is not.
+  if (finding.category === 'ai' && !isPromptInjectionId(id)) return true
+  return false
+}
+
+/**
+ * Map a finding to its V6 risk category. Order matters: recon first (zero
+ * impact), then the specific exposure/exploit kinds, then auth/access, then
+ * everything defense-in-depth falls to posture.
+ */
+export function mapToRiskCategory(
+  finding: Pick<Finding, 'id' | 'category' | 'severity' | 'evidence' | 'description'>,
+  opts: { knownPublicAsset: boolean },
+): RiskCategory {
+  const id = finding.id || ''
+  const cat = finding.category
+
+  if (isReconFinding(finding, opts)) return 'recon'
+
+  // data — secret & data exposure
+  if (
+    isRealProviderSecretId(id) ||
+    isSensitiveFileId(id) ||
+    isPublicDataStoreId(id) ||
+    isSourceMapWithSecretsId(id) ||
+    ID(id, 'localstorage-auth-token', 'sensitive-data')
+  ) {
+    return 'data'
+  }
+  if (cat === 'secrets') return 'data'
+
+  // exploit — exploitable vulnerabilities (checked before the generic Stage-3
+  // bucket so prompt-injection/XSS/SQLi confirmations land here, not access)
+  if (
+    isVerifiedXssId(id) ||
+    isReflectedXssId(id) ||
+    isSqliId(id) ||
+    isSsrfId(id) ||
+    isPathTraversalId(id) ||
+    isOpenRedirectId(id) ||
+    isRceId(id) ||
+    isCsrfId(id) ||
+    isPromptInjectionId(id) ||
+    isSubdomainTakeoverId(id)
+  ) {
+    return 'exploit'
+  }
+  // Broken transport (plain HTTP / expired cert / TLS 1.0-1.1) is a real,
+  // MITM-exploitable break — NOT posture hygiene. Weak-but-working TLS config
+  // stays posture below.
+  if (isBrokenTlsId(id)) return 'exploit'
+  if (cat === 'mixed-content' && ID(id, 'form')) return 'exploit'
+  if (cat === 'html' && finding.severity === 'critical') return 'exploit'
+
+  // access — access control & authorization
+  if (
+    isRlsBypassId(id) ||
+    isIdorId(id) ||
+    isAnonymousWriteId(id) ||
+    isAdminUnauthDataId(id) ||
+    isStage3ConfirmationId(id) ||
+    isCorsId(id) ||
+    isRateLimitId(id)
+  ) {
+    return 'access'
+  }
+  if (AUTH_CATEGORIES.has(cat)) return 'access'
+
+  // posture — defense-in-depth
+  if (POSTURE_CATEGORIES.has(cat)) return 'posture'
+  if (isSourceMapId(id)) return 'posture'
+
+  // Remaining path probes are about exposed surface → data; everything else
+  // unclassified defaults to posture (safe: clamped, minimal influence).
+  if (cat === 'paths') return 'data'
+  return 'posture'
+}
+
+/**
+ * A finding's KIND is golden (drives the penalty base). The finding IS a
+ * Golden Finding — a verified major security failure — only when its kind is
+ * golden AND it carries verified impact AND it isn't a public client
+ * identifier mis-emitted as a secret.
+ */
+export function isGoldenKindFinding(
+  finding: Pick<Finding, 'id' | 'category'>,
+  opts: { knownPublicAsset: boolean },
+): boolean {
+  if (opts.knownPublicAsset) return false
+  if (isGoldenKindId(finding.id || '')) return true
+  // An unrecognized id in the `secrets` category is still a "secrets in
+  // responses" kind (e.g. a future/renamed detector) — public client ids and
+  // the AST heuristic were already excluded via knownPublicAsset above.
+  return finding.category === 'secrets'
+}
+
+export function isGoldenFinding(
+  finding: Pick<Finding, 'id' | 'category'>,
+  opts: { knownPublicAsset: boolean; verifiedImpact: boolean },
+): boolean {
+  return opts.verifiedImpact && isGoldenKindFinding(finding, opts)
+}
+
+/** True when the SCORE-CAP rule applies to this finding (verified cap-set kind). */
+export function gradeCapApplies(
+  finding: Pick<Finding, 'id'>,
+  opts: { knownPublicAsset: boolean; verifiedImpact: boolean },
+): boolean {
+  if (!opts.verifiedImpact || opts.knownPublicAsset) return false
+  return isGradeCapGoldenId(finding.id || '')
 }
 
 // ---------------------------------------------------------------------------
