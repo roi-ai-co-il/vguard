@@ -210,7 +210,7 @@ const PRIVACY: LegalDocument = {
     {
       level: 2,
       heading: '8. Your Rights',
-      body: 'Depending on your jurisdiction (e.g., GDPR or חוק הגנת הפרטיות), you may have the right to:',
+      body: "Depending on your jurisdiction (e.g., the EU's GDPR or Israel's Privacy Protection Law), you may have the right to:",
       bullets: [
         'Request access to your data',
         'Request deletion of your data',

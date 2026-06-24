@@ -945,7 +945,7 @@ function detectFreeTierProvider(domain: string): FreeTierProvider | null {
   if (/\.wixsite\.com$/.test(d)) {
     return {
       name: 'Wix',
-      fileHint: 'Wix subdomains don\'t allow custom .well-known files. To run Stage 3 here, connect a custom domain in Wix settings (~$10/yr) and use DNY verification.',
+      fileHint: 'Wix subdomains don\'t allow custom .well-known files. To run Stage 3 here, connect a custom domain in Wix settings (~$10/yr) and use DNS verification.',
       vercelTokenWorks: false,
     }
   }

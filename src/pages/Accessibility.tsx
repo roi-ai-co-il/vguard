@@ -110,7 +110,7 @@ export default function Accessibility() {
             </p>
             <ul className="list-none space-y-1">
               <li>
-                <span className="text-(--color-fg)">Accessibility lead:</span> Roy Argaman
+                <span className="text-(--color-fg)">Accessibility lead:</span> Royi Argaman
               </li>
               <li>
                 <span className="text-(--color-fg)">Email:</span>{' '}
