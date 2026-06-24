@@ -52,7 +52,7 @@ const DEFAULT_MARKERS: { lat: number; lng: number; label?: string }[] = [
   { lat: CITY.paris[0], lng: CITY.paris[1] },
   { lat: CITY.berlin[0], lng: CITY.berlin[1] },
   { lat: CITY.moscow[0], lng: CITY.moscow[1] },
-  { lat: CITY.telaviv[0], lng: CITY.telaviv[1], label: 'Tel Aviv' },
+  { lat: CITY.telaviv[0], lng: CITY.telaviv[1] },
   { lat: CITY.dubai[0], lng: CITY.dubai[1] },
   { lat: CITY.cairo[0], lng: CITY.cairo[1] },
   { lat: CITY.lagos[0], lng: CITY.lagos[1] },

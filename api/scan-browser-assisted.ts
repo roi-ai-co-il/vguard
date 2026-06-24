@@ -594,7 +594,7 @@ function analyzeBrowserScan(data: WorkerScanResult): Finding[] {
         severity: 'warn',
         category: 'meta',
         title: `${pii.length} PII match${pii.length === 1 ? '' : 'es'} in response bod${pii.length === 1 ? 'y' : 'ies'}`,
-        description: `Stage 2 found PII patterns (emails, phone numbers, Israeli IDs, credit cards) in response bodies the browser fetched. Some are legitimate (the logged-in user's own profile); some are leaks (an unauthenticated endpoint that returns other users' data, or a debug endpoint that dumps a database). Audit the sources below.`,
+        description: `Stage 2 found PII patterns (emails, phone numbers, national ID numbers, credit cards) in response bodies the browser fetched. Some are legitimate (the logged-in user's own profile); some are leaks (an unauthenticated endpoint that returns other users' data, or a debug endpoint that dumps a database). Audit the sources below.`,
         evidence: pii.slice(0, 8).map((p) => `${p.type} "${p.redactedSample}" in ${p.sourceUrl}`).join('\n'),
         fixPrompt: `For each endpoint above: confirm the caller is authenticated AND authorized to see this data. (1) Anonymous endpoints should never return user emails/phones unless explicitly intentional (e.g. public author byline). (2) Authenticated endpoints should filter to ONLY the requesting user's data — IDOR class bug if /api/users/123 returns user 124's data. (3) Credit cards should never round-trip — if you see one in a response, you have a major PCI violation; mask server-side before sending.`,
       })

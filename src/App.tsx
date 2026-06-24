@@ -248,9 +248,6 @@ export default function App() {
                         aria-hidden="true"
                       />
                       <span className="truncate text-(--color-fg-muted) flex-1 min-w-0">{f.finding}</span>
-                      <span className="text-(--color-fg-dim) flex-shrink-0">
-                        {f.country ?? f.hostname}
-                      </span>
                     </li>
                   )
                 })}
