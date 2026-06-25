@@ -1,30 +1,65 @@
 /**
- * Vguard — Dynamic risk-based scoring engine.
+ * Vguard — V6 risk-based scoring engine (2026-06-13).
  *
- * 2026-05-09 v3 — extracted policy constants/predicates into
- * `scoring-policy.ts` (single source of truth). Engine logic kept here:
- * trait extraction, classification, per-finding score, aggregate score,
- * caps, UI grouping.
+ * The score measures REAL-WORLD RISK (data exposure, unauthorized access,
+ * account/system compromise, business impact) — NOT checklist completeness.
+ * Recon/fingerprinting findings have zero score impact; hardening gaps are
+ * clamped to the posture category's literal 5% weight.
  *
- * Core principle: PASSIVE SIGNALS ARE NOT VERIFIED VULNERABILITIES.
+ *   per-finding penalty = base(riskCategory, golden?, tier)
+ *                         × confidence (verified 1.0 / likely 0.6 / possible 0.2)
+ *                         × businessImpact (public 0.7 … adminInternal 1.6)
+ *   score = 100 − Σ decayed penalties (+ WAF bonus)
+ *           → grade-cap rule (verified golden cap-set ⇒ max C / 79)
+ *           → perfect-score gate (100 needs literally zero deductions)
  *
- * Pure module — no I/O, browser-safe.
+ * Core principle unchanged since v3: PASSIVE SIGNALS ARE NOT VERIFIED
+ * VULNERABILITIES. V6 tightens it further: a reflected canary is Possible XSS
+ * and an SQL error signature is suspected SQLi — neither is verified.
+ *
+ * Policy constants/predicates live in `scoring-policy.ts` (single source of
+ * truth). Pure module — no I/O, browser-safe.
  */
 
-import type { EffectiveSeverity, Finding, Grade, ScoreBreakdown, ScoreCategoryContribution } from '../../src/lib/scanner-types.js'
+import type {
+  BusinessImpact,
+  EffectiveSeverity,
+  Finding,
+  Grade,
+  RiskCategory,
+  RiskCategoryContribution,
+  ScoreBreakdown,
+  ScoreCategoryContribution,
+} from '../../src/lib/scanner-types.js'
 import {
-  CLASS_BASE,
+  isActiveProbeHitId,
+  isBaselineHardeningHeaderId,
+  isCookieHardeningId,
+  isHardeningHeaderId,
+  isReflectedXssId,
+  isWafPresentId,
+} from './finding-ids.js'
+import { deriveFindingTraits } from './finding-traits.js'
+import {
+  BUSINESS_IMPACT_MULT,
+  CATEGORY_LABELS,
   CONFIDENCE_MULT,
   DECAY_FACTOR,
+  GOLDEN_CAP_SCORE,
+  GOLDEN_PENALTY,
+  POSTURE_TOTAL_CAP,
+  REGULAR_PENALTY,
   RISKCLASS_TO_EFFECTIVE,
-  SEVERITY_PENALTY,
-  BAND_CEILING,
-  CATEGORY_CAP,
-  DEFAULT_CATEGORY_CAP,
-  CATEGORY_LABELS,
+  RISK_CATEGORY_LABELS,
+  RISK_CATEGORY_WEIGHT,
+  WAF_BONUS,
+  gradeCapApplies,
   gradeForScore,
-  isAdvancedHardeningHeader,
+  isGoldenFinding,
+  isGoldenKindFinding,
   isPublicClientIdentifier,
+  mapToRiskCategory,
+  scoreTierForScore,
   verifiedImpactPredicate,
   type RiskClass,
   type Confidence,
@@ -56,16 +91,18 @@ export function extractTraits(finding: Finding, ctx: ScoringContext): FindingTra
 
   const isStage2 = id.startsWith('stage2-')
   const isStage3 = id.startsWith('stage3-') || id.startsWith('deep-')
-  const runtimeConfirmed = isStage2 || isStage3 || ctx.stage > 1
+  // 2026-06-07 v5.7 — `runtimeConfirmed` is a property of the FINDING, not of the
+  // scan's stage. The old `|| ctx.stage > 1` meant that when Stage 2 results were
+  // MERGED (ctx.stage=2), every passive Stage-1 finding was falsely marked
+  // runtime-confirmed → confidence "confirmed" → ceiling-eligible → it could cap
+  // the grade. That's exactly what dropped Palo Alto's merged score to 79 on an
+  // `auth-enum-surface` that Stage 1 alone scored 86. A passive finding stays
+  // passive even inside a Stage-2/3 report.
+  const runtimeConfirmed = isStage2 || isStage3
 
-  const activeProbeHit = ID(
-    id,
-    'paths-xss-reflected',
-    'paths-sqli',
-    'paths-open-redirect',
-    'paths-traversal',
-    'paths-ssrf',
-  )
+  // Via the shared contract so the REAL emitted ids (`paths-reflected-xss`,
+  // word order and all) match — raw token lists drift (the 2026-06-07 audit bug).
+  const activeProbeHit = isActiveProbeHitId(id)
   const exploitable =
     activeProbeHit ||
     (runtimeConfirmed && (cat === 'auth-disclosure' || ID(id, 'rls-anon-select', 'auth-idor')))
@@ -120,13 +157,22 @@ export function extractTraits(finding: Finding, ctx: ScoringContext): FindingTra
 
   const publicExposure = cat !== 'meta' && finding.severity !== 'ok'
 
+  // 2026-06-07 v5.4 — match the cookie NAME/value in `evidence` only, NOT the
+  // finding's own description prose. Testing `desc` made analytics cookies match
+  // because our copy literally says "Auth-shaped cookies…" → e.g. Apple's
+  // `dssid2` (a tracking cookie) was misread as a session cookie and scored as a
+  // High session-theft risk. Evidence holds the real cookie name, so it still
+  // catches a genuine `session=`/`auth_token=` cookie.
   const authCookie =
-    /(\b|_)(sess|session|auth|token|jwt|sid|csrf|xsrf|access_token|refresh_token)\b/i.test(ev) ||
-    /(\b|_)(sess|session|auth|token|jwt|sid|csrf|xsrf|access_token|refresh_token)\b/i.test(desc)
+    /(\b|_)(sess|session|auth|token|jwt|sid|csrf|xsrf|access_token|refresh_token)\b/i.test(ev)
 
+  // NOTE: a cookie missing a flag is NOT "sensitive data exposure" — the cookie
+  // existing doesn't expose data; it's defense-in-depth. Keeping it out of
+  // `sensitiveData` is what stops auth-named cookies from being scored as a
+  // High data-exposure risk (the Apple/Palo-Alto downgrade). Real data exposure
+  // is a leaked secret or a public bucket/RTDB. (2026-06-07 v5.5)
   const sensitiveData =
     (secretPattern && !knownPublicClientId && !isAstHeuristic) ||
-    (cat === 'cookies' && authCookie) ||
     ID(id, 'paths-firebase-rtdb-root') ||
     ID(id, 'paths-supabase-storage-public-list', 'paths-s3-list')
 
@@ -141,25 +187,15 @@ export function extractTraits(finding: Finding, ctx: ScoringContext): FindingTra
     !exploitable &&
     !sensitiveData &&
     sev !== 'critical' &&
-    (isAdvancedHardeningHeader(id, finding.evidence || '', finding.description || '') ||
-      ID(
-        id,
-        'headers-no-x-content-type',
-        'headers-no-hsts',
-        'headers-no-x-frame-options',
-        'headers-csp-missing',
-        'headers-csp-weak',
-        'headers-csp-unsafe-inline',
-        'headers-csp-unsafe-eval',
-        'headers-csp-wildcard',
-        'headers-csp-no-base-uri',
-        'headers-csp-no-frame-ancestors',
-        'headers-csp-no-form-action',
-      ) ||
-      ID(id, 'cookies-no-secure', 'cookies-no-samesite') ||
+    // Hardening-header detection goes through the shared finding-ids contract,
+    // so the REAL emitted ids (`headers-content-security-policy`, …) are
+    // correctly recognised as defense-in-depth.
+    (isHardeningHeaderId(id) ||
+      isBaselineHardeningHeaderId(id) ||
+      isCookieHardeningId(id) ||
       ID(id, 'dom-sink-innerhtml', 'dom-sink-outerhtml', 'dom-sink-insertadjacent', 'dom-sink-document-write', 'js-ast-dom-sink') ||
       ID(id, 'dns-no-caa', 'dns-no-dnssec') ||
-      ID(id, 'email-dmarc-monitor', 'email-spf-softfail') ||
+      ID(id, 'email-dmarc-monitor', 'email-spf-softfail', 'email-spf-soft-fail') ||
       ID(id, 'integrity-no-sri') ||
       ID(id, 'meta-'))
 
@@ -211,94 +247,122 @@ export function extractTraits(finding: Finding, ctx: ScoringContext): FindingTra
 // Classification
 // ---------------------------------------------------------------------------
 
+/**
+ * EXPLICIT allowlist of genuine unconfirmed weaknesses that classify as
+ * medium-weakness (shown in "needs review"). Everything not verified, not a
+ * real runtime exposure, and not on this list defaults to hardening — so a
+ * new/unanticipated detector can never surprise-tank a clean site.
+ */
+function isGenuineUnconfirmedWeakness(
+  finding: Finding,
+  ctx: ScoringContext,
+): boolean {
+  const id = finding.id || ''
+  const cat = finding.category
+
+  // NOTE: weak CSP / missing headers / cookie flags are deliberately NOT here.
+  // They are defense-in-depth — like a cookie missing HttpOnly, a weak CSP only
+  // matters in combination with an injection. Consistent rule: anything that
+  // needs ANOTHER vulnerability to be exploitable is hardening, not a weakness.
+  // The allowlist below is for findings that are DIRECTLY a problem on their own.
+
+  // NOTE: `auth-enum-surface` is NOT here. The detector only finds that a login/
+  // signup page EXISTS — a surface, not confirmed account enumeration (which
+  // requires the response to reveal whether an account exists). Merely having a
+  // login page is normal, so it is hardening/observation, not a capping weakness.
+
+  // SameSite=None cookie sent cross-site WITHOUT Secure — actively insecure.
+  if (id.includes('samesite-none')) return true
+  // A dependency pinned to a known-vulnerable (CVE-matched) version.
+  if (/deps-(npm|server-cve)/.test(id)) return true
+  // Mixed content — an active downgrade surface on an HTTPS page.
+  if (cat === 'mixed-content') return true
+  // Source maps leaking internal paths, or any source map on a sensitive route.
+  if (cat === 'sourcemaps' && !id.includes('with-secrets')) {
+    if (id.includes('with-internal-paths')) return true
+    if (ctx.routeContext === 'sensitive') return true
+    return false
+  }
+  // A sensitive path returned 200 with a non-shell body but we couldn't confirm
+  // a secret — worth a human look (the verified-secret variant is critical).
+  if (id.includes('-exposed-needs-review')) return true
+  return false
+}
+
 export function classifyRiskClass(
   finding: Finding,
   traits: FindingTraits,
   ctx: ScoringContext,
 ): RiskClass {
-  if (finding.severity === 'ok') return 'informational'
+  const sev = finding.severity
 
-  // `meta` is the informational-observations category (WAF present, localhost
-  // reference, etc.) — never a weakness. It must never set a band ceiling or it
-  // produces the nonsense "1 Medium (capped) · −0 · score capped at 79".
+  // ---- Non-weaknesses ----
+  if (sev === 'ok') return 'informational'
+  // `meta` is informational-observations (WAF present, localhost ref, …).
   if (finding.category === 'meta') return 'informational'
+  // Publishable client identifiers (anon keys, pk_live_, GA ids) are not secrets.
+  if (traits.knownPublicAsset && !traits.verifiedImpact) return 'informational'
 
-  if (traits.knownPublicAsset && !traits.verifiedImpact) {
-    return 'informational'
-  }
+  // =========================================================================
+  // ROOT PRINCIPLE (v5.6, kept in V6) — only these escalate; EVERYTHING ELSE
+  // defaults to hardening, which deducts a clamped, minimal amount.
+  //   (1) verified impact              → critical-exploit
+  //   (2) real runtime/active exposure → high-impact-misconfig
+  //   (3) explicit weakness allowlist  → medium-weakness
+  //   (4) everything else              → low-hardening / informational
+  // =========================================================================
 
+  // (1) Verified impact — the only path to Critical.
   if (traits.verifiedImpact) return 'critical-exploit'
 
-  // High-impact misconfig for non-verified-but-impactful cases.
+  // (2) Real exposure short of the verified bar: an active-probe detection
+  //     (Possible XSS / suspected SQLi), or real sensitive data/token/bucket
+  //     actually OBSERVED at runtime (e.g. an auth token in localStorage).
+  if (traits.exploitable) return 'high-impact-misconfig'
+  if (traits.runtimeConfirmed && traits.sensitiveData) return 'high-impact-misconfig'
+
+  // (3) Explicit allowlist of genuine unconfirmed weaknesses.
+  if (isGenuineUnconfirmedWeakness(finding, ctx)) return 'medium-weakness'
+
+  // (4) Default = hardening / informational. Hardening headers + cookie flags
+  //     map to low-hardening at ANY severity. A detector-`critical` we could
+  //     neither verify nor allowlist becomes "needs review" (medium) rather
+  //     than a critical.
   if (
-    traits.runtimeConfirmed &&
-    (traits.exploitable ||
-      traits.sensitiveData ||
-      (traits.authImpact && finding.severity !== 'info'))
+    traits.defenseInDepthOnly ||
+    isHardeningHeaderId(finding.id) ||
+    isCookieHardeningId(finding.id)
   ) {
-    return 'high-impact-misconfig'
-  }
-
-  // CORS open + creds:true — high-impact even when flagged as warn (without
-  // verified impact from detector). Spec test 16.
-  if (
-    finding.id.startsWith('cors-credentials-wildcard') ||
-    finding.id.startsWith('cors-creds-wildcard')
-  ) {
-    return 'high-impact-misconfig'
-  }
-
-  // Auth/session cookies missing hardening — session-theft surface.
-  if (finding.category === 'cookies' && traits.authCookie && finding.severity !== 'info') {
-    return 'high-impact-misconfig'
-  }
-
-  // Source maps without secrets — distinct grading:
-  //   bare 'sourcemaps-exposed' → low-hardening (info-ish) on public route,
-  //                              → medium-weakness on sensitive route
-  //   'sourcemaps-exposed-with-internal-paths' → medium-weakness
-  // Source maps WITHOUT secrets are transparency, not a vulnerability — top-tier
-  // sites (GitHub, Apple, …) ship them intentionally. Grade as a hardening
-  // suggestion on public routes; a weakness only on sensitive routes or when
-  // internal paths leak. The with-secrets variant is caught by the verified-
-  // impact gate (→ critical). This covers both the bare `sourcemaps-exposed`
-  // id and the per-file `sourcemap-<file>` ids the detector actually emits.
-  if (finding.category === 'sourcemaps' && !finding.id.includes('with-secrets')) {
-    if (finding.id.includes('with-internal-paths')) return 'medium-weakness'
-    return ctx.routeContext === 'sensitive' ? 'medium-weakness' : 'low-hardening'
-  }
-
-  if (traits.defenseInDepthOnly) {
-    if (ctx.routeContext === 'sensitive' && traits.browserSurface) return 'medium-weakness'
-    if (finding.category === 'cookies' && traits.authCookie) return 'medium-weakness'
     return 'low-hardening'
   }
-
-  if (traits.authImpact && finding.severity !== 'info') {
-    return 'medium-weakness'
-  }
-
-  if (traits.configurationFlaw && traits.browserSurface) {
-    return 'low-hardening'
-  }
-
-  if (finding.severity === 'critical' || finding.severity === 'warn') {
-    return 'medium-weakness'
-  }
-
+  if (sev === 'critical') return 'medium-weakness'
+  if (sev === 'warn') return 'low-hardening'
   return 'informational'
 }
 
+/**
+ * V6 confidence — drives the 1.0 / 0.6 / 0.2 multiplier:
+ *   verified — exploitation / direct-observation evidence
+ *   likely   — strong signal (runtime observation, SQL error signature,
+ *              unverified detector-critical)
+ *   possible — detection only (reflected canary, pattern match, heuristic,
+ *              hardening observations)
+ */
 export function classifyConfidence(
   finding: Finding,
   traits: FindingTraits,
 ): Confidence {
-  if (finding.severity === 'ok') return 'informational'
-  if (traits.verifiedImpact) return 'confirmed'
-  if (traits.runtimeConfirmed) return 'confirmed'
-  if (traits.knownPublicAsset) return 'informational'
-  if (traits.defenseInDepthOnly) return 'informational'
-  if (finding.severity === 'info') return 'informational'
+  const id = finding.id || ''
+  if (finding.severity === 'ok') return 'possible'
+  if (traits.verifiedImpact) return 'verified'
+  // Reflected canary = Possible XSS (browser execution required to verify).
+  if (isReflectedXssId(id)) return 'possible'
+  // Sensitive-path 200 whose body we could NOT confirm — detection only.
+  if (id.includes('-exposed-needs-review')) return 'possible'
+  if (traits.knownPublicAsset) return 'possible'
+  if (traits.runtimeConfirmed) return 'likely'
+  if (traits.defenseInDepthOnly) return 'possible'
+  if (finding.severity === 'info') return 'possible'
   return 'likely'
 }
 
@@ -313,8 +377,16 @@ export function uiGroupFor(finding: Finding, riskClass: RiskClass, traits: Findi
 }
 
 // ---------------------------------------------------------------------------
-// Per-finding 0–10 risk
+// Per-finding 0–10 risk (display/ranking only — NOT the score input)
 // ---------------------------------------------------------------------------
+
+const RISK_SCORE_BASE: Record<RiskClass, number> = {
+  'critical-exploit': 9.0,
+  'high-impact-misconfig': 6.0,
+  'medium-weakness': 3.5,
+  'low-hardening': 1.2,
+  informational: 0.4,
+}
 
 export function computeFindingRisk(
   finding: Finding,
@@ -324,7 +396,7 @@ export function computeFindingRisk(
   ctx: ScoringContext,
 ): number {
   if (finding.severity === 'ok') return 0
-  let raw = CLASS_BASE[riskClass] * CONFIDENCE_MULT[confidence]
+  let raw = RISK_SCORE_BASE[riskClass] * CONFIDENCE_MULT[confidence]
 
   if (traits.runtimeConfirmed && traits.verifiedImpact) raw += 0.6
   if (traits.highAbuseLikelihood && traits.verifiedImpact) raw += 0.4
@@ -336,19 +408,47 @@ export function computeFindingRisk(
 }
 
 // ---------------------------------------------------------------------------
-// Aggregate vibe score — diminishing returns + STRICT CAPS
+// V6 per-finding penalty
 // ---------------------------------------------------------------------------
 
-function diminishingSum(penalties: number[]): number {
-  const sorted = [...penalties].sort((a, b) => b - a)
-  let total = 0
-  let factor = 1.0
-  for (const p of sorted) {
-    total += p * factor
-    factor *= DECAY_FACTOR
-  }
-  return total
+/** riskClass → the tier used to look up the non-golden penalty base. */
+const RISKCLASS_TO_TIER: Record<RiskClass, 'critical' | 'high' | 'medium' | 'low' | null> = {
+  'critical-exploit': 'critical',
+  'high-impact-misconfig': 'high',
+  'medium-weakness': 'medium',
+  'low-hardening': 'low',
+  informational: null,
 }
+
+export function computeFindingPenalty(opts: {
+  finding: Finding
+  traits: FindingTraits
+  riskClass: RiskClass
+  riskCategory: RiskCategory
+  confidence: Confidence
+  businessImpact: BusinessImpact
+}): number {
+  const { finding, traits, riskClass, riskCategory, confidence, businessImpact } = opts
+  if (finding.severity === 'ok') return 0
+  if (riskCategory === 'recon') return 0
+  const tier = RISKCLASS_TO_TIER[riskClass]
+  if (!tier) return 0
+
+  const goldenKind = isGoldenKindFinding(finding, { knownPublicAsset: traits.knownPublicAsset })
+  const base = goldenKind ? GOLDEN_PENALTY[riskCategory] : REGULAR_PENALTY[riskCategory][tier]
+  if (base <= 0) return 0
+
+  // Business context can scale a finding up or down — but never rescue a
+  // VERIFIED golden finding below its full base.
+  let biMult = BUSINESS_IMPACT_MULT[businessImpact]
+  if (goldenKind && traits.verifiedImpact) biMult = Math.max(1, biMult)
+
+  return base * CONFIDENCE_MULT[confidence] * biMult
+}
+
+// ---------------------------------------------------------------------------
+// Aggregate vibe score
+// ---------------------------------------------------------------------------
 
 export function bandForRiskScore(score: number): NonNullable<Finding['riskBand']> {
   if (score >= 8) return 'severe'
@@ -363,9 +463,14 @@ export interface ScoredFinding {
   riskClass: RiskClass
   effectiveSeverity: EffectiveSeverity
   confidence: Confidence
+  riskCategory: RiskCategory
+  businessImpact: BusinessImpact
+  isGolden: boolean
   riskScore: number
-  /** Point penalty this finding contributes (severity × confidence, pre cap/decay). */
+  /** Point penalty this finding contributes (pre decay/clamp). */
   scoreImpact: number
+  /** Point penalty after in-category diminishing returns + posture clamp. */
+  effectivePenalty: number
 }
 
 export interface SeverityCounts {
@@ -395,40 +500,26 @@ const SEV_RANK: Record<EffectiveSeverity, number> = {
   info: 0,
 }
 
-/**
- * Categories whose findings are DETERMINISTIC across scans — derived from the
- * fetched response headers, TLS handshake, DNS records, and downloaded bundles,
- * which are identical every run. These may set the band ceiling. The omitted
- * categories (`paths`, `auth*`, `ai`) are active-probe-driven and flaky, so they
- * only set the ceiling when the finding is a verified/confirmed exploit (handled
- * separately) — otherwise they just deduct. This keeps the same site at the same
- * grade run-to-run.
- */
-const STABLE_CEILING_CATS = new Set<string>([
-  'headers',
-  'cookies',
-  'tls',
-  'mixed-content',
-  'integrity',
-  'html',
-  'dns',
-  'email',
-  'secrets',
-  'sourcemaps',
-  'deps',
-  'methods',
-  'meta',
-])
+/** Sort desc and apply 1, 0.6, 0.36, … decay; returns per-item effective values. */
+function decayPenalties(items: { penalty: number }[]): Map<{ penalty: number }, number> {
+  const sorted = [...items].sort((a, b) => b.penalty - a.penalty)
+  const out = new Map<{ penalty: number }, number>()
+  let factor = 1.0
+  for (const it of sorted) {
+    out.set(it, it.penalty * factor)
+    factor *= DECAY_FACTOR
+  }
+  return out
+}
 
 /**
- * Aggregate the per-finding penalties into the 0–100 vibe score using the
- * band-anchored hybrid model (see scoring-policy.ts header):
- *   1. penalty = SEVERITY_PENALTY[effective] × CONFIDENCE_MULT[confidence]
- *   2. accumulate per category with diminishing returns, then cap the swing
- *      (unless the category carries a real critical/high)
- *   3. rawScore = 100 − Σ category penalties
- *   4. the worst severity present CAPS the score (band ceiling)
- *   5. hard caps for non-negotiables (no HTTPS, …) override everything
+ * Aggregate per-finding penalties into the 0–100 vibe score (V6):
+ *   1. group penalties by RISK CATEGORY (data / access / exploit / posture)
+ *   2. diminishing returns within each category
+ *   3. clamp the UNVERIFIED posture total to its literal 5% weight
+ *   4. rawScore = 100 − Σ; small WAF bonus when no verified impact exists
+ *   5. caps: no-HTTPS → 49; verified grade-cap golden → 79 (max C)
+ *   6. perfect-score gate: any deduction at all ⇒ ≤ 99
  */
 export function runScoringEngine(findings: Finding[], ctx: ScoringContext): EngineOutput {
   const scored: ScoredFinding[] = findings.map((f) => {
@@ -438,9 +529,34 @@ export function runScoringEngine(findings: Finding[], ctx: ScoringContext): Engi
     const riskScore = computeFindingRisk(f, traits, riskClass, confidence, ctx)
     const effectiveSeverity: EffectiveSeverity =
       f.severity === 'ok' ? 'info' : RISKCLASS_TO_EFFECTIVE[riskClass]
-    const scoreImpact =
-      f.severity === 'ok' ? 0 : SEVERITY_PENALTY[effectiveSeverity] * CONFIDENCE_MULT[confidence]
-    return { finding: f, traits, riskClass, effectiveSeverity, confidence, riskScore, scoreImpact }
+    const pro = deriveFindingTraits(f, ctx)
+    const riskCategory = mapToRiskCategory(f, { knownPublicAsset: traits.knownPublicAsset })
+    const businessImpact = pro.businessImpact
+    const isGolden = isGoldenFinding(f, {
+      knownPublicAsset: traits.knownPublicAsset,
+      verifiedImpact: traits.verifiedImpact,
+    })
+    const scoreImpact = computeFindingPenalty({
+      finding: f,
+      traits,
+      riskClass,
+      riskCategory,
+      confidence,
+      businessImpact,
+    })
+    return {
+      finding: f,
+      traits,
+      riskClass,
+      effectiveSeverity,
+      confidence,
+      riskCategory,
+      businessImpact,
+      isGolden,
+      riskScore,
+      scoreImpact,
+      effectivePenalty: 0,
+    }
   })
 
   // Reconciled severity histogram — the honest counts behind the badges.
@@ -450,87 +566,119 @@ export function runScoringEngine(findings: Finding[], ctx: ScoringContext): Engi
     else severityCounts[s.effectiveSeverity]++
   }
 
-  // Group penalties by category → diminish within → cap the swing.
-  const byCat = new Map<
-    string,
-    { penalties: number[]; worst: EffectiveSeverity; count: number; hasRealRisk: boolean }
-  >()
+  // ---- Risk-category aggregation with diminishing returns ----
+  const SCORED_CATEGORIES: RiskCategory[] = ['data', 'access', 'exploit', 'posture']
+  let postureClamped = false
+  for (const rc of SCORED_CATEGORIES) {
+    const members = scored.filter((s) => s.riskCategory === rc && s.scoreImpact > 0)
+    if (members.length === 0) continue
+
+    if (rc === 'posture') {
+      // Verified posture findings (e.g. a critical CVE match) are never muted;
+      // everything unverified shares the literal 5-point posture budget.
+      const verified = members.filter((s) => s.traits.verifiedImpact)
+      const unverified = members.filter((s) => !s.traits.verifiedImpact)
+      for (const grp of [verified, unverified]) {
+        const items = grp.map((s) => ({ penalty: s.scoreImpact, s }))
+        const eff = decayPenalties(items)
+        for (const it of items) it.s.effectivePenalty = eff.get(it) ?? 0
+      }
+      const unverifiedSum = unverified.reduce((a, s) => a + s.effectivePenalty, 0)
+      if (unverifiedSum > POSTURE_TOTAL_CAP) {
+        const scale = POSTURE_TOTAL_CAP / unverifiedSum
+        for (const s of unverified) s.effectivePenalty *= scale
+        postureClamped = true
+      }
+    } else {
+      const items = members.map((s) => ({ penalty: s.scoreImpact, s }))
+      const eff = decayPenalties(items)
+      for (const it of items) it.s.effectivePenalty = eff.get(it) ?? 0
+    }
+  }
+
+  const totalPenalty = scored.reduce((a, s) => a + s.effectivePenalty, 0)
+
+  // ---- WAF bonus (bonus only — absence is never penalized) ----
+  const wafPresent = ctx.wafPresent === true || scored.some((s) => isWafPresentId(s.finding.id || ''))
+  const hasVerifiedImpact = scored.some((s) => s.traits.verifiedImpact)
+  const wafBonus = wafPresent && !hasVerifiedImpact ? WAF_BONUS : 0
+
+  let rawScore = Math.max(0, Math.min(100, 100 - totalPenalty + wafBonus))
+
+  // ---- Caps (the binding one is surfaced in the breakdown) ----
+  let hardCap: ScoreBreakdown['hardCap'] | undefined
+  if (!ctx.httpsActive) hardCap = { reason: 'Served without HTTPS', cap: 49 }
+  const goldenCapBinds = scored.some((s) =>
+    gradeCapApplies(s.finding, {
+      knownPublicAsset: s.traits.knownPublicAsset,
+      verifiedImpact: s.traits.verifiedImpact,
+    }),
+  )
+  if (goldenCapBinds && (!hardCap || hardCap.cap > GOLDEN_CAP_SCORE)) {
+    hardCap = hardCap ?? {
+      reason: 'Verified critical exposure — grade capped at C until fixed',
+      cap: GOLDEN_CAP_SCORE,
+    }
+  }
+
+  let finalScore = Math.min(rawScore, hardCap?.cap ?? 100)
+  finalScore = Math.max(0, Math.round(finalScore))
+  // Perfect-score gate: 100 is reserved for literally zero deductions.
+  if (totalPenalty > 0 && finalScore >= 100) finalScore = 99
+
+  const grade = gradeForScore(finalScore)
+  const scoreTier = scoreTierForScore(finalScore)
+
+  // ---- Breakdown: V6 risk-category view ----
+  const riskCategories: RiskCategoryContribution[] = (
+    ['data', 'access', 'exploit', 'posture', 'recon'] as RiskCategory[]
+  )
+    .map((rc) => {
+      const members = scored.filter(
+        (s) => s.riskCategory === rc && s.finding.severity !== 'ok',
+      )
+      const penalty = members.reduce((a, s) => a + s.effectivePenalty, 0)
+      return {
+        category: rc,
+        label: RISK_CATEGORY_LABELS[rc],
+        weight: RISK_CATEGORY_WEIGHT[rc],
+        penalty: Math.round(penalty * 10) / 10,
+        findingCount: members.length,
+        capped: rc === 'posture' && postureClamped,
+      }
+    })
+    .filter((c) => c.findingCount > 0 || c.penalty > 0)
+
+  // ---- Breakdown: legacy 19-finding-category view (per-category dots) ----
+  const byCat = new Map<string, { penalty: number; worst: EffectiveSeverity; count: number; capped: boolean }>()
   for (const s of scored) {
-    if (s.finding.severity === 'ok' || s.scoreImpact <= 0) continue
+    if (s.finding.severity === 'ok' || s.effectivePenalty <= 0) continue
     const cat = s.finding.category
-    const e =
-      byCat.get(cat) ?? { penalties: [], worst: 'info' as EffectiveSeverity, count: 0, hasRealRisk: false }
-    e.penalties.push(s.scoreImpact)
+    const e = byCat.get(cat) ?? { penalty: 0, worst: 'info' as EffectiveSeverity, count: 0, capped: false }
+    e.penalty += s.effectivePenalty
     e.count++
     if (SEV_RANK[s.effectiveSeverity] > SEV_RANK[e.worst]) e.worst = s.effectiveSeverity
-    // Only a CONFIRMED critical lifts the per-category swing cap — we never mute
-    // a real exploit, but unconfirmed high-impact misconfigs (e.g. several auth
-    // cookies missing HttpOnly) stay bounded so one category can't dominate.
-    if (s.effectiveSeverity === 'critical') e.hasRealRisk = true
+    if (s.riskCategory === 'posture' && postureClamped && !s.traits.verifiedImpact) e.capped = true
     byCat.set(cat, e)
   }
-
-  const categories: ScoreCategoryContribution[] = []
-  let totalPenalty = 0
-  for (const [cat, e] of byCat) {
-    const raw = diminishingSum(e.penalties)
-    // Cap only when the category's worst issue is medium-or-below — a confirmed
-    // critical/high is never muted.
-    const cap = e.hasRealRisk
-      ? Infinity
-      : CATEGORY_CAP[cat as keyof typeof CATEGORY_CAP] ?? DEFAULT_CATEGORY_CAP
-    const penalty = Math.min(raw, cap)
-    totalPenalty += penalty
-    categories.push({
-      category: cat as ScoreCategoryContribution['category'],
-      label: CATEGORY_LABELS[cat as keyof typeof CATEGORY_LABELS] ?? cat,
-      penalty: Math.round(penalty * 10) / 10,
-      findingCount: e.count,
-      worstSeverity: e.worst,
-      capped: raw > cap,
-    })
-  }
+  const categories: ScoreCategoryContribution[] = Array.from(byCat, ([cat, e]) => ({
+    category: cat as ScoreCategoryContribution['category'],
+    label: CATEGORY_LABELS[cat as keyof typeof CATEGORY_LABELS] ?? cat,
+    penalty: Math.round(e.penalty * 10) / 10,
+    findingCount: e.count,
+    worstSeverity: e.worst,
+    capped: e.capped,
+  }))
   categories.sort((a, b) => b.penalty - a.penalty)
 
-  const rawScore = Math.max(0, 100 - totalPenalty)
-
-  // Worst severity present → band ceiling (SSL Labs mechanic). Info doesn't cap.
-  //
-  // STABILITY (root fix 2026-06-01): the ceiling has outsized impact (it can
-  // swing a whole grade), so ONLY deterministic / confirmed findings may set
-  // it. Findings derived from the fetched response, headers and bundles are the
-  // same on every scan; active network probes (paths, auth, AI endpoints) can
-  // 200 once and time-out / get WAF-blocked the next run — letting one of those
-  // set the ceiling made the same site score 89 then 79. A flaky probe finding
-  // still DEDUCTS (smooth, small), it just can't move the band unless it's a
-  // confirmed/verified exploit (a real .env leak or reflected XSS IS stable).
   let worstSeverity: EffectiveSeverity | null = null
   for (const s of scored) {
     if (s.finding.severity === 'ok' || s.effectiveSeverity === 'info') continue
-    const ceilingEligible =
-      STABLE_CEILING_CATS.has(s.finding.category) ||
-      s.traits.verifiedImpact ||
-      s.confidence === 'confirmed'
-    if (!ceilingEligible) continue
+    if (s.effectivePenalty <= 0) continue
     if (!worstSeverity || SEV_RANK[s.effectiveSeverity] > SEV_RANK[worstSeverity]) {
       worstSeverity = s.effectiveSeverity
     }
   }
-  const bandCeiling = worstSeverity ? BAND_CEILING[worstSeverity] : 100
-
-  // Hard caps — non-negotiables override everything.
-  let hardCap: ScoreBreakdown['hardCap'] | undefined
-  if (!ctx.httpsActive) hardCap = { reason: 'Served without HTTPS', cap: 49 }
-
-  let finalScore = Math.min(rawScore, bandCeiling)
-  if (hardCap) finalScore = Math.min(finalScore, hardCap.cap)
-  finalScore = Math.max(0, Math.round(finalScore))
-
-  const hasVerifiedImpact = scored.some((s) => s.traits.verifiedImpact)
-  const isClean =
-    worstSeverity === null &&
-    scored.every((s) => s.finding.severity === 'ok' || s.effectiveSeverity === 'info')
-  const grade = gradeForScore(finalScore, isClean)
 
   const groupCounts: Record<RiskClass, number> = {
     'critical-exploit': 0,
@@ -544,10 +692,14 @@ export function runScoringEngine(findings: Finding[], ctx: ScoringContext): Engi
   const breakdown: ScoreBreakdown = {
     base: 100,
     categories,
+    riskCategories,
     rawScore: Math.round(rawScore),
     worstSeverity,
-    bandCeiling,
+    // V6 has no severity band ceiling; caps surface via `hardCap`.
+    bandCeiling: 100,
     hardCap,
+    wafBonus: wafBonus > 0 ? wafBonus : undefined,
+    scoreTier,
     finalScore,
   }
 
@@ -581,20 +733,33 @@ export function applyEngine(findings: Finding[], ctx: ScoringContext): ApplyResu
   const { vibeScore, grade, scored, groupCounts, severityCounts, hasVerifiedImpact, breakdown } =
     runScoringEngine(findings, ctx)
 
-  const enriched: EnrichedFinding[] = scored.map((s) => ({
-    ...s.finding,
-    riskScore: s.riskScore,
-    riskBand: bandForRiskScore(s.riskScore),
-    riskClass: s.riskClass,
-    effectiveSeverity: s.effectiveSeverity,
-    confidence: s.confidence,
-    uiGroup: uiGroupFor(s.finding, s.riskClass, s.traits),
-  }))
+  const enriched: EnrichedFinding[] = scored.map((s) => {
+    // Attach the professional, evidence-based trait set so every shipped
+    // finding self-describes its exploitability / impact / evidence strength.
+    const pro = deriveFindingTraits(s.finding, ctx)
+    return {
+      ...s.finding,
+      riskScore: s.riskScore,
+      riskBand: bandForRiskScore(s.riskScore),
+      riskClass: s.riskClass,
+      effectiveSeverity: s.effectiveSeverity,
+      confidence: s.confidence,
+      uiGroup: uiGroupFor(s.finding, s.riskClass, s.traits),
+      verifiedImpact: pro.verifiedImpact,
+      exploitability: pro.exploitability,
+      attackPrerequisite: pro.attackPrerequisite,
+      remoteReachable: pro.remoteReachable,
+      publicInternetExposure: pro.publicInternetExposure,
+      activeProbeConfirmed: pro.activeProbeConfirmed,
+      impactType: pro.impactType,
+      evidenceKind: pro.evidenceKind,
+      evidenceStrength: pro.evidenceStrength,
+      riskCategory: s.riskCategory,
+      businessImpact: s.businessImpact,
+      isGoldenFinding: s.isGolden,
+    }
+  })
 
-  // Band derives straight from the final score — the band ceiling already did
-  // the "don't over-alarm" work, so no separate clamp. Honest weak posture is
-  // allowed to land in medium/high without a confirmed exploit (the whole point
-  // of the v4 redesign).
   let aggregateBand: ApplyResult['aggregateBand']
   if (vibeScore < 50) aggregateBand = 'severe'
   else if (vibeScore < 70) aggregateBand = 'high'
@@ -618,6 +783,7 @@ export function defaultContext(opts: {
   isHttps: boolean
   cspHasUnsafe?: boolean
   stage?: 1 | 2 | 3
+  wafPresent?: boolean
 }): ScoringContext {
   const p = (opts.pathname || '/').toLowerCase()
   const sensitive =
@@ -630,5 +796,6 @@ export function defaultContext(opts: {
     httpsActive: opts.isHttps,
     cspHasUnsafe: opts.cspHasUnsafe ?? false,
     stage: opts.stage ?? 1,
+    wafPresent: opts.wafPresent ?? false,
   }
 }

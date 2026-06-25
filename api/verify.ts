@@ -6,6 +6,7 @@ import {
   sendVerificationFailure,
   fireAndForget,
 } from './_lib/verify-email.js'
+import { recordLead } from './_lib/leads-store.js'
 
 export const config = {
   runtime: 'nodejs',
@@ -178,6 +179,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const result =
       method === 'file' ? await verifyFileChallenge(domain, uuid) : await verifyDnsChallenge(domain, uuid)
+
+    // Capture the verify attempt as a lead — a domain owner who gave us their
+    // email is the hottest intent signal we have. Fail-soft; never blocks verify.
+    await recordLead(req, {
+      source: 'verify',
+      email,
+      domain,
+      method,
+      verified: result.verified,
+    })
+
     if (result.verified) {
       const ua = (req.headers['user-agent'] as string | undefined) ?? null
       // Await the cache write so the immediately-following /api/scan-deep

@@ -534,7 +534,7 @@ function CopyAllFixPromptsButton({ result, prominent = false }: { result: ScanRe
 
   const base = 'inline-flex items-center justify-center gap-2 font-mono transition-all cursor-pointer'
   const prominentCls =
-    'w-full sm:w-auto px-5 py-3 rounded-lg text-sm font-bold bg-(--color-accent) text-(--color-bg) hover:bg-(--color-accent-strong) active:scale-[0.99] shadow-[0_0_30px_-8px_var(--color-accent)] min-h-[48px]'
+    'w-full sm:w-auto px-5 py-3 rounded-lg text-sm font-bold bg-(--color-cta) text-(--color-cta-fg) hover:bg-(--color-cta-strong) active:scale-[0.99] shadow-[0_0_30px_-8px_var(--color-cta)] min-h-[48px]'
   const subtleCls =
     'px-3 py-2 rounded-md text-xs bg-(--color-surface-elevated) hover:bg-(--color-bg) border border-(--color-border) hover:border-(--color-accent-border) text-(--color-fg) min-h-[36px]'
 
@@ -1123,7 +1123,7 @@ export function ScanForm() {
   const inputClass =
     'w-full px-4 py-3.5 rounded-lg bg-(--color-surface) border text-(--color-fg) placeholder:text-(--color-fg-dim) font-mono text-sm focus:outline-none transition-colors min-h-[48px]'
   const buttonClass =
-    'inline-flex items-center justify-center gap-2 px-5 py-3.5 rounded-lg bg-(--color-accent) text-(--color-bg) font-semibold text-sm hover:bg-(--color-accent-strong) active:scale-[0.98] transition-all cursor-pointer whitespace-nowrap min-h-[48px] disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100'
+    'inline-flex items-center justify-center gap-2 px-5 py-3.5 rounded-lg bg-(--color-cta) text-(--color-cta-fg) font-semibold text-sm shadow-[0_0_18px_-2px_var(--color-cta)] hover:bg-(--color-cta-strong) hover:shadow-[0_0_24px_0_var(--color-cta)] active:scale-[0.98] transition-all cursor-pointer whitespace-nowrap min-h-[48px] disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100'
 
   return (
     <div className="w-full max-w-2xl">
@@ -1257,7 +1257,7 @@ export function ScanForm() {
                     <button
                       type="button"
                       onClick={() => setStage2OpenStandalone(true)}
-                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-(--color-accent) text-(--color-bg) hover:bg-(--color-accent-strong) font-mono text-xs font-semibold transition-colors cursor-pointer min-h-[36px]"
+                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-(--color-cta) text-(--color-cta-fg) hover:bg-(--color-cta-strong) font-mono text-xs font-semibold transition-colors cursor-pointer min-h-[36px]"
                     >
                       <Globe size={13} strokeWidth={2.5} aria-hidden="true" />
                       Run Stage 2 (browser check)
@@ -1318,7 +1318,7 @@ export function ScanForm() {
                   <button
                     type="button"
                     onClick={() => rescan()}
-                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-(--color-accent) text-(--color-bg) hover:bg-(--color-accent-strong) font-mono text-xs font-semibold transition-colors cursor-pointer min-h-[36px]"
+                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-(--color-cta) text-(--color-cta-fg) hover:bg-(--color-cta-strong) font-mono text-xs font-semibold transition-colors cursor-pointer min-h-[36px]"
                   >
                     <RefreshCw size={13} strokeWidth={2.5} aria-hidden="true" />
                     Retry
@@ -1353,8 +1353,8 @@ export function ScanForm() {
           // user-visible vibeScore and band reflect everything Stage 2 added.
           // If Stage 2 hasn't run, this is a no-op vs. Stage 1's result.
           let mergedFindings: ApiFinding[]
-          // Raw engine score for the merged Stage 1 (+ Stage 2) union. The
-          // cosmetic 96–99→100 normalization is applied below (visibleScore).
+          // Raw engine score for the merged Stage 1 (+ Stage 2) union. Shown
+          // verbatim — the cosmetic 96–99→100 bump is disabled (display-score.ts).
           let rawDisplayScore: number
           let displayBand: 'low' | 'medium' | 'high' | 'severe'
           let displayGrade: Grade | undefined
@@ -1402,8 +1402,8 @@ export function ScanForm() {
             })
           }
           mergedFindings.sort((a, b) => UI_GROUP_ORDER[uiGroupOf(a)] - UI_GROUP_ORDER[uiGroupOf(b)])
-          // Display-only cosmetic: a clean 96–99 (no critical) renders as 100.
-          // Never mutates the raw score, severities, findings, or order.
+          // Honest display score — the 96–99→100 cosmetic bump is disabled, so
+          // visibleScore equals the raw engine score (display-score.ts).
           const { displayScore: visibleScore, scoreAdjustedForDisplay } = computeDisplayScore(
             rawDisplayScore,
             { hasCritical: findingsHaveCritical(mergedFindings) },
@@ -1471,6 +1471,22 @@ export function ScanForm() {
                   <div className="mt-1 font-mono text-[11px] sm:text-xs text-(--color-fg-dim) truncate max-w-full">
                     {result.meta.finalUrl}
                   </div>
+                  {result.resolution?.usedFallback && (
+                    <div className="mt-1.5 text-[11px] sm:text-xs text-(--color-fg-muted) leading-relaxed">
+                      <span className="text-(--color-fg-dim)">You entered </span>
+                      <span className="font-mono">{result.resolution.userInputUrl}</span>
+                      <span className="text-(--color-fg-dim)"> — we scanned the reachable version of this site</span>
+                      {result.resolution.httpDowngraded && (
+                        <span className="text-(--color-warn)">
+                          {' '}· reachable only over HTTP (reported below as a security finding)
+                        </span>
+                      )}
+                      {result.resolution.reachability === 'reachable_but_blocked' && (
+                        <span className="text-(--color-warn)"> · the site blocked/restricted the scanner</span>
+                      )}
+                      .
+                    </div>
+                  )}
                   <div className="mt-4 flex items-center gap-5 font-mono text-xs flex-wrap">
                     {finalTotals.confirmedCritical > 0 && (
                       <span className="flex items-center gap-2" title={uiGroupTooltip('confirmed-vulnerabilities')}>
@@ -1732,7 +1748,7 @@ export function ScanForm() {
                 <button
                   type="button"
                   onClick={() => rescan()}
-                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-(--color-accent) text-(--color-bg) hover:bg-(--color-accent-strong) font-mono text-xs font-semibold transition-colors cursor-pointer min-h-[36px]"
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-(--color-cta) text-(--color-cta-fg) hover:bg-(--color-cta-strong) font-mono text-xs font-semibold transition-colors cursor-pointer min-h-[36px]"
                 >
                   <RefreshCw size={13} strokeWidth={2.5} aria-hidden="true" />
                   Rescan

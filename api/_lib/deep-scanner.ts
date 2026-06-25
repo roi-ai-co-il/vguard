@@ -27,6 +27,82 @@ async function fetchWithTimeout(
   }
 }
 
+// === Login rate-limit / brute-force protection test (canonical #19) ===========
+// ACTIVE — Stage 3 ONLY, runs after ownership verification (the scan-deep
+// handler re-verifies before calling runDeepScan). Hard safety rules:
+//   • max 5 requests             • clearly-invalid throwaway credentials only
+//   • no password lists          • no real usernames        • no credential stuffing
+//   • clear V-Guards User-Agent so the test is attributable, never stealthy
+//   • only the endpoints passively detected in Stage 1 — never arbitrary URLs
+const RATE_LIMIT_BURST = 5
+const SCANNER_UA =
+  'V-Guards-Scanner/1.0 (+https://v-guards.com; authorized active auth rate-limit test)'
+
+interface RateLimitResult {
+  endpoint: string
+  isProtected: boolean
+  signal: string
+}
+
+async function probeAuthRateLimit(
+  endpoint: string,
+  extraHeaders: Record<string, string> = {},
+): Promise<RateLimitResult | null> {
+  let reachedAuth = false
+  let protectedSignal: string | null = null
+  for (let i = 0; i < RATE_LIMIT_BURST; i++) {
+    const seed = `${Date.now().toString(36)}${i}`
+    // Clearly-invalid throwaway identity on the reserved `.invalid` TLD — can
+    // never map to a real account. Never a real username, never from a list.
+    const body = JSON.stringify({
+      email: `vguard-probe-${seed}@example.invalid`,
+      password: `vg-${seed}-Zx9!`,
+    })
+    let r: Response
+    try {
+      r = await fetchWithTimeout(
+        endpoint,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'user-agent': SCANNER_UA,
+            ...extraHeaders,
+          },
+          body,
+        },
+        3000,
+      )
+    } catch {
+      return null
+    }
+    if (r.status === 404 || r.status === 405 || r.status === 0) return null
+    const ct = (r.headers.get('content-type') ?? '').toLowerCase()
+    if (r.status === 200 && ct.includes('text/html')) return null // SPA catch-all
+    reachedAuth = true
+    if (r.status === 429) protectedSignal = 'HTTP 429 Too Many Requests'
+    else if (r.status === 423) protectedSignal = 'HTTP 423 Locked (account lockout)'
+    else if (r.headers.get('retry-after'))
+      protectedSignal = `Retry-After: ${r.headers.get('retry-after')}`
+    else if ((r.headers.get('x-ratelimit-remaining') ?? '') === '0')
+      protectedSignal = 'X-RateLimit-Remaining: 0'
+    else {
+      const peek = (await r.text().catch(() => '')).slice(0, 2000).toLowerCase()
+      if (/captcha|recaptcha|hcaptcha|turnstile|too many|rate.?limit|try again later/.test(peek))
+        protectedSignal = 'CAPTCHA / throttle challenge in response body'
+    }
+    if (protectedSignal) break
+  }
+  if (!reachedAuth) return null
+  return protectedSignal
+    ? { endpoint, isProtected: true, signal: protectedSignal }
+    : {
+        endpoint,
+        isProtected: false,
+        signal: `${RATE_LIMIT_BURST} rapid invalid logins — no 429 / Retry-After / lockout / CAPTCHA observed`,
+      }
+}
+
 // === Supabase RLS testing ===
 const COMMON_SUPABASE_TABLES = [
   'users',
@@ -466,6 +542,11 @@ export interface DeepScanInputs {
   aiEndpoints?: string[]
   /** Optional user-supplied JWT for authenticated-mode probing */
   userJwt?: string | null
+  /**
+   * Login/signup/password-reset endpoints passively detected in Stage 1. The
+   * active rate-limit test probes ONLY these (on the ownership-verified target).
+   */
+  authEndpoints?: string[]
 }
 
 export interface DeepScanOutput {
@@ -635,8 +716,60 @@ export async function runDeepScan(inputs: DeepScanInputs): Promise<DeepScanOutpu
     })
   }
 
+  // === Active login rate-limit / brute-force test (canonical #19) ===
+  // Ownership-verified + capped + attributable. Probes ONLY the endpoints
+  // passively detected in Stage 1 (+ the Supabase password grant when an anon
+  // key was found) — never arbitrary URLs.
+  const rlEndpoints: { endpoint: string; headers: Record<string, string> }[] = []
+  if (inputs.supabaseProjectId && inputs.supabaseAnonKey) {
+    rlEndpoints.push({
+      endpoint: `https://${inputs.supabaseProjectId}.supabase.co/auth/v1/token?grant_type=password`,
+      headers: {
+        apikey: inputs.supabaseAnonKey,
+        authorization: `Bearer ${inputs.supabaseAnonKey}`,
+      },
+    })
+  }
+  for (const e of inputs.authEndpoints ?? []) rlEndpoints.push({ endpoint: e, headers: {} })
+  let rl: RateLimitResult | null = null
+  for (const c of rlEndpoints.slice(0, 3)) {
+    rl = await probeAuthRateLimit(c.endpoint, c.headers).catch(() => null)
+    if (rl) break // first endpoint that actually reached an auth surface wins
+  }
+  if (rl && !rl.isProtected) {
+    findings.push({
+      id: 'auth-rate-limit-missing',
+      severity: 'warn',
+      category: 'auth',
+      title: 'No rate limiting / lockout on a login endpoint (actively confirmed)',
+      description: `With your authorization, we sent ${RATE_LIMIT_BURST} rapid, deliberately-invalid login attempts (throwaway @example.invalid address, dummy password — never a real credential, no password list, no real usernames, no credential stuffing) and saw no 429, Retry-After, account lockout, or CAPTCHA. Without throttling, an attacker can brute-force passwords or run credential-stuffing against this endpoint.`,
+      evidence: `${rl.endpoint}\n${rl.signal}`,
+      fixPrompt: `Add brute-force protection to your auth endpoints (login, signup, password-reset): (1) Per-IP + per-account rate limiting — e.g. 5 attempts / 15 min, then 429 with Retry-After. Use Upstash Ratelimit, a Redis token bucket, or your framework's limiter (express-rate-limit, @fastify/rate-limit, NextAuth + middleware). (2) Temporary account lockout / exponential backoff after repeated failures. (3) A CAPTCHA (Turnstile / hCaptcha / reCAPTCHA) after the first few failures. If you use Supabase Auth it already rate-limits the token endpoint — make sure you haven't fronted it with an unthrottled custom proxy. Re-run this Stage 3 scan to confirm.`,
+    })
+  } else if (rl && rl.isProtected) {
+    findings.push({
+      id: 'auth-rate-limit-ok',
+      severity: 'ok',
+      category: 'auth',
+      title: 'Login endpoint is rate-limited / brute-force protected (confirmed)',
+      description: `The endpoint throttled our small, authorized burst of deliberately-invalid logins. This is the protection you want against credential stuffing and password brute-forcing.`,
+      evidence: `${rl.endpoint}\n${rl.signal}`,
+      fixPrompt: '',
+    })
+  }
+
+  // Every finding the deep scanner emits is an ownership-verified, actively
+  // confirmed probe HIT (the conditionals above only push on a real hit). Mark
+  // them self-declaring so the scoring gate treats them as verified impact
+  // regardless of id naming — the engine no longer has to infer it from the id
+  // string (architecture hardening, 2026-06-07 v5.2).
   return {
-    findings,
+    findings: findings.map((f) => ({
+      ...f,
+      verifiedImpact: true,
+      evidenceKind: 'ownershipVerifiedDeepScan' as const,
+      activeProbeConfirmed: true,
+    })),
     durationMs: Date.now() - t0,
   }
 }

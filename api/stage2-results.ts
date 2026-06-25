@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { createClient } from '@supabase/supabase-js'
 import type { Finding } from '../src/lib/scanner-types.js'
+import { applyEngine, defaultContext } from './_lib/scoring-engine.js'
 
 export const config = {
   runtime: 'nodejs',
@@ -171,13 +172,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (new Date(data.expires_at as string).getTime() < Date.now()) {
       return res.status(200).json({ ok: true, ready: false, expired: true })
     }
-    const findings = analyzeStage2(data.url as string, data.data as CollectedData)
+    const rawFindings = analyzeStage2(data.url as string, data.data as CollectedData)
+    // 2026-06-07 v5 — route the bookmarklet path through the SAME scoring engine
+    // as the Playwright path so its findings ship with riskClass / effective
+    // severity / confidence / uiGroup / verifiedImpact + a real vibeScore.
+    // Previously the bookmarklet path returned raw detector findings, bypassing
+    // the scoring brain entirely (audit §9.7).
+    let stage2Pathname = '/'
+    let isHttps = true
+    try {
+      const u = new URL(data.url as string)
+      stage2Pathname = u.pathname
+      isHttps = u.protocol === 'https:'
+    } catch {
+      /* keep defaults */
+    }
+    const engineOut = applyEngine(
+      rawFindings,
+      defaultContext({ pathname: stage2Pathname, isHttps, stage: 2 }),
+    )
     return res.status(200).json({
       ok: true,
       ready: true,
       url: data.url,
       collectedAt: data.collected_at,
-      findings,
+      stage: 2,
+      vibeScore: engineOut.vibeScore,
+      grade: engineOut.grade,
+      severityCounts: engineOut.severityCounts,
+      scoreBreakdown: engineOut.scoreBreakdown,
+      aggregateRiskBand: engineOut.aggregateBand,
+      hasVerifiedImpact: engineOut.hasVerifiedImpact,
+      findings: engineOut.findings,
     })
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'unknown error'

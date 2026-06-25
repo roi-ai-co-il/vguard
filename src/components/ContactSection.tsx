@@ -3,7 +3,7 @@ import { Send, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react'
 
 const TURNSTILE_SITE_KEY = '0x4AAAAAAC_BzqF_UH-VXX5R'
 
-// `window.turnstile` is augmented in src/pages/AdminLogs.tsx — a single
+// `window.turnstile` is augmented in src/pages/AdminDashboard.tsx — a single
 // canonical declaration there avoids "subsequent property declarations must
 // have the same type" errors.
 

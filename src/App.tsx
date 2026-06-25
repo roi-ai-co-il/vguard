@@ -1,47 +1,37 @@
-import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import {
   Search,
   FileCheck2,
   Wrench,
   ArrowRight,
-  Activity,
   ShieldCheck,
 } from 'lucide-react'
 import { ScanForm } from './components/ScanForm'
 import ContactSection from './components/ContactSection'
 import { VGuardsLogo, MascotScanMark } from '@/components/ui/vguards-logo'
 import { TypingEffect } from '@/components/ui/typing-effect'
-import { InteractiveGlobe } from '@/components/ui/interactive-globe'
 import { CpuArchitecture } from '@/components/ui/cpu-architecture'
 import { PricingSection } from '@/components/PricingSection'
-
-interface RecentFinding {
-  hostname: string
-  secondsAgo: number
-  finding: string
-  country: string | null
-  severity: string
-}
+import { SmokeBackground } from '@/components/ui/spooky-smoke-animation'
 
 const STEPS = [
   {
     n: '01',
     title: 'Scan',
     Icon: Search,
-    body: "Paste your link. We check whether your connection is secure, whether any passwords or secret keys leaked into your code, whether private files are exposed, and we safely test the most common ways attackers get in. The deeper, more aggressive tests only run after you prove the site is yours.",
+    body: 'Paste your link. We check your connection, hunt for leaked passwords and keys, and find private files left exposed.',
   },
   {
     n: '02',
     title: 'Report',
     Icon: FileCheck2,
-    body: 'One simple score, and a list of issues ranked from most to least urgent. Each one comes with the exact proof we found — so you can check it yourself, not just take our word.',
+    body: 'One score, every issue ranked by urgency — each with the exact proof, so you can verify it yourself.',
   },
   {
     n: '03',
     title: 'Fix',
     Icon: Wrench,
-    body: "Every issue comes with a ready-to-paste instruction for Cursor / Claude / Lovable. Scan again to confirm it's fixed.",
+    body: 'Each issue ships with a ready-to-paste fix for Cursor / Claude / Lovable. Rescan to confirm.',
   },
 ]
 
@@ -50,43 +40,13 @@ const fadeUp = {
   show: { opacity: 1, y: 0 },
 }
 
-const FALLBACK_FINDINGS: RecentFinding[] = [
-  { hostname: 'illustrative', secondsAgo: 23, finding: 'Stripe live secret key in JS bundle', country: null, severity: 'critical' },
-  { hostname: 'illustrative', secondsAgo: 41, finding: 'Supabase service_role key exposed to client', country: null, severity: 'critical' },
-  { hostname: 'illustrative', secondsAgo: 67, finding: '.env file publicly reachable', country: null, severity: 'critical' },
-  { hostname: 'illustrative', secondsAgo: 92, finding: 'Mixed content — HTTP resource on HTTPS page', country: null, severity: 'warn' },
-]
-
 export default function App() {
-  const [recentFindings, setRecentFindings] = useState<RecentFinding[]>(FALLBACK_FINDINGS)
-  const [isLive, setIsLive] = useState(false)
-
-  useEffect(() => {
-    let cancelled = false
-    async function load() {
-      try {
-        const r = await fetch('/api/recent-findings')
-        if (!r.ok) return
-        const data = (await r.json()) as { ok: boolean; items: RecentFinding[] }
-        if (cancelled) return
-        if (data.ok && data.items.length >= 3) {
-          setRecentFindings(data.items)
-          setIsLive(true)
-        }
-      } catch {
-        // keep fallback
-      }
-    }
-    load()
-    const interval = setInterval(load, 30000)
-    return () => {
-      cancelled = true
-      clearInterval(interval)
-    }
-  }, [])
-
   return (
     <div className="relative min-h-svh bg-(--color-bg) text-(--color-fg) flex flex-col">
+      {/* Cyan-and-white drifting smoke field — fixed, behind all content (z-10) */}
+      <div className="smoke-field fixed inset-0 pointer-events-none" aria-hidden="true">
+        <SmokeBackground smokeColor="#22d3ee" intensity={0.55} density={26} />
+      </div>
       <div className="bg-grid absolute inset-0 pointer-events-none" aria-hidden="true" />
       <div className="hero-glow absolute top-0 left-0 right-0 h-[60vh] pointer-events-none" aria-hidden="true" />
 
@@ -200,108 +160,66 @@ export default function App() {
           </motion.div>
         </section>
 
-        <section className="border-t border-(--color-border) relative">
-          <div className="max-w-6xl mx-auto px-4 sm:px-6 py-12 sm:py-20 grid grid-cols-1 lg:grid-cols-12 gap-8 sm:gap-10 items-center">
+        {/* How it works — the 3-step user journey (Scan → Report → Fix).
+            Comes first after the hero: explain what happens when you scan
+            before asking for deeper trust. Sits on a faint surface band (vs
+            the white hero) to give the page rhythm; each step is a real
+            card with a soft shadow + hover lift (clean-premium-SaaS look). */}
+        <section className="border-t border-(--color-border) bg-(--color-surface)">
+          <div className="max-w-6xl mx-auto px-4 sm:px-6 py-16 sm:py-24">
             <motion.div
               initial={{ opacity: 0, y: 12 }}
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true, amount: 'some' }}
               transition={{ duration: 0.5 }}
-              className="lg:col-span-5"
+              className="text-center max-w-2xl mx-auto mb-10 sm:mb-14"
             >
-              <div className="inline-flex items-center gap-2 font-mono text-[10px] sm:text-xs text-(--color-accent) mb-4 tracking-widest uppercase px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full bg-(--color-accent-muted) border border-(--color-accent-border)">
-                <Activity size={12} aria-hidden="true" />
-                Live · scanning the world
+              <div className="font-mono text-[10px] sm:text-xs text-(--color-accent) tracking-widest uppercase mb-3">
+                How it works
               </div>
-              <h2 className="text-[1.5rem] sm:text-3xl font-semibold tracking-tight leading-[1.15] text-balance">
-                Right now, somewhere on the planet, a vibe-coded app just leaked a secret.
+              <h2 className="text-[1.5rem] sm:text-3xl lg:text-4xl font-bold tracking-tight leading-[1.15] text-balance">
+                From paste to fixed in under a minute.
               </h2>
-              <p className="mt-3 text-(--color-fg-muted) text-[14px] sm:text-base leading-relaxed">
-                Drag the globe. Each pulse is a region where developers ship Cursor / Lovable / Bolt apps without a security review. We help them find the leaks before attackers do.
-              </p>
-
-              <ul className="mt-6 space-y-2.5">
-                {recentFindings.map((f, i) => {
-                  const dotColor =
-                    f.severity === 'critical'
-                      ? 'var(--color-danger)'
-                      : f.severity === 'warn'
-                        ? 'var(--color-warning)'
-                        : 'var(--color-fg-muted)'
-                  const ago =
-                    f.secondsAgo < 60
-                      ? `${f.secondsAgo}s ago`
-                      : f.secondsAgo < 3600
-                        ? `${Math.round(f.secondsAgo / 60)}m ago`
-                        : `${Math.round(f.secondsAgo / 3600)}h ago`
-                  return (
-                    <li
-                      key={`${f.hostname}-${i}`}
-                      className="font-mono text-[11px] sm:text-xs flex items-center gap-2 sm:gap-3 text-(--color-fg-dim) min-w-0"
-                    >
-                      <span className="tabular-nums text-(--color-accent) w-12 sm:w-16 flex-shrink-0">
-                        {ago}
-                      </span>
-                      <span
-                        className="w-1.5 h-1.5 rounded-full flex-shrink-0"
-                        style={{ background: dotColor }}
-                        aria-hidden="true"
-                      />
-                      <span className="truncate text-(--color-fg-muted) flex-1 min-w-0">{f.finding}</span>
-                    </li>
-                  )
-                })}
-              </ul>
-              <div className="mt-2 font-mono text-[10px] tracking-widest uppercase text-(--color-fg-dim)">
-                {isLive ? '● Live · last scans, hostnames redacted' : '◌ Awaiting first scans — illustrative until then'}
-              </div>
-
-              <div className="mt-6 grid grid-cols-3 gap-4 max-w-md">
-                <div>
-                  <div className="font-mono text-2xl font-semibold tabular-nums text-(--color-fg)">
-                    23
-                  </div>
-                  <div className="font-mono text-[10px] tracking-widest uppercase text-(--color-fg-dim) mt-1">
-                    Security checks
-                  </div>
-                </div>
-                <div>
-                  <div className="font-mono text-2xl font-semibold tabular-nums text-(--color-fg)">
-                    &lt;60s
-                  </div>
-                  <div className="font-mono text-[10px] tracking-widest uppercase text-(--color-fg-dim) mt-1">
-                    Avg scan
-                  </div>
-                </div>
-                <div>
-                  <div className="font-mono text-2xl font-semibold tabular-nums text-(--color-fg)">
-                    3
-                  </div>
-                  <div className="font-mono text-[10px] tracking-widest uppercase text-(--color-fg-dim) mt-1">
-                    Urgency levels
-                  </div>
-                </div>
-              </div>
             </motion.div>
-
             <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              whileInView={{ opacity: 1, scale: 1 }}
+              initial="hidden"
+              whileInView="show"
               viewport={{ once: true, amount: 'some' }}
-              transition={{ duration: 0.6 }}
-              className="lg:col-span-7 flex items-center justify-center"
+              variants={{
+                hidden: {},
+                show: { transition: { staggerChildren: 0.12 } },
+              }}
+              className="grid grid-cols-1 sm:grid-cols-3 gap-5 sm:gap-6"
             >
-              <div className="w-full max-w-[320px] sm:max-w-[520px] aspect-square">
-                <InteractiveGlobe size={520} className="!w-full !h-full" />
-              </div>
+              {STEPS.map((s) => (
+                <motion.div
+                  key={s.n}
+                  variants={{
+                    hidden: { opacity: 0, y: 12 },
+                    show: { opacity: 1, y: 0 },
+                  }}
+                  transition={{ duration: 0.4 }}
+                  className="group rounded-2xl border border-(--color-border) bg-(--color-surface-elevated) p-6 sm:p-7 shadow-[0_1px_2px_rgba(0,0,0,0.04)] hover:shadow-[0_16px_40px_-20px_rgba(2,8,23,0.25)] hover:border-(--color-accent-border) hover:-translate-y-1 transition-all duration-300"
+                >
+                  <div className="flex items-center gap-3 mb-3 sm:mb-4">
+                    <span className="flex items-center justify-center w-10 h-10 rounded-xl bg-(--color-accent-muted) text-(--color-accent) border border-(--color-accent-border) group-hover:scale-105 transition-transform">
+                      <s.Icon size={18} strokeWidth={2} aria-hidden="true" />
+                    </span>
+                    <div className="font-mono text-[11px] sm:text-xs text-(--color-accent) tracking-widest uppercase">
+                      {s.n} · {s.title}
+                    </div>
+                  </div>
+                  <p className="text-[14px] sm:text-base text-(--color-fg-muted) leading-relaxed">{s.body}</p>
+                </motion.div>
+              ))}
             </motion.div>
           </div>
         </section>
 
         {/* Architecture visual — 8 colored signal streams converge into a
-            central CPU. Maps directly to Vguard's mental model: many detector
-            categories → one Vibe Score. Bridges the globe section and the
-            3-step process ("how it lands").
+            central CPU. Why the one score is trustworthy: many detector
+            categories → one Vibe Score. Sits after the 3 steps as the
+            "under the hood" credibility beat.
             Mobile: SVG container is `max-w-md` so it never gets too big on
             phones, and aspect-[2/1] preserves the 200×100 viewBox. */}
         <section className="border-t border-(--color-border)">
@@ -320,63 +238,38 @@ export default function App() {
               Eight signal streams. <span className="text-(--color-fg-muted)">One verdict.</span>
             </h2>
             <p className="mt-3 text-(--color-fg-muted) text-[13.5px] sm:text-base leading-relaxed max-w-xl">
-              Every check — is your connection safe, did any passwords or keys
-              leak, are private files exposed, is your login protected, is your
-              cloud storage locked down, and the classic ways attackers break in
-              — rolls up into one clear score you can act on.
+              Dozens of checks — leaked keys, exposed files, weak connections, open
+              storage — roll up into one score you can act on.
             </p>
-            <div className="mt-5 sm:mt-8 w-full max-w-[320px] sm:max-w-md aspect-[2/1] text-(--color-fg-dim)">
-              <CpuArchitecture text="secure" />
+            <div className="mt-6 sm:mt-9 w-full max-w-md sm:max-w-2xl rounded-2xl border border-(--color-border) bg-(--color-surface)/40 px-6 sm:px-10 py-7 sm:py-10 shadow-[0_16px_50px_-24px_rgba(2,8,23,0.25)]">
+              <div className="w-full aspect-[2/1] text-(--color-accent)/70">
+                <CpuArchitecture text="secure" />
+              </div>
             </div>
-          </motion.div>
-        </section>
-
-        <section className="border-t border-(--color-border)">
-          <motion.div
-            initial="hidden"
-            whileInView="show"
-            viewport={{ once: true, amount: 'some' }}
-            variants={{
-              hidden: {},
-              show: { transition: { staggerChildren: 0.12 } },
-            }}
-            className="max-w-6xl mx-auto px-4 sm:px-6 py-12 sm:py-20 grid grid-cols-1 sm:grid-cols-3 gap-8 sm:gap-10"
-          >
-            {STEPS.map((s) => (
-              <motion.div
-                key={s.n}
-                variants={{
-                  hidden: { opacity: 0, y: 12 },
-                  show: { opacity: 1, y: 0 },
-                }}
-                transition={{ duration: 0.4 }}
-              >
-                <div className="flex items-center gap-3 mb-3 sm:mb-4">
-                  <span className="flex items-center justify-center w-10 h-10 rounded-lg bg-(--color-accent-muted) text-(--color-accent) border border-(--color-accent-border)">
-                    <s.Icon size={18} strokeWidth={2} aria-hidden="true" />
-                  </span>
-                  <div className="font-mono text-[11px] sm:text-xs text-(--color-accent) tracking-widest uppercase">
-                    {s.n} · {s.title}
-                  </div>
-                </div>
-                <p className="text-[14px] sm:text-base text-(--color-fg-muted) leading-relaxed">{s.body}</p>
-              </motion.div>
-            ))}
           </motion.div>
         </section>
 
         <PricingSection />
 
+        {/* Closing CTA — its natural home is the bottom: it re-engages the
+            visitor who has read the whole page and scrolls them back up to the
+            hero scan form (#vguard-scan). "Free" right above (Pricing) clears
+            the price objection just before the ask. */}
         <section className="border-t border-(--color-border) relative overflow-hidden">
+          {/* Ambient cyan glow — premium finish behind the closing CTA. */}
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute left-1/2 top-1/2 h-[360px] w-[620px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-(--color-accent) opacity-[0.08] blur-[120px]"
+          />
           <motion.div
             initial={{ opacity: 0, y: 16 }}
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true, amount: 'some' }}
             transition={{ duration: 0.5 }}
-            className="max-w-3xl mx-auto px-4 sm:px-6 py-16 sm:py-24 flex flex-col items-center text-center"
+            className="relative max-w-3xl mx-auto px-4 sm:px-6 py-16 sm:py-24 flex flex-col items-center text-center"
           >
             <h2 className="text-[1.6rem] sm:text-4xl font-bold tracking-tight leading-[1.1] text-balance">
-              Find your leaks before attackers do.
+              Find your <span className="text-(--color-accent)">leaks</span> before attackers do.
             </h2>
             <p className="mt-3 text-(--color-fg-muted) text-[14px] sm:text-base leading-relaxed max-w-lg">
               Paste your URL, get a clear score and ready-to-paste fixes in under a minute. Free —
@@ -384,7 +277,7 @@ export default function App() {
             </p>
             <a
               href="#vguard-scan"
-              className="mt-7 inline-flex items-center justify-center gap-2 h-12 px-6 rounded-xl bg-(--color-accent) text-(--color-bg) font-mono text-sm font-semibold hover:opacity-90 active:scale-[0.99] transition-all"
+              className="mt-7 inline-flex items-center justify-center gap-2 h-12 px-6 rounded-xl bg-(--color-cta) text-(--color-cta-fg) font-mono text-sm font-semibold shadow-[0_0_24px_-4px_var(--color-cta)] hover:bg-(--color-cta-strong) hover:shadow-[0_0_30px_0_var(--color-cta)] active:scale-[0.99] transition-all"
             >
               Scan my app
               <ArrowRight size={16} strokeWidth={2.5} aria-hidden="true" />

@@ -8,7 +8,7 @@ import { VGuardsLogo } from '@/components/ui/vguards-logo'
  */
 export function PricingSection() {
   return (
-    <section className="border-t border-(--color-border) relative overflow-hidden">
+    <section className="border-t border-(--color-border) bg-(--color-surface) relative overflow-hidden">
       {/* Ambient glow + grid — pure CSS, on-brand. */}
       <div
         aria-hidden="true"

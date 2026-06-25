@@ -1,4 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
+import { recordLead } from './_lib/leads-store.js'
 
 export const config = {
   runtime: 'nodejs',
@@ -94,6 +95,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const tsOk = await verifyTurnstile(tsToken, ip)
   if (!tsOk) return res.status(403).json({ ok: false, error: 'turnstile_failed' })
+
+  // Persist the lead BEFORE emailing — so a mailer outage never loses a lead.
+  // Fail-soft: never blocks the contact response.
+  await recordLead(req, { source: 'contact', name, email, message })
 
   const resendToken = process.env.RESEND_TOKEN
   if (!resendToken) {

@@ -9,6 +9,7 @@ export type AuditEventType =
   | 'scan_failed'
   | 'stage2_started'
   | 'stage2_completed'
+  | 'stage3_active_auth_test'
   | 'badge_requested'
   | 'terms_viewed'
   | 'privacy_viewed'
