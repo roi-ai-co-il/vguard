@@ -18,6 +18,8 @@ import { withDisplayScore } from './display-score.js'
 import { analyzeBundles as analyzeBundlesAst } from './js-ast.js'
 import { deriveTargetProfile, computeCoverage, type TargetSignals } from './target-profile.js'
 import { decideScanIntensity, buildScoreExplanation, decideProbeExpansion } from './scan-orchestrator-policy.js'
+import { resolveReachableUrl } from './url-resolver.js'
+import type { UrlResolution } from '../../src/lib/scanner-types.js'
 
 const FETCH_TIMEOUT_MS = 4000
 const PROBE_TIMEOUT_MS = 2500
@@ -2214,7 +2216,54 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
     }
   }
 
-  // Kick off DNS + TLS + OPTIONS probes in parallel with main fetch.
+  // === URL REACHABILITY RESOLVER (2026-06-25) ===
+  // Find the reachable variant BEFORE any probe runs. Never fail a scan just
+  // because the first HTTPS-normalized URL timed out — try https/http × www/apex
+  // and pick the best reachable candidate. The winning Response is reused below.
+  const resolved = await resolveReachableUrl(trimmed, {
+    headers: {
+      'User-Agent': SCANNER_UA,
+      'Accept-Language': BROWSER_ACCEPT_LANGUAGE,
+      Accept: BROWSER_ACCEPT,
+    },
+  })
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      error: {
+        code: resolved.code,
+        message: resolved.message,
+        resolutionAttempts: resolved.attempts,
+      },
+    }
+  }
+  // Re-pin `url` to the resolved candidate so every downstream probe, the
+  // `tls-http` finding, and `httpsActive` (→ hard-cap 49 on HTTP) all key off
+  // the URL we actually scanned — not the user's first normalized guess.
+  url = new URL(resolved.resolvedScanUrl)
+  // SSRF guard, re-applied: a redirect could have landed the resolved URL on a
+  // private/metadata host. Reject before we probe it.
+  if (isPrivateHost(url.hostname)) {
+    return {
+      ok: false,
+      error: {
+        code: 'invalid_url',
+        message: 'The site redirected to a private/local address, which cannot be scanned.',
+      },
+    }
+  }
+  const resolutionMeta: UrlResolution = {
+    userInputUrl: trimmed,
+    normalizedHost: resolved.normalizedHost,
+    resolvedScanUrl: resolved.resolvedScanUrl,
+    usedFallback: resolved.usedFallback,
+    httpDowngraded: resolved.httpDowngraded,
+    reachability: resolved.reachability,
+    attempts: resolved.attempts,
+  }
+
+  // Kick off DNS + TLS + OPTIONS probes in parallel — now keyed off the RESOLVED
+  // url (not the user's first guess), so we probe the host that actually answered.
   const dnsP =
     url.protocol === 'https:'
       ? gatherDns(url.hostname).catch(
@@ -2288,28 +2337,10 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
     stealthRetrySucceeded: false,
   }
 
-  let mainResp: Response
-  try {
-    mainResp = await fetchWithTimeout(url.toString(), {
-      method: 'GET',
-      headers: {
-        'User-Agent': SCANNER_UA,
-        'Accept-Language': BROWSER_ACCEPT_LANGUAGE,
-        Accept: BROWSER_ACCEPT,
-      },
-    })
-  } catch (e: unknown) {
-    const isAbort =
-      e instanceof Error && (e.name === 'AbortError' || e.message.includes('aborted'))
-    if (isAbort) {
-      return { ok: false, error: { code: 'timeout', message: 'The site took too long to respond.' } }
-    }
-    const msg = e instanceof Error ? e.message : 'unknown error'
-    return {
-      ok: false,
-      error: { code: 'unreachable', message: `Could not reach ${url.host}: ${msg}` },
-    }
-  }
+  // Reuse the resolver's winning Response (body intact — only a clone was read
+  // for the attempt sample). The resolver already followed redirects + applied
+  // per-candidate + global timeouts, so a dead site can't hang us here.
+  let mainResp: Response = resolved.response
 
   if (mainResp.status >= 400 && mainResp.status < 500) {
     // 403 / 406 / 429 / 451 from a 4xx range strongly suggests a WAF
@@ -2390,7 +2421,7 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
   }
 
   const html = (await mainResp.text()).slice(0, 1024 * 1024) // cap HTML at 1MB
-  const finalUrl = mainResp.url || url.toString()
+  const finalUrl = resolved.finalUrl || mainResp.url || url.toString()
   const findings: Finding[] = []
   const detectedFramework = detectFramework(html)
 
@@ -4605,6 +4636,7 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
     scanIntensityUsed,
     findings: scored,
     attackSurface,
+    resolution: resolutionMeta,
     stage: 1 as const,
     meta: {
       finalUrl,

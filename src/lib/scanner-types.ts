@@ -233,6 +233,49 @@ export type SuggestedAction =
   | 'fix-target' // 4xx is the user's app actually broken (rare, e.g. 410)
   | 'try-canonical-host' // www vs apex / http vs https mismatch
 
+/** Structured error type from the URL reachability resolver (per candidate). */
+export type ResolverErrorType =
+  | 'dns_error'
+  | 'tcp_connect_timeout'
+  | 'tls_error'
+  | 'http_timeout'
+  | 'too_many_redirects'
+  | 'unknown_network_error'
+
+/** One candidate's reachability attempt — the debug record (resolver §10). */
+export interface ResolutionAttempt {
+  userInputUrl: string
+  candidateUrl: string
+  startedAt: number
+  durationMs: number
+  protocol: string
+  hostname: string
+  port: string
+  statusCode: number | null
+  errorType: ResolverErrorType | null
+  errorMessage: string | null
+  redirectChain: string[]
+  contentType: string | null
+  /** First ~200 chars of the body, secrets redacted. Never the full body. */
+  responseBodySample: string
+  selected: boolean
+  selectionReason: string | null
+}
+
+/** Resolver outcome metadata attached to a successful scan (resolver §1). */
+export interface UrlResolution {
+  userInputUrl: string
+  normalizedHost: string
+  resolvedScanUrl: string
+  /** A non-exact candidate (different protocol/host than the user typed) won. */
+  usedFallback: boolean
+  /** The resolved URL is http:// — HTTPS was unavailable/failed. Scored. */
+  httpDowngraded: boolean
+  /** scannable | http_only | reachable_but_blocked. */
+  reachability: 'scannable' | 'http_only' | 'reachable_but_blocked'
+  attempts: ResolutionAttempt[]
+}
+
 export interface ScanError {
   code:
     | 'invalid_url'
@@ -243,6 +286,14 @@ export interface ScanError {
     | 'too_large'
     | 'rate_limited'
     | 'internal'
+    // Resolver failure codes — every URL candidate failed (resolver §7D).
+    | 'all_candidates_failed'
+    | 'dns_error'
+    | 'tcp_connect_timeout'
+    | 'tls_error'
+    | 'http_timeout'
+    | 'too_many_redirects'
+    | 'unknown_network_error'
   message: string
   /** HTTP status from the target when the error originated from a fetch. */
   httpStatus?: number
@@ -250,6 +301,8 @@ export interface ScanError {
   wafVendor?: WafVendor
   /** Recommended next step the frontend should surface as a CTA. */
   suggestedAction?: SuggestedAction
+  /** Every URL candidate the resolver tried, with per-attempt failure reasons. */
+  resolutionAttempts?: ResolutionAttempt[]
 }
 
 /** One category's contribution to the score, for the "why this score" card. */
@@ -388,6 +441,12 @@ export interface ScanResult {
      */
     authEndpoints?: string[]
   }
+  /**
+   * URL reachability resolution metadata — which candidate was scanned, whether
+   * a fallback (www/apex/http) was used, and the full attempt log. Drives the
+   * "User input vs Scanned URL" UI + the fallback note.
+   */
+  resolution?: UrlResolution
   /** When true, the result already includes Stage 3 findings appended. */
   stage?: 1 | 3
   /**

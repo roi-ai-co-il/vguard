@@ -1471,6 +1471,22 @@ export function ScanForm() {
                   <div className="mt-1 font-mono text-[11px] sm:text-xs text-(--color-fg-dim) truncate max-w-full">
                     {result.meta.finalUrl}
                   </div>
+                  {result.resolution?.usedFallback && (
+                    <div className="mt-1.5 text-[11px] sm:text-xs text-(--color-fg-muted) leading-relaxed">
+                      <span className="text-(--color-fg-dim)">You entered </span>
+                      <span className="font-mono">{result.resolution.userInputUrl}</span>
+                      <span className="text-(--color-fg-dim)"> — we scanned the reachable version of this site</span>
+                      {result.resolution.httpDowngraded && (
+                        <span className="text-(--color-warn)">
+                          {' '}· reachable only over HTTP (reported below as a security finding)
+                        </span>
+                      )}
+                      {result.resolution.reachability === 'reachable_but_blocked' && (
+                        <span className="text-(--color-warn)"> · the site blocked/restricted the scanner</span>
+                      )}
+                      .
+                    </div>
+                  )}
                   <div className="mt-4 flex items-center gap-5 font-mono text-xs flex-wrap">
                     {finalTotals.confirmedCritical > 0 && (
                       <span className="flex items-center gap-2" title={uiGroupTooltip('confirmed-vulnerabilities')}>
