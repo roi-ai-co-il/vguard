@@ -23,23 +23,36 @@ const Privacy = lazy(() => import('./pages/Privacy.tsx'))
 const Terms = lazy(() => import('./pages/Terms.tsx'))
 const AccessibilityPage = lazy(() => import('./pages/Accessibility.tsx'))
 
+// The four tabs are handled client-side by <App> (instant, animated). The
+// standalone pages below full-load on their own. Keep these paths in sync with
+// vercel.json rewrites and middleware.ts PUBLIC_SPA_PATHS.
+const TAB_PATHS = new Set([
+  '/', '',
+  '/how-it-works', '/how-it-works/',
+  '/pricing', '/pricing/',
+  '/contact', '/contact/',
+])
+const STANDALONE_PUBLIC_PATHS = new Set([
+  '/privacy', '/privacy/',
+  '/terms', '/terms/',
+  '/accessibility', '/accessibility/',
+])
+
 function pickRoute() {
   const path = window.location.pathname
+  if (TAB_PATHS.has(path)) return <App initialPath={path} />
   if (path === '/privacy' || path === '/privacy/') return <Privacy />
   if (path === '/terms' || path === '/terms/') return <Terms />
   if (path === '/accessibility' || path === '/accessibility/') return <AccessibilityPage />
-  if (path === '/' || path === '') return <App />
   return <AdminDashboard />
 }
 
-const isAdminRoute = (() => {
-  const p = window.location.pathname
-  return p !== '/' && p !== '' && p !== '/privacy' && p !== '/privacy/' && p !== '/terms' && p !== '/terms/' && p !== '/accessibility' && p !== '/accessibility/'
-})()
+const path = window.location.pathname
+const isAdminRoute = !TAB_PATHS.has(path) && !STANDALONE_PUBLIC_PATHS.has(path)
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <Suspense fallback={<div style={{ minHeight: '100vh', background: '#09090b' }} />}>
+    <Suspense fallback={<div style={{ minHeight: '100vh', background: 'var(--color-bg)' }} />}>
       {pickRoute()}
     </Suspense>
     {!isAdminRoute && <AccessibilityWidget />}

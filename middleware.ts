@@ -5,7 +5,15 @@ export const config = {
 }
 
 const NOINDEX = 'noindex, nofollow, noarchive'
-const PUBLIC_SPA_PATHS = new Set(['/', '/privacy', '/privacy/', '/terms', '/terms/'])
+const PUBLIC_SPA_PATHS = new Set([
+  '/',
+  '/how-it-works', '/how-it-works/',
+  '/pricing', '/pricing/',
+  '/contact', '/contact/',
+  '/privacy', '/privacy/',
+  '/terms', '/terms/',
+  '/accessibility', '/accessibility/',
+])
 
 export default function middleware(req: Request): Response {
   const { pathname } = new URL(req.url)
