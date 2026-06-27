@@ -94,7 +94,7 @@ export default function Home() {
             className="mt-4 font-mono text-[11px] sm:text-xs text-(--color-fg-dim) flex items-center gap-1.5"
           >
             <ArrowRight size={11} className="text-(--color-accent)" aria-hidden="true" />
-            Every scan free. No card. No bullshit.
+            Every scan free. No card. No catch.
           </motion.div>
           <motion.p
             variants={fadeUp}
@@ -113,22 +113,21 @@ export default function Home() {
           <motion.div
             variants={fadeUp}
             transition={{ duration: 0.6 }}
-            className="mt-8 sm:mt-10 flex flex-wrap items-center gap-3 text-sm"
+            className="mt-8 sm:mt-10 flex flex-wrap items-center gap-3"
           >
             <a
               href="/how-it-works"
-              className="inline-flex items-center gap-1.5 text-(--color-fg-muted) hover:text-(--color-accent) transition-colors"
+              className="group inline-flex items-center justify-center gap-2 px-5 py-3 rounded-lg bg-(--color-accent-muted) border border-(--color-accent-border) text-(--color-accent) font-mono text-sm font-medium tracking-tight shadow-[0_0_0_0_var(--color-cta)] hover:bg-(--color-accent)/15 hover:shadow-[0_0_20px_-4px_var(--color-cta)] active:scale-[0.98] transition-all cursor-pointer min-h-[48px]"
             >
               See how it works
-              <ArrowRight size={14} aria-hidden="true" />
+              <ArrowRight size={16} strokeWidth={2.5} className="transition-transform group-hover:translate-x-0.5" aria-hidden="true" />
             </a>
-            <span className="text-(--color-border)">·</span>
             <a
               href="/pricing"
-              className="inline-flex items-center gap-1.5 text-(--color-fg-muted) hover:text-(--color-accent) transition-colors"
+              className="group inline-flex items-center justify-center gap-2 px-5 py-3 rounded-lg bg-(--color-accent-muted) border border-(--color-accent-border) text-(--color-accent) font-mono text-sm font-medium tracking-tight shadow-[0_0_0_0_var(--color-cta)] hover:bg-(--color-accent)/15 hover:shadow-[0_0_20px_-4px_var(--color-cta)] active:scale-[0.98] transition-all cursor-pointer min-h-[48px]"
             >
               Pricing
-              <ArrowRight size={14} aria-hidden="true" />
+              <ArrowRight size={16} strokeWidth={2.5} className="transition-transform group-hover:translate-x-0.5" aria-hidden="true" />
             </a>
           </motion.div>
         </motion.div>
