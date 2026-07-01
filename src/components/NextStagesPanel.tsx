@@ -758,6 +758,67 @@ function clearPersistedUuid(domain: string): void {
   }
 }
 
+// ── "Remember my Stage 3 verification" ──────────────────────────────────────
+// After a domain is successfully verified we stash a small record on THIS
+// device so the owner can re-run Stage 3 without redoing the DNS/file dance.
+// The `uuid` doubles as the access code: it's the per-domain secret the server
+// already caches (30d) and scan-deep already checks, and we also email it so
+// the owner can paste it on a different device. Only someone who verified (or
+// received the emailed code) can skip — a random scanner mints a different uuid
+// and still has to prove ownership. Mirrors the server's 30-day cache window.
+const VERIFIED_TTL_MS = 30 * 24 * 60 * 60 * 1000
+interface SavedVerification {
+  uuid: string
+  method: VerifyMethod
+  email: string
+  verifiedAt: number
+}
+function verifiedStorageKey(domain: string): string {
+  return `vguard-verified:${domain.toLowerCase()}`
+}
+function loadVerifiedDomain(domain: string): SavedVerification | null {
+  if (typeof window === 'undefined' || !domain) return null
+  try {
+    const raw = window.localStorage.getItem(verifiedStorageKey(domain))
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Partial<SavedVerification>
+    if (
+      parsed.uuid && /^vs-[A-Za-z0-9-]{8,}$/.test(parsed.uuid) &&
+      typeof parsed.verifiedAt === 'number' &&
+      Date.now() - parsed.verifiedAt < VERIFIED_TTL_MS
+    ) {
+      return {
+        uuid: parsed.uuid,
+        method: (parsed.method as VerifyMethod) ?? 'dns',
+        email: parsed.email ?? '',
+        verifiedAt: parsed.verifiedAt,
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return null
+}
+function markDomainVerified(domain: string, v: { uuid: string; method: VerifyMethod; email: string }): void {
+  if (typeof window === 'undefined' || !domain) return
+  try {
+    window.localStorage.setItem(
+      verifiedStorageKey(domain),
+      JSON.stringify({ ...v, verifiedAt: Date.now() } satisfies SavedVerification),
+    )
+  } catch {
+    // ignore
+  }
+}
+function clearVerifiedDomain(domain: string): void {
+  if (typeof window === 'undefined' || !domain) return
+  try {
+    window.localStorage.removeItem(verifiedStorageKey(domain))
+  } catch {
+    // ignore
+  }
+}
+
 interface FreeTierProvider {
   name: string
   /** Short, one-line instructions for the file-upload path on this provider. */
@@ -1009,6 +1070,42 @@ function Stage3Modal({
   // Vercel-token method is hidden behind an "Advanced" disclosure — pasting a
   // PAT into a 3rd-party scanner is a real trust ask, not for every user.
   const [showAdvanced, setShowAdvanced] = useState(false)
+  // "Remember my verification" — if this device already verified this domain,
+  // offer a one-click deep scan and hide the whole DNS/file form. `showFullForm`
+  // lets the user fall back to re-verifying (e.g. after moving hosts).
+  const [savedVerification, setSavedVerification] = useState<SavedVerification | null>(() =>
+    loadVerifiedDomain(domain),
+  )
+  const [showFullForm, setShowFullForm] = useState(false)
+  const [pasteCode, setPasteCode] = useState('')
+  const [pasteError, setPasteError] = useState('')
+  const useFastPath = !!savedVerification && !showFullForm
+
+  // Adopt an access code (the uuid) the owner received by email — lets them skip
+  // the DNS/file step on a new device. scan-deep validates it server-side
+  // (cache hit within 30d, else a live ownership re-check), so a bogus code
+  // simply fails ownership rather than granting access.
+  function adoptAccessCode() {
+    const code = pasteCode.trim()
+    if (!/^vs-[A-Za-z0-9-]{8,}$/.test(code)) {
+      setPasteError('That doesn’t look like a V-Guards access code (starts with "vs-").')
+      return
+    }
+    setPasteError('')
+    setUuid(code)
+    markDomainVerified(domain, { uuid: code, method, email: verifyEmail.trim() })
+    setSavedVerification({ uuid: code, method, email: verifyEmail.trim(), verifiedAt: Date.now() })
+    setShowFullForm(false)
+    void runDeepScan(code)
+  }
+
+  // One-click deep scan for a domain already verified on this device.
+  function runSavedDeepScan() {
+    if (!savedVerification) return
+    setUuid(savedVerification.uuid)
+    setMethod(savedVerification.method)
+    void runDeepScan(savedVerification.uuid)
+  }
 
   async function copyToClipboard(text: string, what: 'uuid' | 'cmd' | 'ai') {
     let ok = false
@@ -1084,6 +1181,10 @@ function Stage3Modal({
             // localStorage may be unavailable (private mode, quota); fail-soft
           }
         }
+        // Remember this verification on the device so future Stage 3 runs on
+        // this domain skip the whole form (see the fast-path card at the top).
+        markDomainVerified(domain, { uuid: verifyUuid, method, email: verifyEmail.trim() })
+        setSavedVerification({ uuid: verifyUuid, method, email: verifyEmail.trim(), verifiedAt: Date.now() })
         // Stage 3 is fully free — once ownership is verified, go straight to the
         // deep scan. Pass the verify uuid explicitly to avoid the stale-closure
         // uuid problem noted on runDeepScan.
@@ -1165,6 +1266,101 @@ function Stage3Modal({
           Prove you own <span className="font-mono text-(--color-accent)">{domain}</span>
         </h3>
 
+        {/* Fast path — this device already verified this domain: one-click deep
+            scan, no form. */}
+        {useFastPath && (
+          <div className="mt-4 rounded-lg bg-(--color-bg) border border-(--color-ok)/45 px-4 py-4">
+            <div className="flex items-start gap-2.5">
+              <Check size={16} className="text-(--color-ok) mt-0.5 flex-shrink-0" strokeWidth={2.5} aria-hidden="true" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm text-(--color-fg) font-semibold leading-snug">
+                  You already verified this domain on this device
+                </p>
+                <p className="mt-1 text-xs text-(--color-fg-muted) leading-relaxed">
+                  No setup needed — run the deep scan straight away. Only this browser (and anyone
+                  with your emailed access code) can do this.
+                </p>
+                <div className="mt-3 flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={runSavedDeepScan}
+                    disabled={status === 'scanning'}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-(--color-accent) text-(--color-bg) hover:bg-(--color-accent-strong) font-mono text-xs font-semibold transition-colors cursor-pointer min-h-[36px] disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {status === 'scanning' ? (
+                      <>
+                        <Loader2 size={13} className="animate-spin" strokeWidth={2.5} aria-hidden="true" />
+                        Scanning…
+                      </>
+                    ) : (
+                      <>
+                        <ShieldCheck size={13} strokeWidth={2.5} aria-hidden="true" />
+                        Run deep scan
+                      </>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setShowFullForm(true); setStatus('idle') }}
+                    className="font-mono text-[11px] text-(--color-fg-dim) hover:text-(--color-fg-muted) cursor-pointer"
+                  >
+                    Verify a different way
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { clearVerifiedDomain(domain); setSavedVerification(null); setShowFullForm(true) }}
+                    className="font-mono text-[11px] text-(--color-fg-dim) hover:text-(--color-fg-muted) cursor-pointer"
+                  >
+                    Forget this device
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Access code — paste the code emailed after a prior verify to skip the
+            DNS/file step on a new device. Shown whenever the full form is. */}
+        {!useFastPath && (
+          <details className="mt-4 rounded-lg bg-(--color-bg) border border-(--color-border) px-4 py-3 group">
+            <summary className="flex items-center gap-2 cursor-pointer font-mono text-[11px] tracking-wide text-(--color-fg-muted) hover:text-(--color-fg) list-none">
+              <ArrowRight size={12} className="text-(--color-accent) transition-transform group-open:rotate-90" aria-hidden="true" />
+              Already verified before? Paste your access code
+            </summary>
+            <div className="mt-3">
+              <p className="text-xs text-(--color-fg-muted) leading-relaxed mb-2">
+                We emailed you an access code (starts with <span className="font-mono">vs-</span>) after your first
+                verification. Paste it to run Stage 3 without redoing DNS.
+              </p>
+              <div className="flex items-center gap-2 flex-wrap">
+                <input
+                  type="text"
+                  value={pasteCode}
+                  onChange={(e) => { setPasteCode(e.target.value); setPasteError('') }}
+                  placeholder="vs-xxxxxxxx-xxxx-..."
+                  spellCheck={false}
+                  autoComplete="off"
+                  className="flex-1 min-w-[220px] bg-(--color-surface-elevated) border border-(--color-border) rounded-md px-3 py-2 font-mono text-xs text-(--color-fg) placeholder:text-(--color-fg-dim) focus:outline-none focus:border-(--color-accent-border)"
+                />
+                <button
+                  type="button"
+                  onClick={adoptAccessCode}
+                  disabled={status === 'scanning'}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-(--color-accent) text-(--color-bg) hover:bg-(--color-accent-strong) font-mono text-xs font-semibold transition-colors cursor-pointer min-h-[36px] disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <ShieldCheck size={13} strokeWidth={2.5} aria-hidden="true" />
+                  Use code
+                </button>
+              </div>
+              {pasteError && (
+                <p className="mt-1.5 font-mono text-[10px] text-(--color-warning)" role="alert">⚠ {pasteError}</p>
+              )}
+            </div>
+          </details>
+        )}
+
+        {!useFastPath && (
+        <>
         {/* Honest preamble — explains the friction so the user accepts it */}
         <div className="mt-4 rounded-md bg-(--color-bg) border border-(--color-warning)/40 px-4 py-3">
           <div className="flex items-start gap-2">
@@ -1620,6 +1816,8 @@ function Stage3Modal({
             </>
           )}
         </div>
+        </>
+        )}
 
         {status === 'verified' && (
           <motion.div

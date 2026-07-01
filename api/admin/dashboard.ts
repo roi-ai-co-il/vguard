@@ -66,7 +66,7 @@ async function buildOverview(client: SupabaseClient) {
       .limit(AGG_CAP),
     client
       .from('vs_verified_domains')
-      .select('domain, uuid, method, verified_at, expires_at, user_agent, scan_count')
+      .select('domain, email, method, verified_at, expires_at, user_agent, scan_count')
       .order('verified_at', { ascending: false }),
     client.from('vs_stage2_collections').select('uuid', { count: 'exact', head: true }),
   ])

@@ -198,7 +198,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // creating a flaky "verified then ownership-failed" UX). Fail-soft on
       // the write itself — verification still passes for this response.
       try {
-        await recordVerification(domain, uuid, method, ua)
+        await recordVerification(domain, uuid, method, ua, email)
       } catch {
         // ignore — DB write is best-effort, deep scan can re-verify live
       }
@@ -207,7 +207,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // so fire-and-forget won't actually complete. Resend round-trip
         // is ~200-500ms, well within our 15s maxDuration.
         try {
-          await sendVerificationConfirmation(email, domain, method)
+          // Pass the uuid as the access code so the owner can paste it on
+          // another device to skip re-verification.
+          await sendVerificationConfirmation(email, domain, method, uuid)
         } catch {
           // Email failure shouldn't fail the verify response.
         }

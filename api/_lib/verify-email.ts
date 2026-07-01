@@ -24,6 +24,9 @@ export async function sendVerificationConfirmation(
   toEmail: string,
   domain: string,
   method: 'file' | 'dns' | 'vercel',
+  /** The per-domain access code (verification uuid). Lets the owner re-run
+   *  Stage 3 on another device by pasting it — no DNS/file re-do. */
+  accessCode?: string,
 ): Promise<void> {
   const trimmed = (toEmail ?? '').trim()
   if (!trimmed || !EMAIL_RE.test(trimmed)) return
@@ -55,6 +58,10 @@ export async function sendVerificationConfirmation(
     `Expires:   ${expiresAt}\n\n` +
     `You can now run a Stage 3 deep scan on ${domain} — including Supabase RLS testing, storage bucket probes, aggressive XSS / SQLi payloads, path traversal, AI prompt-injection canaries, and IDOR testing.\n\n` +
     `Run deep scan: ${dashboardLink}\n\n` +
+    (accessCode
+      ? `Your access code:  ${accessCode}\n` +
+        `Keep this code. On a new device or browser, paste it in the Stage 3 box ("Already verified before? Paste your access code") to run the deep scan without redoing DNS. Only you have it — it was sent only to this inbox.\n\n`
+      : '') +
     `Verification expires after 30 days. You can re-verify any time.\n\n` +
     `— V-Guards`
 
@@ -98,6 +105,13 @@ export async function sendVerificationConfirmation(
       <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:#9ca3af;font-weight:600;margin-bottom:4px">Expires</div>
       <div style="font-size:14px;color:#111">${expiresAt} <span style="color:#9ca3af;font-size:12px;margin-left:6px">(30 days — re-verify any time)</span></div>
     </div>
+
+    ${accessCode ? `<!-- Access code block -->
+    <div style="padding:14px 24px;border-top:1px solid #f3f4f6">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:#9ca3af;font-weight:600;margin-bottom:4px">Your access code</div>
+      <div style="font-size:14px;color:#111;font-family:ui-monospace,SF Mono,Consolas,monospace;word-break:break-all;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:8px 10px">${escapeHtml(accessCode)}</div>
+      <p style="margin:8px 0 0;color:#6b7280;font-size:12px;line-height:1.5">Keep this code. On a new device, paste it in the Stage 3 box (&ldquo;Already verified before? Paste your access code&rdquo;) to skip DNS and run the deep scan. Only you have it — it was sent only to this inbox.</p>
+    </div>` : ''}
 
     <!-- What's unlocked block -->
     <div style="padding:18px 24px;border-top:1px solid #f3f4f6;background:#ecfeff">

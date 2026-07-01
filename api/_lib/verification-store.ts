@@ -64,6 +64,7 @@ export async function recordVerification(
   uuid: string,
   method: 'file' | 'dns' | 'oauth',
   userAgent?: string | null,
+  email?: string | null,
 ): Promise<void> {
   const client = getClient()
   if (!client) return
@@ -76,6 +77,7 @@ export async function recordVerification(
         verified_at: new Date().toISOString(),
         expires_at: new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString(),
         user_agent: userAgent ?? null,
+        email: email && email.trim() ? email.trim().slice(0, 200) : null,
         scan_count: 0,
       },
       { onConflict: 'domain' },

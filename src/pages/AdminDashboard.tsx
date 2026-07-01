@@ -235,6 +235,7 @@ interface ScanRow {
 
 interface VerifiedDomain {
   domain: string
+  email: string | null
   method: string | null
   verified_at: string
   expires_at: string | null
@@ -1413,7 +1414,7 @@ function LeadsTab({
               key={v.domain}
               last={i === data.verified.length - 1}
               title={<span className="font-medium" dir="ltr">{v.domain}</span>}
-              subtitle={`${(v.method ?? '').toUpperCase()} · אומת ${fmtDate(v.verified_at)} · ${v.scan_count ?? 0} סריקות`}
+              subtitle={`${v.email ? v.email + ' · ' : ''}${(v.method ?? '').toUpperCase()} · אומת ${fmtDate(v.verified_at)} · ${v.scan_count ?? 0} סריקות`}
               onPress={() => window.open(`https://v-guards.com/?url=${encodeURIComponent('https://' + v.domain)}`, '_blank')}
             />
           ))
