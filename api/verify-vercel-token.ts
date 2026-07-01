@@ -10,11 +10,10 @@
  * one of them. The token is never stored — we use it once and discard.
  */
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { recordVerification } from './_lib/verification-store.js'
+import { markVerifiedAndAuthorize } from './_lib/stage3-auth.js'
 import {
   sendVerificationConfirmation,
   sendVerificationFailure,
-  fireAndForget,
 } from './_lib/verify-email.js'
 
 export const config = {
@@ -124,14 +123,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const body = (req.body && typeof req.body === 'object' ? req.body : {}) as VerifyVercelTokenBody
   const domain = (body.domain ?? '').trim().toLowerCase()
-  const uuid = (body.uuid ?? '').trim()
   const vercelToken = (body.vercelToken ?? '').trim()
 
   if (!isValidDomain(domain)) {
     return res.status(400).json({ ok: false, error: 'Invalid domain.' })
-  }
-  if (!isValidUuid(uuid)) {
-    return res.status(400).json({ ok: false, error: 'Invalid uuid.' })
   }
   if (!vercelToken || vercelToken.length < 20) {
     return res.status(400).json({ ok: false, error: 'Invalid Vercel token.' })
@@ -151,7 +146,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     })
     if (!meCheck.ok) {
       const reason = `Vercel rejected the token (HTTP ${meCheck.status}). Make sure you copied a fresh personal token from vercel.com/account/tokens with "Full Access" scope.`
-      try { await sendVerificationFailure(email, domain, 'vercel', uuid, reason) } catch {}
+      try { await sendVerificationFailure(email, domain, 'vercel', '', reason) } catch {}
       return res.status(200).json({
         ok: true,
         verified: false,
@@ -162,22 +157,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const result = await userOwnsDomain(vercelToken, domain)
     if (result.owned) {
-      const ua = (req.headers['user-agent'] as string | undefined) ?? null
-      // Record verification without storing the user's Vercel token
-      recordVerification(domain, uuid, 'oauth', `vercel-token:${ua ?? ''}`).catch(() => {
-        // ignore
-      })
-      try { await sendVerificationConfirmation(email, domain, 'vercel') } catch {}
+      // Vercel's API confirmed this account owns the domain → issue a Stage 3
+      // authorization bound to this email + a private auth token. The token is
+      // never stored.
+      const authz = await markVerifiedAndAuthorize(domain, email, 'oauth')
+      if (!authz) {
+        return res.status(503).json({
+          ok: false,
+          error: 'Verified, but authorization storage is unavailable. Please try again shortly.',
+        })
+      }
+      try { await sendVerificationConfirmation(email, domain, 'vercel', authz.authToken) } catch {}
       return res.status(200).json({
         ok: true,
         verified: true,
         method: 'vercel-token',
+        authToken: authz.authToken,
         matchedProject: result.matchedProject,
         matchedAlias: result.matchedAlias,
       })
     }
     const reason = `The token works, but ${domain} isn't an alias of any project in this Vercel account or its teams. Verify you signed in with the Vercel account that actually owns this domain, or use the file/DNS method instead.`
-    try { await sendVerificationFailure(email, domain, 'vercel', uuid, reason) } catch {}
+    try { await sendVerificationFailure(email, domain, 'vercel', '', reason) } catch {}
     return res.status(200).json({
       ok: true,
       verified: false,

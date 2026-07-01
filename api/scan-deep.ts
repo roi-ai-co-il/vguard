@@ -1,8 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { promises as dns } from 'node:dns'
 import { runScan } from './_lib/scanner.js'
 import { runDeepScan } from './_lib/deep-scanner.js'
-import { getCachedVerification, incrementScanCount } from './_lib/verification-store.js'
+import { isAuthorizedForStage3 } from './_lib/stage3-auth.js'
 import { enrichFindings } from './_lib/fix-prompt-composer.js'
 import { logAuditEvent, fireAndForget } from './_lib/audit-log.js'
 import { applyRisk, classifyRouteContext, computeAggregateRisk } from './_lib/risk-scorer.js'
@@ -17,47 +16,10 @@ export const config = {
 
 interface ScanDeepBody {
   url?: string
-  uuid?: string
-  method?: 'file' | 'dns' | 'oauth'
+  /** Private per-owner Stage 3 access token issued at verification (vga-...). */
+  authToken?: string
   /** Optional user-supplied JWT for authenticated-mode IDOR/RLS probing */
   userJwt?: string
-}
-
-async function fetchWithTimeout(url: string, timeoutMs = 5000): Promise<Response> {
-  const controller = new AbortController()
-  const t = setTimeout(() => controller.abort(), timeoutMs)
-  try {
-    return await fetch(url, { signal: controller.signal, redirect: 'follow' })
-  } finally {
-    clearTimeout(t)
-  }
-}
-
-async function verifyOwnership(
-  domain: string,
-  uuid: string,
-  method: 'file' | 'dns' | 'oauth',
-): Promise<boolean> {
-  // 'oauth' is handled separately — it lands as a cached entry in vs_verified_domains
-  // already. If we got here with method='oauth' we trust the cache check below.
-  if (method === 'oauth') return false
-  if (method === 'file') {
-    try {
-      const r = await fetchWithTimeout(`https://${domain}/.well-known/Vguard-verify.txt`, 5000)
-      if (!r.ok) return false
-      const body = (await r.text()).trim()
-      return body === uuid || body.includes(uuid)
-    } catch {
-      return false
-    }
-  }
-  // DNS
-  try {
-    const records = await dns.resolveTxt(`_Vguard-verify.${domain}`).catch(() => [] as string[][])
-    return records.map((parts) => parts.join('')).some((rec) => rec.includes(uuid))
-  } catch {
-    return false
-  }
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -73,8 +35,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const body = (req.body && typeof req.body === 'object' ? req.body : {}) as ScanDeepBody
   const targetUrl = (body.url ?? '').trim()
-  const uuid = (body.uuid ?? '').trim()
-  const method = body.method ?? 'file'
+  const authToken = (body.authToken ?? '').trim()
   const userJwt = typeof body.userJwt === 'string' ? body.userJwt.trim() : ''
 
   if (!targetUrl) {
@@ -83,14 +44,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       error: { code: 'invalid_url', message: 'Missing url.' },
     })
   }
-  if (!uuid) {
-    return res.status(400).json({
-      ok: false,
-      error: { code: 'invalid_url', message: 'Missing verification UUID.' },
-    })
-  }
 
-  // Re-verify ownership before any active probing
   let parsedUrl: URL
   try {
     parsedUrl = new URL(/^https?:\/\//i.test(targetUrl) ? targetUrl : `https://${targetUrl}`)
@@ -100,31 +54,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       error: { code: 'invalid_url', message: 'Invalid URL.' },
     })
   }
-  // First try cached verification (Supabase) — falls back to live re-verify on miss
-  const cached = await getCachedVerification(parsedUrl.hostname).catch(() => null)
-  let verified = false
-  // Dev-only bypass (see api/verify.ts) — never true in production (Vercel sets
-  // NODE_ENV=production), so the live ownership gate is unaffected.
+
+  // AUTHORIZATION GATE — the server alone decides. Stage 3 runs only if the
+  // presented private auth token maps to an ACTIVE authorization for THIS exact
+  // domain. A verified domain does NOT authorize arbitrary emails; a public DNS
+  // code is useless here (it's not the private token). Client state is never
+  // trusted. Dev bypass can never fire in production (Vercel sets NODE_ENV).
+  let authorizedMethod = 'dns'
   if (process.env.NODE_ENV !== 'production') {
-    verified = true
-  } else if (cached && cached.uuid === uuid) {
-    verified = true
-  } else {
-    verified = await verifyOwnership(parsedUrl.hostname, uuid, method)
-  }
-  if (!verified) {
-    return res.status(403).json({
-      ok: false,
-      error: {
-        code: 'rate_limited',
-        message: 'Ownership verification failed. Re-verify before running the deep scan.',
-      },
-    })
-  }
-  // Bump scan_count (fire-and-forget, fail-soft)
-  incrementScanCount(parsedUrl.hostname).catch(() => {
     // ignore
-  })
+  } else {
+    const authz = await isAuthorizedForStage3(parsedUrl.hostname, authToken).catch(() => ({
+      authorized: false as const,
+    }))
+    if (!authz.authorized) {
+      return res.status(403).json({
+        ok: false,
+        error: {
+          code: 'rate_limited',
+          message:
+            'Not authorized for Stage 3 on this domain. Verify ownership (or paste your access code) first.',
+        },
+      })
+    }
+    authorizedMethod = authz.method ?? 'dns'
+  }
 
   try {
     // Stage 1 baseline first (provides detected.supabaseAnonKey for RLS probes)
@@ -151,7 +105,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           metadata: {
             domain: parsedUrl.hostname,
             ownership_verified: true,
-            verify_method: method,
+            verify_method: authorizedMethod,
             auth_endpoint_count: detectedAuthEndpoints.length,
             max_requests: 5,
           },

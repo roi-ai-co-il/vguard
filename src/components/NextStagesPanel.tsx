@@ -701,9 +701,16 @@ interface VerifyApiResponse {
   method?: VerifyMethod
   error?: string
   hint?: string
-  /** Stale-but-shaped UUID present at the user's DNS — surfaces a one-click
-   * "use this code" recovery path instead of forcing another DNS update. */
-  foundDnsUuid?: string
+  /** Private per-owner Stage 3 access token, returned once on success. */
+  authToken?: string
+}
+
+interface ChallengeApiResponse {
+  ok: boolean
+  token?: string
+  method?: 'file' | 'dns'
+  expiresAt?: string
+  error?: string
 }
 
 function generateUuid(): string {
@@ -714,67 +721,22 @@ function generateUuid(): string {
   return Array.from({ length: 32 }, () => Math.floor(Math.random() * 16).toString(16)).join('')
 }
 
-// Persist Stage-3 verification UUIDs in localStorage keyed by the domain
-// being verified. Survives page reload, modal open/close, and the 30s-5min
-// DNS propagation window — without it, every refresh issued a new UUID and
-// the user's just-added DNS record became immediately stale.
-const VERIFY_UUID_TTL_MS = 7 * 24 * 60 * 60 * 1000
-function verifyUuidStorageKey(domain: string): string {
-  return `vguard-verify-uuid:${domain.toLowerCase()}`
-}
-function loadOrCreatePersistedUuid(domain: string): string {
-  if (typeof window === 'undefined' || !domain) return `vs-${generateUuid()}`
-  const key = verifyUuidStorageKey(domain)
-  try {
-    const raw = window.localStorage.getItem(key)
-    if (raw) {
-      const parsed = JSON.parse(raw) as { uuid?: string; createdAt?: number }
-      if (
-        parsed.uuid && /^vs-[A-Za-z0-9-]{8,}$/.test(parsed.uuid) &&
-        typeof parsed.createdAt === 'number' &&
-        Date.now() - parsed.createdAt < VERIFY_UUID_TTL_MS
-      ) {
-        return parsed.uuid
-      }
-    }
-  } catch {
-    // ignore parse / storage errors, fall through and mint a new one
-  }
-  const fresh = `vs-${generateUuid()}`
-  try {
-    window.localStorage.setItem(key, JSON.stringify({ uuid: fresh, createdAt: Date.now() }))
-  } catch {
-    // localStorage may be unavailable (private mode, quota); UUID still works
-    // for the current session, just won't survive reload.
-  }
-  return fresh
-}
-function clearPersistedUuid(domain: string): void {
-  if (typeof window === 'undefined' || !domain) return
-  try {
-    window.localStorage.removeItem(verifyUuidStorageKey(domain))
-  } catch {
-    // ignore
-  }
-}
-
-// ── "Remember my Stage 3 verification" ──────────────────────────────────────
-// After a domain is successfully verified we stash a small record on THIS
-// device so the owner can re-run Stage 3 without redoing the DNS/file dance.
-// The `uuid` doubles as the access code: it's the per-domain secret the server
-// already caches (30d) and scan-deep already checks, and we also email it so
-// the owner can paste it on a different device. Only someone who verified (or
-// received the emailed code) can skip — a random scanner mints a different uuid
-// and still has to prove ownership. Mirrors the server's 30-day cache window.
+// ── "Remember my Stage 3 authorization" ─────────────────────────────────────
+// After a domain is verified the server issues a PRIVATE auth token (vga-…) —
+// never public, never the DNS value. We stash it on THIS device so the owner can
+// re-run Stage 3 without redoing the DNS/file dance, and it's also emailed so it
+// can be pasted on another device. Reading a domain's public DNS code is useless
+// here — only this private token authorizes Stage 3. Mirrors the server's window.
 const VERIFIED_TTL_MS = 30 * 24 * 60 * 60 * 1000
+const AUTH_TOKEN_RE = /^vga-[a-f0-9]{20,}$/
 interface SavedVerification {
-  uuid: string
+  authToken: string
   method: VerifyMethod
   email: string
   verifiedAt: number
 }
 function verifiedStorageKey(domain: string): string {
-  return `vguard-verified:${domain.toLowerCase()}`
+  return `vguard-authz:${domain.toLowerCase()}`
 }
 function loadVerifiedDomain(domain: string): SavedVerification | null {
   if (typeof window === 'undefined' || !domain) return null
@@ -783,12 +745,12 @@ function loadVerifiedDomain(domain: string): SavedVerification | null {
     if (!raw) return null
     const parsed = JSON.parse(raw) as Partial<SavedVerification>
     if (
-      parsed.uuid && /^vs-[A-Za-z0-9-]{8,}$/.test(parsed.uuid) &&
+      parsed.authToken && AUTH_TOKEN_RE.test(parsed.authToken) &&
       typeof parsed.verifiedAt === 'number' &&
       Date.now() - parsed.verifiedAt < VERIFIED_TTL_MS
     ) {
       return {
-        uuid: parsed.uuid,
+        authToken: parsed.authToken,
         method: (parsed.method as VerifyMethod) ?? 'dns',
         email: parsed.email ?? '',
         verifiedAt: parsed.verifiedAt,
@@ -799,7 +761,7 @@ function loadVerifiedDomain(domain: string): SavedVerification | null {
   }
   return null
 }
-function markDomainVerified(domain: string, v: { uuid: string; method: VerifyMethod; email: string }): void {
+function markDomainVerified(domain: string, v: { authToken: string; method: VerifyMethod; email: string }): void {
   if (typeof window === 'undefined' || !domain) return
   try {
     window.localStorage.setItem(
@@ -1031,13 +993,6 @@ function Stage3Modal({
   scannedUrl: string
   onDeepScanComplete?: (result: ScanResult) => void
 }) {
-  // Persisted per-domain so a page refresh / modal close+reopen doesn't issue
-  // a fresh UUID and orphan the DNS / file record the user just added. DNS
-  // propagation alone takes ~30s-5min; if Vguard rotates the UUID inside
-  // that window the user races their own DNS updates forever (lost minutes
-  // per attempt). Reset button clears it explicitly. 7d TTL is well past any
-  // realistic verification roundtrip and short of "stale forever".
-  const [uuid, setUuid] = useState(() => loadOrCreatePersistedUuid(domain))
   // Detect free-tier hosting subdomains — for these, the user does NOT own the
   // parent domain, so DNS verification can't work. File upload is the right path.
   const freeTier = detectFreeTierProvider(domain)
@@ -1053,9 +1008,6 @@ function Stage3Modal({
   const [authMode, setAuthMode] = useState(false)
   const [vercelToken, setVercelToken] = useState('')
   const [verifyEmail, setVerifyEmail] = useState(() => {
-    // Remember the email from the last successful verify so repeat users
-    // don't have to re-type. Stored under a generic key (not per-domain) —
-    // the email is the user's, the domain is the target.
     if (typeof window === 'undefined') return ''
     try {
       return window.localStorage.getItem('vguard-verify-email') ?? ''
@@ -1063,16 +1015,16 @@ function Stage3Modal({
       return ''
     }
   })
-  // When DNS verification finds a stale Vguard UUID at the user's registrar,
-  // we surface a one-click "use this code" button instead of making them push
-  // yet another DNS update. Cleared on success / re-attempt / method switch.
-  const [foundDnsUuid, setFoundDnsUuid] = useState<string | null>(null)
+  // The DNS/file code is SERVER-ISSUED and bound to (domain, email). We fetch it
+  // once the email is valid; the client never invents it. Reading another
+  // owner's public code is useless — it's tied to their email, not the visitor's.
+  const [challengeToken, setChallengeToken] = useState('')
+  const [challengeLoading, setChallengeLoading] = useState(false)
   // Vercel-token method is hidden behind an "Advanced" disclosure — pasting a
   // PAT into a 3rd-party scanner is a real trust ask, not for every user.
   const [showAdvanced, setShowAdvanced] = useState(false)
-  // "Remember my verification" — if this device already verified this domain,
-  // offer a one-click deep scan and hide the whole DNS/file form. `showFullForm`
-  // lets the user fall back to re-verifying (e.g. after moving hosts).
+  // "Remember my authorization" — if this device holds a valid auth token for
+  // this domain, offer a one-click deep scan and hide the whole form.
   const [savedVerification, setSavedVerification] = useState<SavedVerification | null>(() =>
     loadVerifiedDomain(domain),
   )
@@ -1081,30 +1033,61 @@ function Stage3Modal({
   const [pasteError, setPasteError] = useState('')
   const useFastPath = !!savedVerification && !showFullForm
 
-  // Adopt an access code (the uuid) the owner received by email — lets them skip
-  // the DNS/file step on a new device. scan-deep validates it server-side
-  // (cache hit within 30d, else a live ownership re-check), so a bogus code
-  // simply fails ownership rather than granting access.
+  const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(verifyEmail.trim())
+
+  // Fetch the server-issued challenge token for the current (domain, email,
+  // method) whenever those change and we're showing the DNS/file form.
+  useEffect(() => {
+    if (!open || useFastPath) return
+    if (method === 'vercel') return
+    if (!emailValid) {
+      setChallengeToken('')
+      return
+    }
+    let cancelled = false
+    setChallengeLoading(true)
+    ;(async () => {
+      try {
+        const r = await fetch('/api/verify-challenge', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ domain, email: verifyEmail.trim(), method }),
+        })
+        const data = (await r.json()) as ChallengeApiResponse
+        if (!cancelled && data.ok && data.token) setChallengeToken(data.token)
+      } catch {
+        // leave token empty; the form shows a loading/hint state
+      } finally {
+        if (!cancelled) setChallengeLoading(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, useFastPath, method, verifyEmail, domain, emailValid])
+
+  // Paste the PRIVATE auth token (vga-…) the owner received by email — lets them
+  // authorize Stage 3 on a new device. The server validates it against the
+  // stored authorization; a public DNS value will simply not match.
   function adoptAccessCode() {
     const code = pasteCode.trim()
-    if (!/^vs-[A-Za-z0-9-]{8,}$/.test(code)) {
-      setPasteError('That doesn’t look like a V-Guards access code (starts with "vs-").')
+    if (!AUTH_TOKEN_RE.test(code)) {
+      setPasteError('That doesn’t look like an access code (it starts with "vga-" and comes from your email).')
       return
     }
     setPasteError('')
-    setUuid(code)
-    markDomainVerified(domain, { uuid: code, method, email: verifyEmail.trim() })
-    setSavedVerification({ uuid: code, method, email: verifyEmail.trim(), verifiedAt: Date.now() })
+    markDomainVerified(domain, { authToken: code, method, email: verifyEmail.trim() })
+    setSavedVerification({ authToken: code, method, email: verifyEmail.trim(), verifiedAt: Date.now() })
     setShowFullForm(false)
     void runDeepScan(code)
   }
 
-  // One-click deep scan for a domain already verified on this device.
+  // One-click deep scan for a domain already authorized on this device.
   function runSavedDeepScan() {
     if (!savedVerification) return
-    setUuid(savedVerification.uuid)
     setMethod(savedVerification.method)
-    void runDeepScan(savedVerification.uuid)
+    void runDeepScan(savedVerification.authToken)
   }
 
   async function copyToClipboard(text: string, what: 'uuid' | 'cmd' | 'ai') {
@@ -1132,22 +1115,15 @@ function Stage3Modal({
     }
   }
 
-  async function verifyNow(uuidOverride?: string) {
-    // React state updates are async — when the "Use this DNS code" path adopts
-    // a new UUID it can't rely on `uuid` (the closure capture) reflecting the
-    // setUuid call yet. Allow callers to pass the value they want to verify
-    // explicitly. Falls back to the closure-captured state for normal clicks.
-    const verifyUuid = uuidOverride ?? uuid
-    // Email is now required — verify form-side before sending to server.
+  async function verifyNow() {
     const trimmedEmail = verifyEmail.trim()
     if (!trimmedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(trimmedEmail)) {
       setStatus('failed')
-      setHint('Email is required so we can email you the verify result.')
+      setHint('Email is required — the verification is bound to it and we email you the result.')
       return
     }
     setStatus('checking')
     setHint('')
-    setFoundDnsUuid(null)
     try {
       let data: VerifyApiResponse
       if (method === 'vercel') {
@@ -1159,42 +1135,36 @@ function Stage3Modal({
         const r = await fetch('/api/verify-vercel-token', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ domain, uuid: verifyUuid, vercelToken, email: verifyEmail.trim() || undefined }),
+          body: JSON.stringify({ domain, vercelToken, email: trimmedEmail }),
         })
         data = (await r.json()) as VerifyApiResponse
       } else {
+        // No client-chosen code — the server checks the token IT issued for
+        // this (domain, email) against what the domain publicly exposes.
         const r = await fetch('/api/verify', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ domain, uuid: verifyUuid, method, email: verifyEmail.trim() || undefined }),
+          body: JSON.stringify({ domain, method, email: trimmedEmail }),
         })
         data = (await r.json()) as VerifyApiResponse
       }
-      if (data.verified) {
+      if (data.verified && data.authToken) {
         setStatus('verified')
-        // Persist the email for the next visit — saves the user from
-        // retyping when they come back to verify another domain or rerun.
-        if (verifyEmail.trim() && typeof window !== 'undefined') {
+        if (typeof window !== 'undefined') {
           try {
-            window.localStorage.setItem('vguard-verify-email', verifyEmail.trim())
+            window.localStorage.setItem('vguard-verify-email', trimmedEmail)
           } catch {
-            // localStorage may be unavailable (private mode, quota); fail-soft
+            // fail-soft
           }
         }
-        // Remember this verification on the device so future Stage 3 runs on
-        // this domain skip the whole form (see the fast-path card at the top).
-        markDomainVerified(domain, { uuid: verifyUuid, method, email: verifyEmail.trim() })
-        setSavedVerification({ uuid: verifyUuid, method, email: verifyEmail.trim(), verifiedAt: Date.now() })
-        // Stage 3 is fully free — once ownership is verified, go straight to the
-        // deep scan. Pass the verify uuid explicitly to avoid the stale-closure
-        // uuid problem noted on runDeepScan.
-        setTimeout(() => runDeepScan(verifyUuid), 600)
+        // Store the PRIVATE auth token so future Stage 3 runs on this domain
+        // skip the whole form (fast-path card at the top).
+        markDomainVerified(domain, { authToken: data.authToken, method, email: trimmedEmail })
+        setSavedVerification({ authToken: data.authToken, method, email: trimmedEmail, verifiedAt: Date.now() })
+        setTimeout(() => runDeepScan(data.authToken), 600)
       } else {
         setStatus('failed')
         setHint(data.hint ?? data.error ?? 'Could not verify ownership.')
-        if (data.foundDnsUuid && /^vs-[A-Za-z0-9-]{8,}$/.test(data.foundDnsUuid)) {
-          setFoundDnsUuid(data.foundDnsUuid)
-        }
       }
     } catch (e) {
       setStatus('failed')
@@ -1203,13 +1173,10 @@ function Stage3Modal({
     }
   }
 
-  async function runDeepScan(uuidOverride?: string) {
-    // Same closure-staleness concern as verifyNow — when called via setTimeout
-    // from a verify path that just adopted a new uuid, the closure-captured
-    // `uuid` may still be the pre-adopt value. Caller can pass the verified
-    // uuid explicitly; falls back to component state for normal "Run again"
-    // clicks where state is fresh.
-    const scanUuid = uuidOverride ?? uuid
+  async function runDeepScan(authTokenOverride?: string) {
+    // Stage 3 is authorized by the PRIVATE auth token (vga-…). Caller passes the
+    // freshly-issued/held token explicitly to avoid stale-closure state.
+    const scanAuthToken = authTokenOverride ?? savedVerification?.authToken ?? ''
     setStatus('scanning')
     setHint('')
     try {
@@ -1218,9 +1185,7 @@ function Stage3Modal({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           url: scannedUrl,
-          uuid: scanUuid,
-          // 'vercel' verification was recorded under 'oauth' in the cache
-          method: method === 'vercel' ? 'oauth' : method,
+          authToken: scanAuthToken,
           userJwt: authMode && userJwt ? userJwt : undefined,
         }),
       })
@@ -1249,10 +1214,11 @@ function Stage3Modal({
     }
   }
 
+  const codeShown = challengeToken || (challengeLoading ? '…' : 'enter your email below to get your code')
   const fileCmd =
     method === 'file'
-      ? `echo "${uuid}" > .well-known/Vguard-verify.txt`
-      : `_Vguard-verify.${domain}  TXT  "${uuid}"`
+      ? `echo "${codeShown}" > .well-known/Vguard-verify.txt`
+      : `_Vguard-verify.${domain}  TXT  "${codeShown}"`
 
   const baseDomain = domain.replace(/^www\./, '')
   return (
@@ -1329,15 +1295,15 @@ function Stage3Modal({
             </summary>
             <div className="mt-3">
               <p className="text-xs text-(--color-fg-muted) leading-relaxed mb-2">
-                We emailed you an access code (starts with <span className="font-mono">vs-</span>) after your first
-                verification. Paste it to run Stage 3 without redoing DNS.
+                We emailed you a private access code (starts with <span className="font-mono">vga-</span>) after your first
+                verification. Paste it to run Stage 3 on this device without redoing DNS.
               </p>
               <div className="flex items-center gap-2 flex-wrap">
                 <input
                   type="text"
                   value={pasteCode}
                   onChange={(e) => { setPasteCode(e.target.value); setPasteError('') }}
-                  placeholder="vs-xxxxxxxx-xxxx-..."
+                  placeholder="vga-xxxxxxxxxxxx..."
                   spellCheck={false}
                   autoComplete="off"
                   className="flex-1 min-w-[220px] bg-(--color-surface-elevated) border border-(--color-border) rounded-md px-3 py-2 font-mono text-xs text-(--color-fg) placeholder:text-(--color-fg-dim) focus:outline-none focus:border-(--color-accent-border)"
@@ -1523,7 +1489,7 @@ function Stage3Modal({
               </div>
               <button
                 type="button"
-                onClick={() => copyToClipboard(buildDnsVerifyAiPrompt(baseDomain, uuid), 'ai')}
+                onClick={() => copyToClipboard(buildDnsVerifyAiPrompt(baseDomain, challengeToken), 'ai')}
                 className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-(--color-accent) text-(--color-bg) hover:bg-(--color-accent-strong) font-mono text-xs font-semibold transition-colors cursor-pointer min-h-[36px]"
               >
                 {copied === 'ai' ? (
@@ -1562,10 +1528,10 @@ function Stage3Modal({
               </div>
               <div className="grid grid-cols-[60px_1fr_auto] gap-2 items-center">
                 <span className="font-mono text-[10px] uppercase text-(--color-fg-dim) text-right">Value</span>
-                <code className="font-mono text-xs text-(--color-fg) bg-(--color-surface-elevated) border border-(--color-border) rounded-md px-3 py-2 overflow-x-auto whitespace-nowrap">{uuid}</code>
+                <code className="font-mono text-xs text-(--color-fg) bg-(--color-surface-elevated) border border-(--color-border) rounded-md px-3 py-2 overflow-x-auto whitespace-nowrap">{codeShown}</code>
                 <button
                   type="button"
-                  onClick={() => copyToClipboard(uuid, 'uuid')}
+                  onClick={() => copyToClipboard(challengeToken, 'uuid')}
                   className="inline-flex items-center gap-1 px-3 py-2 rounded-md bg-(--color-surface-elevated) hover:bg-(--color-bg) border border-(--color-border) hover:border-(--color-accent-border) text-(--color-fg) font-mono text-xs transition-colors cursor-pointer min-h-[36px]"
                   aria-label="Copy DNS record value"
                 >
@@ -1591,7 +1557,7 @@ function Stage3Modal({
               </div>
               <button
                 type="button"
-                onClick={() => copyToClipboard(buildFileVerifyAiPrompt(domain, uuid, freeTier?.name ?? null), 'ai')}
+                onClick={() => copyToClipboard(buildFileVerifyAiPrompt(domain, challengeToken, freeTier?.name ?? null), 'ai')}
                 className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-(--color-accent) text-(--color-bg) hover:bg-(--color-accent-strong) font-mono text-xs font-semibold transition-colors cursor-pointer min-h-[36px]"
               >
                 {copied === 'ai' ? (
@@ -1626,10 +1592,10 @@ function Stage3Modal({
               </div>
               <div className="grid grid-cols-[60px_1fr_auto] gap-2 items-center">
                 <span className="font-mono text-[10px] uppercase text-(--color-fg-dim) text-right">Content</span>
-                <code className="font-mono text-xs text-(--color-fg) bg-(--color-surface-elevated) border border-(--color-border) rounded-md px-3 py-2 overflow-x-auto whitespace-nowrap">{uuid}</code>
+                <code className="font-mono text-xs text-(--color-fg) bg-(--color-surface-elevated) border border-(--color-border) rounded-md px-3 py-2 overflow-x-auto whitespace-nowrap">{codeShown}</code>
                 <button
                   type="button"
-                  onClick={() => copyToClipboard(uuid, 'uuid')}
+                  onClick={() => copyToClipboard(challengeToken, 'uuid')}
                   className="inline-flex items-center gap-1 px-3 py-2 rounded-md bg-(--color-surface-elevated) hover:bg-(--color-bg) border border-(--color-border) hover:border-(--color-accent-border) text-(--color-fg) font-mono text-xs transition-colors cursor-pointer min-h-[36px]"
                   aria-label="Copy file content"
                 >
@@ -1799,20 +1765,6 @@ function Stage3Modal({
               >
                 Reset
               </button>
-              <button
-                type="button"
-                onClick={() => {
-                  clearPersistedUuid(domain)
-                  const fresh = loadOrCreatePersistedUuid(domain)
-                  setUuid(fresh)
-                  setStatus('idle')
-                  setHint('New verification code generated. Update your DNS / file with the new value above.')
-                }}
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-(--color-surface-elevated) hover:bg-(--color-bg) border border-(--color-border) text-(--color-fg-muted) font-mono text-xs transition-colors cursor-pointer min-h-[36px]"
-                title="Generate a fresh verification code (only if the current one is truly broken)"
-              >
-                New code
-              </button>
             </>
           )}
         </div>
@@ -1914,41 +1866,6 @@ function Stage3Modal({
               Not yet verified
             </div>
             <p className="text-sm text-(--color-fg-muted) leading-relaxed">{hint}</p>
-            {foundDnsUuid && method === 'dns' && (
-              <div className="mt-3 flex flex-col sm:flex-row gap-2 sm:items-center">
-                <button
-                  type="button"
-                  onClick={() => {
-                    // Adopt the UUID that's already at the user's DNS into the
-                    // persisted UUID for this domain, then immediately retry.
-                    // Avoids the "rotate -> add -> rotate again" race entirely.
-                    if (typeof window !== 'undefined' && domain) {
-                      try {
-                        window.localStorage.setItem(
-                          verifyUuidStorageKey(domain),
-                          JSON.stringify({ uuid: foundDnsUuid, createdAt: Date.now() }),
-                        )
-                      } catch {
-                        // localStorage may be unavailable; the in-memory uuid below still works for this session.
-                      }
-                    }
-                    setUuid(foundDnsUuid)
-                    const adopted = foundDnsUuid
-                    setFoundDnsUuid(null)
-                    setHint('')
-                    setStatus('idle')
-                    // Pass the adopted UUID explicitly — setUuid hasn't flushed yet.
-                    setTimeout(() => verifyNow(adopted), 50)
-                  }}
-                  className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-md bg-(--color-accent) text-(--color-bg-on-accent) hover:opacity-90 font-mono text-xs tracking-widest uppercase transition-opacity cursor-pointer min-h-[36px]"
-                >
-                  Use this DNS code
-                </button>
-                <span className="text-xs text-(--color-fg-muted) font-mono break-all">
-                  {foundDnsUuid}
-                </span>
-              </div>
-            )}
           </motion.div>
         )}
       </div>

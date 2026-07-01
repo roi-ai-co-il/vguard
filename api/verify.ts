@@ -1,10 +1,13 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { promises as dns } from 'node:dns'
-import { recordVerification } from './_lib/verification-store.js'
+import {
+  getPendingChallenge,
+  markVerifiedAndAuthorize,
+  tokenPresentIn,
+} from './_lib/stage3-auth.js'
 import {
   sendVerificationConfirmation,
   sendVerificationFailure,
-  fireAndForget,
 } from './_lib/verify-email.js'
 import { recordLead } from './_lib/leads-store.js'
 
@@ -15,29 +18,23 @@ export const config = {
 
 interface VerifyBody {
   domain?: string
-  uuid?: string
-  method?: 'file' | 'dns'
-  /** Optional — when present, send a confirmation email to this address on success. */
   email?: string
+  method?: 'file' | 'dns'
 }
 
 interface VerifyResponse {
   ok: boolean
   verified?: boolean
   method?: 'file' | 'dns'
+  /** Private per-owner access token — returned once on success, stored by the
+   *  client + emailed. Used to authorize Stage 3 (never the public DNS token). */
+  authToken?: string
   error?: string
   hint?: string
-  /**
-   * When DNS verification fails but a Vguard-shaped UUID (vs-...) IS present
-   * in the TXT record, surface it so the UI can offer "use this code" — i.e.
-   * adopt the existing record into the client's persisted UUID instead of
-   * forcing the user to update DNS again. Solves the common "I added the
-   * record but Vguard rotated its UUID before I clicked verify" race.
-   */
-  foundDnsUuid?: string
 }
 
-const VGUARD_UUID_RE = /vs-[A-Za-z0-9-]{16,64}/
+const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/i
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/
 
 async function fetchWithTimeout(url: string, timeoutMs = 5000): Promise<Response> {
   const controller = new AbortController()
@@ -49,85 +46,23 @@ async function fetchWithTimeout(url: string, timeoutMs = 5000): Promise<Response
   }
 }
 
-async function verifyFileChallenge(domain: string, uuid: string): Promise<VerifyResponse> {
-  const challengeUrl = `https://${domain}/.well-known/Vguard-verify.txt`
-  try {
-    const r = await fetchWithTimeout(challengeUrl, 5000)
-    if (!r.ok) {
-      return {
-        ok: true,
-        verified: false,
-        method: 'file',
-        hint: `GET ${challengeUrl} returned ${r.status}. Upload the file with the UUID as its content, then click verify again.`,
-      }
-    }
-    const body = (await r.text()).trim()
-    if (body === uuid || body.includes(uuid)) {
-      return { ok: true, verified: true, method: 'file' }
-    }
-    return {
-      ok: true,
-      verified: false,
-      method: 'file',
-      hint: `File found but content does not match. Expected UUID, got first 80 chars: "${body.slice(0, 80)}"`,
-    }
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : 'unknown error'
-    return {
-      ok: true,
-      verified: false,
-      method: 'file',
-      hint: `Could not fetch ${challengeUrl}: ${msg}`,
+/** Read the public values the domain currently exposes for this method. */
+async function readDomainValues(domain: string, method: 'file' | 'dns'): Promise<string[]> {
+  if (method === 'file') {
+    try {
+      const r = await fetchWithTimeout(`https://${domain}/.well-known/Vguard-verify.txt`, 5000)
+      if (!r.ok) return []
+      return [(await r.text()).trim()]
+    } catch {
+      return []
     }
   }
-}
-
-async function verifyDnsChallenge(domain: string, uuid: string): Promise<VerifyResponse> {
-  const txtHost = `_Vguard-verify.${domain}`
   try {
-    const records = await dns.resolveTxt(txtHost).catch(() => [] as string[][])
-    const flat = records.map((parts) => parts.join(''))
-    if (flat.some((rec) => rec.includes(uuid))) {
-      return { ok: true, verified: true, method: 'dns' }
-    }
-    // Look for any Vguard-shaped UUID in the existing TXT records. If one is
-    // present, the user has a stale (or freshly-added but pre-rotation) code
-    // at the registrar — much faster recovery to adopt it than push a new DNS
-    // update through propagation again.
-    let foundDnsUuid: string | undefined
-    for (const rec of flat) {
-      const m = rec.match(VGUARD_UUID_RE)
-      if (m && m[0] !== uuid) {
-        foundDnsUuid = m[0]
-        break
-      }
-    }
-    return {
-      ok: true,
-      verified: false,
-      method: 'dns',
-      hint: foundDnsUuid
-        ? `DNS at ${txtHost} has a Vguard verification code (${foundDnsUuid}) — but it doesn't match the current code on this page (${uuid}). Click "Use this DNS code" below to adopt the existing record (instant) — or update the DNS record value to "${uuid}" and wait for propagation.`
-        : `No matching TXT record at ${txtHost}. Add: ${txtHost} TXT "${uuid}" (DNS may take a few minutes to propagate).`,
-      foundDnsUuid,
-    }
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : 'unknown error'
-    return {
-      ok: true,
-      verified: false,
-      method: 'dns',
-      hint: `DNS lookup failed: ${msg}`,
-    }
+    const records = await dns.resolveTxt(`_Vguard-verify.${domain}`).catch(() => [] as string[][])
+    return records.map((parts) => parts.join(''))
+  } catch {
+    return []
   }
-}
-
-function isValidDomain(s: string): boolean {
-  return /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/i.test(s)
-}
-
-function isValidUuid(s: string): boolean {
-  return /^[a-z0-9-]{16,64}$/i.test(s)
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -140,91 +75,75 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const body = (req.body && typeof req.body === 'object' ? req.body : {}) as VerifyBody
   const domain = (body.domain ?? '').trim().toLowerCase()
-  const uuid = (body.uuid ?? '').trim()
-  const method = body.method ?? 'file'
-  const email = typeof body.email === 'string' ? body.email.trim().slice(0, 200) : ''
-  // Email is now mandatory for Stage 3 — Royi's product decision so we can
-  // notify on success AND failure (with a per-method fix prompt).
-  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) {
+  const email = (body.email ?? '').trim()
+  const method = body.method === 'file' ? 'file' : 'dns'
+
+  if (!email || !EMAIL_RE.test(email)) {
     return res.status(400).json({
       ok: false,
-      error: 'A valid email is required so we can email you the result.',
+      error: 'A valid email is required so we can bind ownership to you and email the result.',
+    } satisfies VerifyResponse)
+  }
+  if (!domain || !DOMAIN_RE.test(domain)) {
+    return res.status(400).json({ ok: false, error: 'Invalid domain.' } satisfies VerifyResponse)
+  }
+
+  // The token is whatever the SERVER issued for THIS (domain,email). If there's
+  // no pending challenge, the client must request one first — we never accept a
+  // client-supplied code.
+  const challenge = await getPendingChallenge(domain, email)
+  if (!challenge) {
+    return res.status(409).json({
+      ok: false,
+      error: 'No active verification for this email. Request a fresh code and try again.',
     } satisfies VerifyResponse)
   }
 
-  if (!domain || !isValidDomain(domain)) {
-    return res
-      .status(400)
-      .json({ ok: false, error: 'Invalid domain.' } satisfies VerifyResponse)
-  }
-  if (!uuid || !isValidUuid(uuid)) {
-    return res
-      .status(400)
-      .json({ ok: false, error: 'Invalid UUID.' } satisfies VerifyResponse)
-  }
-  if (method !== 'file' && method !== 'dns') {
-    return res
-      .status(400)
-      .json({ ok: false, error: 'Method must be "file" or "dns".' } satisfies VerifyResponse)
+  // Dev-only bypass: localhost can't host a real DNS record / file, so skip the
+  // network read locally — but STILL require a server-issued challenge to exist
+  // for this exact (domain,email), so the email-binding logic is exercised. Can
+  // never fire in production (Vercel sets NODE_ENV=production).
+  let present: boolean
+  if (process.env.NODE_ENV !== 'production') {
+    present = true
+  } else {
+    const values = await readDomainValues(domain, method)
+    present = tokenPresentIn(challenge.token, values)
   }
 
-  // Dev-only bypass: localhost can't host a /.well-known file or a DNS TXT
-  // record, so skip the live ownership check during local development to allow
-  // end-to-end Stage 3 testing. This can NEVER fire in production — Vercel sets
-  // NODE_ENV=production for all deployments.
-  if (process.env.NODE_ENV !== 'production') {
-    return res.status(200).json({ ok: true, verified: true, method } satisfies VerifyResponse)
+  // Capture the attempt as a lead (hottest intent). Fail-soft; never blocks.
+  await recordLead(req, { source: 'verify', email, domain, method, verified: present }).catch(
+    () => {},
+  )
+
+  if (!present) {
+    const hint =
+      method === 'dns'
+        ? `No matching TXT record at _Vguard-verify.${domain}. Add a TXT record with the exact code shown on the page (DNS can take a few minutes to propagate), then verify again.`
+        : `The file at https://${domain}/.well-known/Vguard-verify.txt didn't contain the exact code shown on the page. Upload it and verify again.`
+    try {
+      await sendVerificationFailure(email, domain, method, challenge.token, hint)
+    } catch {
+      // ignore
+    }
+    return res.status(200).json({ ok: true, verified: false, method, hint } satisfies VerifyResponse)
+  }
+
+  const authz = await markVerifiedAndAuthorize(domain, email, method)
+  if (!authz) {
+    return res.status(503).json({
+      ok: false,
+      error: 'Verified, but authorization storage is unavailable. Please try again shortly.',
+    } satisfies VerifyResponse)
   }
 
   try {
-    const result =
-      method === 'file' ? await verifyFileChallenge(domain, uuid) : await verifyDnsChallenge(domain, uuid)
-
-    // Capture the verify attempt as a lead — a domain owner who gave us their
-    // email is the hottest intent signal we have. Fail-soft; never blocks verify.
-    await recordLead(req, {
-      source: 'verify',
-      email,
-      domain,
-      method,
-      verified: result.verified,
-    })
-
-    if (result.verified) {
-      const ua = (req.headers['user-agent'] as string | undefined) ?? null
-      // Await the cache write so the immediately-following /api/scan-deep
-      // call sees the cached entry and doesn't fall back to a live re-verify
-      // (Vercel's runtime DNS resolver can be ~30s behind a fresh TXT update,
-      // creating a flaky "verified then ownership-failed" UX). Fail-soft on
-      // the write itself — verification still passes for this response.
-      try {
-        await recordVerification(domain, uuid, method, ua, email)
-      } catch {
-        // ignore — DB write is best-effort, deep scan can re-verify live
-      }
-      if (email) {
-        // Await — Vercel serverless kills the function after res.json(),
-        // so fire-and-forget won't actually complete. Resend round-trip
-        // is ~200-500ms, well within our 15s maxDuration.
-        try {
-          // Pass the uuid as the access code so the owner can paste it on
-          // another device to skip re-verification.
-          await sendVerificationConfirmation(email, domain, method, uuid)
-        } catch {
-          // Email failure shouldn't fail the verify response.
-        }
-      }
-    } else if (email) {
-      const reason = result.hint ?? result.error ?? 'Could not verify ownership.'
-      try {
-        await sendVerificationFailure(email, domain, method, uuid, reason)
-      } catch {
-        // ignore — verify response still goes through
-      }
-    }
-    return res.status(200).json(result)
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : 'unknown error'
-    return res.status(500).json({ ok: false, error: msg } satisfies VerifyResponse)
+    await sendVerificationConfirmation(email, domain, method, authz.authToken)
+  } catch {
+    // Email failure shouldn't fail the verify response.
   }
+
+  return res
+    .status(200)
+    .json({ ok: true, verified: true, method, authToken: authz.authToken } satisfies VerifyResponse)
 }

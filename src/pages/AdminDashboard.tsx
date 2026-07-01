@@ -238,8 +238,7 @@ interface VerifiedDomain {
   email: string | null
   method: string | null
   verified_at: string
-  expires_at: string | null
-  scan_count: number | null
+  revoked_at: string | null
 }
 
 interface Lead {
@@ -1413,8 +1412,8 @@ function LeadsTab({
             <Cell
               key={v.domain}
               last={i === data.verified.length - 1}
-              title={<span className="font-medium" dir="ltr">{v.domain}</span>}
-              subtitle={`${v.email ? v.email + ' · ' : ''}${(v.method ?? '').toUpperCase()} · אומת ${fmtDate(v.verified_at)} · ${v.scan_count ?? 0} סריקות`}
+              title={<span className="font-medium" dir="ltr">{v.domain}{v.revoked_at ? ' (בוטל)' : ''}</span>}
+              subtitle={`${v.email ? v.email + ' · ' : ''}${(v.method ?? '').toUpperCase()} · אומת ${fmtDate(v.verified_at)}`}
               onPress={() => window.open(`https://v-guards.com/?url=${encodeURIComponent('https://' + v.domain)}`, '_blank')}
             />
           ))

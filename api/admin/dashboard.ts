@@ -65,8 +65,8 @@ async function buildOverview(client: SupabaseClient) {
       .order('created_at', { ascending: false })
       .limit(AGG_CAP),
     client
-      .from('vs_verified_domains')
-      .select('domain, email, method, verified_at, expires_at, user_agent, scan_count')
+      .from('vs_domain_authorizations')
+      .select('domain, email, method, verified_at, revoked_at')
       .order('verified_at', { ascending: false }),
     client.from('vs_stage2_collections').select('uuid', { count: 'exact', head: true }),
   ])
@@ -157,7 +157,9 @@ async function buildOverview(client: SupabaseClient) {
       failCount,
       wafBlocked,
       stealthRescued,
-      verifiedDomains: verifiedRes.data?.length ?? 0,
+      verifiedDomains:
+        (verifiedRes.data as { revoked_at: string | null }[] | null)?.filter((r) => !r.revoked_at)
+          .length ?? 0,
       stage2Runs: stage2Res.count ?? 0,
       aggCapped: scans.length >= AGG_CAP || events.length >= AGG_CAP,
     },
