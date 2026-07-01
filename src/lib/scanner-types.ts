@@ -203,6 +203,24 @@ export interface Finding {
   businessImpact?: BusinessImpact
   /** V6 — true when this is a verified Golden Finding (major security failure). */
   isGoldenFinding?: boolean
+  // -------------------------------------------------------------------------
+  // Contextual classification (2026-07-01). Set by the scoring engine when the
+  // contextual-risk-classifier re-graded a hardening finding (cookie flags /
+  // http-reachable) from observable context. Purely additive — findings that
+  // were not contextually re-graded leave these undefined.
+  // -------------------------------------------------------------------------
+  /**
+   * True when this finding must block a "perfect" (100 / 96–99→100) display —
+   * i.e. its reconciled severity is `high` or `critical`. Low/medium hardening
+   * observations are `false` so they never gate the perfect-score display.
+   */
+  blocksPerfectScore?: boolean
+  /** Machine-readable codes explaining WHY the finding was graded as it was. */
+  reasonCodes?: string[]
+  /** Human-readable sentence explaining the contextual grading decision. */
+  contextExplanation?: string
+  /** The "why this matters" domain the contextual classifier assigned. */
+  contextClass?: 'hardening' | 'transport' | 'cookie' | 'auth' | 'csrf' | 'data-exposure'
 }
 
 /**
@@ -389,8 +407,22 @@ export interface ScanResult {
   displayScore?: number
   /** True only when `displayScore` was rounded up from a 96–99 `vibeScore`. */
   scoreAdjustedForDisplay?: boolean
-  /** Letter grade derived from `vibeScore` (A … F). */
+  /**
+   * Letter grade derived from the RAW `vibeScore` (A … F). This is the
+   * technical grade and is kept for back-compat + debug/admin. The user-facing
+   * grade is `displayGrade` (which follows `displayScore`). `rawGrade` is an
+   * explicit alias of this field so admin views can label it unambiguously.
+   */
   grade?: Grade
+  /** Explicit alias of the raw technical grade (from `vibeScore`) — debug/admin. */
+  rawGrade?: Grade
+  /**
+   * User-facing letter grade derived from `displayScore`. Equals `grade` except
+   * when the 96–99→100 display bump applied (both are still `A` there, but this
+   * keeps grade and displayed number provably in lockstep). UIs should render
+   * THIS alongside `displayScore`. (2026-07-02)
+   */
+  displayGrade?: Grade
   totals: { critical: number; warn: number; info: number; ok: number }
   /** 5-tier reconciled counts (the honest histogram behind the badges). */
   severityCounts?: { critical: number; high: number; medium: number; low: number; info: number; ok: number }

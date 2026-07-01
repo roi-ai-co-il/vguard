@@ -22,6 +22,7 @@ import type {
   ScoreTier,
   Severity,
 } from '../../src/lib/scanner-types.js'
+import type { SiteSecurityContext } from './contextual-risk-classifier.js'
 import {
   isRealProviderSecretId,
   isSensitiveFileId,
@@ -467,6 +468,15 @@ export interface ScoringContext {
    * `meta-waf-detected` finding is appended AFTER the engine runs.
    */
   wafPresent?: boolean
+  /**
+   * 2026-07-01 — observable site context (cookie sensitivity/flags/source,
+   * login/admin/payment/private-data surface, HSTS, http reachability). When
+   * present, the engine lets the contextual-risk-classifier re-grade the
+   * `cookie-*` and `tls-no-http-redirect` hardening findings from real context
+   * instead of collapsing them all to low-hardening. Undefined → no change
+   * (every existing test/consumer that omits it keeps identical behavior).
+   */
+  siteContext?: SiteSecurityContext
 }
 
 export interface FindingTraits {

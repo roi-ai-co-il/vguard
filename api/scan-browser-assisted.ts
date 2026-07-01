@@ -16,7 +16,8 @@ import type { Finding } from '../src/lib/scanner-types.js'
 import { enrichFindings } from './_lib/fix-prompt-composer.js'
 import { applyRisk, classifyRouteContext } from './_lib/risk-scorer.js'
 import { applyEngine, defaultContext } from './_lib/scoring-engine.js'
-import { computeDisplayScore, findingsHaveCritical } from './_lib/display-score.js'
+import { gradeForScore } from './_lib/scoring-policy.js'
+import { computeDisplayScore, findingsBlockPerfect } from './_lib/display-score.js'
 import { logAuditEvent, fireAndForget } from './_lib/audit-log.js'
 
 export const config = {
@@ -870,17 +871,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Present only when caller sent stage1Findings — gives CLI / GHA / MCP
       // a fully merged result without rebuilding the engine client-side.
       merged: merged
-        ? {
-            vibeScore: merged.vibeScore,
-            ...computeDisplayScore(merged.vibeScore, {
-              hasCritical:
-                merged.severityCounts.critical > 0 || findingsHaveCritical(merged.findings),
-            }),
-            aggregateRiskBand: merged.aggregateBand,
-            hasVerifiedImpact: merged.hasVerifiedImpact,
-            findings: merged.findings,
-            groupCounts: merged.groupCounts,
-          }
+        ? (() => {
+            const disp = computeDisplayScore(merged.vibeScore, {
+              blocked:
+                merged.severityCounts.critical > 0 ||
+                merged.severityCounts.high > 0 ||
+                findingsBlockPerfect(merged.findings),
+            })
+            return {
+              vibeScore: merged.vibeScore,
+              ...disp,
+              rawGrade: merged.grade,
+              displayGrade: gradeForScore(disp.displayScore),
+              aggregateRiskBand: merged.aggregateBand,
+              hasVerifiedImpact: merged.hasVerifiedImpact,
+              findings: merged.findings,
+              groupCounts: merged.groupCounts,
+            }
+          })()
         : undefined,
     })
   } catch (e) {

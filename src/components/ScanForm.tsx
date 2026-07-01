@@ -33,7 +33,8 @@ import {
 import { VibeScoreGauge } from '@/components/ui/vibe-score-gauge'
 import { NextStagesPanel, Stage2Modal } from '@/components/NextStagesPanel'
 import { applyEngine, defaultContext } from '../../api/_lib/scoring-engine'
-import { computeDisplayScore, findingsHaveCritical } from '../../api/_lib/display-score'
+import { gradeForScore } from '../../api/_lib/scoring-policy'
+import { computeDisplayScore, findingsBlockPerfect } from '../../api/_lib/display-score'
 import type {
   Category,
   Finding as ApiFinding,
@@ -1407,17 +1408,23 @@ export function ScanForm() {
             })
           }
           mergedFindings.sort((a, b) => UI_GROUP_ORDER[uiGroupOf(a)] - UI_GROUP_ORDER[uiGroupOf(b)])
-          // Honest display score — the 96–99→100 cosmetic bump is disabled, so
-          // visibleScore equals the raw engine score (display-score.ts).
+          // Display score — the 96–99→100 bump is enabled behind the strict
+          // perfect-score blocker gate (any critical/high/verified/
+          // blocksPerfectScore blocks it). Raw score is never altered.
           const { displayScore: visibleScore, scoreAdjustedForDisplay } = computeDisplayScore(
             rawDisplayScore,
-            { hasCritical: findingsHaveCritical(mergedFindings) },
+            { blocked: findingsBlockPerfect(mergedFindings) },
           )
           const visibleTier = scoreAdjustedForDisplay ? 'exceptional' : displayBreakdown?.scoreTier
+          // User-facing grade follows the number shown next to it (visibleScore);
+          // `displayGrade` here is the RAW technical grade of the merged result.
+          const visibleGrade = gradeForScore(visibleScore)
           const finalTotals = recomputeFinalTotals(mergedFindings)
           const displayResult: ScanResult = {
             ...result,
             findings: mergedFindings,
+            rawGrade: displayGrade,
+            displayGrade: visibleGrade,
           }
           // Filter chips: derive available uiGroups/categories from actual
           // findings so we never show an empty chip.
@@ -1575,7 +1582,7 @@ export function ScanForm() {
                 <div className="flex-shrink-0 self-center sm:self-auto">
                   <VibeScoreGauge
                     score={visibleScore}
-                    grade={displayGrade}
+                    grade={visibleGrade}
                     tier={visibleTier}
                     band={displayBand}
                     size={typeof window !== 'undefined' && window.innerWidth < 640 ? 160 : 200}
