@@ -241,7 +241,7 @@ function ScanStepList({ steps, currentStep, reduceMotion }: StepListProps) {
         return (
           <li
             key={step}
-            className="flex items-center gap-2.5 font-mono text-xs leading-tight"
+            className="flex items-center gap-2.5 text-[13px] leading-snug"
           >
             <span
               className="flex items-center justify-center flex-shrink-0"
@@ -1174,14 +1174,19 @@ export function ScanForm() {
             aria-live="polite"
             aria-busy="true"
           >
-            <div className="mb-5 font-mono text-xs text-(--color-fg-dim) truncate flex items-center gap-1.5">
-              <span className="inline-block w-1.5 h-1.5 rounded-full bg-(--color-accent) animate-pulse" aria-hidden="true" />
-              <ArrowRight size={11} className="text-(--color-accent)" aria-hidden="true" />
-              <span className="truncate">{url}</span>
+            <div className="mb-5">
+              <h3 className="text-base sm:text-lg font-semibold tracking-tight text-(--color-fg)">
+                Scanning your app…
+              </h3>
+              <div className="mt-1 font-mono text-xs text-(--color-fg-dim) truncate flex items-center gap-1.5">
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-(--color-accent) animate-pulse" aria-hidden="true" />
+                <ArrowRight size={11} className="text-(--color-accent)" aria-hidden="true" />
+                <span className="truncate">{url}</span>
+              </div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-[auto_1fr] gap-6 sm:gap-8 items-center">
               <div className="flex justify-center sm:justify-start">
-                <ScanningLoader size={140} text="SCANNING" />
+                <ScanningLoader size={140} />
               </div>
               <div>
                 <div className="font-mono text-[10px] tracking-[0.25em] uppercase text-(--color-fg-dim) mb-3 flex items-center justify-between">
@@ -1196,8 +1201,8 @@ export function ScanForm() {
                   reduceMotion={reduceMotion}
                 />
                 {livePhaseLabel && (
-                  <div className="mt-3 flex items-center gap-2 font-mono text-[11px] text-(--color-accent)">
-                    <Loader2 size={12} className="animate-spin flex-shrink-0" aria-hidden="true" />
+                  <div className="mt-3 flex items-center gap-2 text-xs text-(--color-fg-muted)">
+                    <Loader2 size={12} className="animate-spin flex-shrink-0 text-(--color-accent)" aria-hidden="true" />
                     <span className="truncate">{livePhaseLabel}</span>
                   </div>
                 )}
