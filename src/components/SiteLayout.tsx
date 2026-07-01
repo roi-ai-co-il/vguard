@@ -117,28 +117,59 @@ export default function SiteLayout({
       <main className="relative flex-1 z-10">{children}</main>
 
       <footer className="relative border-t border-(--color-border) mt-auto z-10">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-5 sm:py-6 flex flex-col gap-2 font-mono text-[11px] sm:text-xs text-(--color-fg-dim)">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-1 sm:gap-0">
-            <span className="flex items-center gap-2">
-              <VGuardsLogo size={26} />
-              © 2026 V-Guards
-            </span>
-            <span>in stealth</span>
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8 sm:py-10">
+          {/* Top: brand block on the left, two clearly-labelled link columns on
+              the right. Links are styled as links at rest (fg-muted + hover to
+              full fg/accent), grouped under uppercase headings, so it reads as
+              navigation — not a wall of identical mono text. */}
+          <div className="flex flex-col gap-8 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex flex-col gap-3 max-w-xs">
+              <a href="/" className="flex items-center gap-2 font-mono text-sm font-semibold text-(--color-fg)" aria-label="V-Guards home">
+                <VGuardsLogo size={28} />
+                V-Guards
+                <span className="ml-1 inline-flex items-center rounded-full border border-(--color-border) px-2 py-0.5 font-mono text-[10px] font-normal text-(--color-fg-dim)">
+                  in stealth
+                </span>
+              </a>
+              <p className="font-mono text-[11px] leading-relaxed text-(--color-fg-dim)">
+                Security scanning for vibe-coded apps. Paste a URL, get the fixes.
+              </p>
+              <a
+                href="mailto:infovguards@gmail.com"
+                className="font-mono text-[11px] text-(--color-fg-muted) underline decoration-(--color-border) underline-offset-4 hover:text-(--color-accent) hover:decoration-(--color-accent) transition-colors w-max"
+              >
+                infovguards@gmail.com
+              </a>
+            </div>
+
+            <div className="grid grid-cols-2 gap-x-10 gap-y-2 sm:gap-x-14">
+              <nav className="flex flex-col gap-2.5" aria-label="Product">
+                <span className="font-mono text-[10px] uppercase tracking-wider text-(--color-fg-dim)">Product</span>
+                <a href="/how-it-works" className="font-mono text-xs text-(--color-fg-muted) underline decoration-(--color-border) underline-offset-4 hover:text-(--color-accent) hover:decoration-(--color-accent) transition-colors w-max">How it works</a>
+                <a href="/pricing" className="font-mono text-xs text-(--color-fg-muted) underline decoration-(--color-border) underline-offset-4 hover:text-(--color-accent) hover:decoration-(--color-accent) transition-colors w-max">Pricing</a>
+                <a href="/contact" className="font-mono text-xs text-(--color-fg-muted) underline decoration-(--color-border) underline-offset-4 hover:text-(--color-accent) hover:decoration-(--color-accent) transition-colors w-max">Contact</a>
+              </nav>
+              <nav className="flex flex-col gap-2.5" aria-label="Legal">
+                <span className="font-mono text-[10px] uppercase tracking-wider text-(--color-fg-dim)">Legal</span>
+                <a href="/terms" className="font-mono text-xs text-(--color-fg-muted) underline decoration-(--color-border) underline-offset-4 hover:text-(--color-accent) hover:decoration-(--color-accent) transition-colors w-max">Terms</a>
+                <a href="/privacy" className="font-mono text-xs text-(--color-fg-muted) underline decoration-(--color-border) underline-offset-4 hover:text-(--color-accent) hover:decoration-(--color-accent) transition-colors w-max">Privacy</a>
+                <a href="/accessibility" className="font-mono text-xs text-(--color-fg-muted) underline decoration-(--color-border) underline-offset-4 hover:text-(--color-accent) hover:decoration-(--color-accent) transition-colors w-max">Accessibility</a>
+              </nav>
+            </div>
           </div>
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-1 sm:gap-0">
-            <span>Founders · Royi Argaman · Oded Safdie</span>
-            <a href="mailto:infovguards@gmail.com" className="hover:text-(--color-fg-muted) transition-colors">infovguards@gmail.com</a>
-          </div>
-          <div className="flex items-center gap-4 pt-1 flex-wrap">
-            <a href="/how-it-works" className="hover:text-(--color-fg-muted) transition-colors">How it works</a>
-            <a href="/pricing" className="hover:text-(--color-fg-muted) transition-colors">Pricing</a>
-            <a href="/contact" className="hover:text-(--color-fg-muted) transition-colors">Contact</a>
-            <span className="opacity-40">·</span>
-            <a href="/terms" className="hover:text-(--color-fg-muted) transition-colors">Terms</a>
-            <a href="/privacy" className="hover:text-(--color-fg-muted) transition-colors">Privacy</a>
-            <a href="/accessibility" className="hover:text-(--color-fg-muted) transition-colors">Accessibility</a>
-            <span className="opacity-40">·</span>
-            <a href="https://roiai.co.il" target="_blank" rel="noopener noreferrer" className="hover:text-(--color-accent) transition-colors text-(--color-accent)/70">Built by ROI AI</a>
+
+          {/* Bottom bar: copyright + founders on one side, build credit on the
+              other, separated from the links above by a hairline divider. */}
+          <div className="mt-8 pt-5 border-t border-(--color-border) flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between font-mono text-[11px] text-(--color-fg-dim)">
+            <span>© 2026 V-Guards · Founders Royi Argaman &amp; Oded Safdie</span>
+            <a
+              href="https://roiai.co.il"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-(--color-accent)/70 hover:text-(--color-accent) transition-colors w-max"
+            >
+              Built by ROI AI
+            </a>
           </div>
         </div>
       </footer>

@@ -176,9 +176,41 @@ export function isRceId(id: string): boolean {
   )
 }
 
-/** CSRF weakness (no dedicated detector yet — form-token analysis is partial). */
+/**
+ * CSRF finding id. TODAY this matches only the `html-form-no-csrf` form-token
+ * heuristic, which is INFORMATIONAL/visibility-only — the V6 engine routes it to
+ * the `recon` risk category (zero score impact). The absence of a visible HTML
+ * token is not evidence of a vulnerability. When a real CSRF verification engine
+ * ships (active forged-cross-site-POST testing), emit its VERIFIED result under
+ * a NEW id and route that id to an exploit-tier category in `scoring-policy.ts`.
+ */
 export function isCsrfId(id: string): boolean {
   return has(lc(id), 'csrf')
+}
+
+/**
+ * NEW CSRF decision-engine risk ids — the PASSIVE, unverified tier. Emitted when
+ * a *sensitive* state-changing endpoint shows no passive protection evidence.
+ * Routed to `posture` (small, clamped ≤5) in `scoring-policy.ts` — small impact
+ * only. Passive CSRF can never exceed this tier.
+ */
+export function isCsrfPassiveRiskId(id: string): boolean {
+  return has(lc(id), 'csrf-sensitive-action-no-passive-protection')
+}
+
+/**
+ * NEW CSRF decision-engine risk ids — the ACTIVE/VERIFIED tier (Medium/High/
+ * Critical). Emitted ONLY by a future active/deep-scan verification path that
+ * proves a forged cross-site request is accepted. Routed to `exploit`. A passive
+ * scan never emits these.
+ */
+export function isCsrfVerifiedRiskId(id: string): boolean {
+  return has(
+    lc(id),
+    'csrf-active-bypass-accepted',
+    'csrf-state-change-confirmed',
+    'csrf-critical-state-change',
+  )
 }
 
 /**

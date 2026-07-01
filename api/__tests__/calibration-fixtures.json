@@ -97,7 +97,7 @@
       },
       {
         "id": "html-form-no-csrf",
-        "severity": "warn",
+        "severity": "info",
         "category": "html",
         "evidence": "/apps/pan/public/formsubmithandler.submitform.json"
       },

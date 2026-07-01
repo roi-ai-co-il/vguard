@@ -143,7 +143,8 @@ export const CANONICAL_CHECKS: readonly CanonicalCheck[] = [
     n: 10,
     key: 'csrf-post-forms',
     title: 'CSRF token on POST forms',
-    blurb: 'POST forms missing a CSRF-token field (severity scales with sensitivity).',
+    blurb:
+      'Decision-engine CSRF assessment. Missing VISIBLE token alone is info/recon (zero score). A sensitive state-changing endpoint with no passive protection evidence (token/header/double-submit/SameSite) is a small, capped Low. Medium/High/Critical require an active/deep-scan that proves a forged request is accepted — passive never exceeds Low.',
     family: 'access-control',
   },
   {

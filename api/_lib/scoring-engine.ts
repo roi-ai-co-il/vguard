@@ -35,6 +35,7 @@ import {
   isActiveProbeHitId,
   isBaselineHardeningHeaderId,
   isCookieHardeningId,
+  isCsrfPassiveRiskId,
   isHardeningHeaderId,
   isReflectedXssId,
   isWafPresentId,
@@ -357,6 +358,11 @@ export function classifyConfidence(
   if (traits.verifiedImpact) return 'verified'
   // Reflected canary = Possible XSS (browser execution required to verify).
   if (isReflectedXssId(id)) return 'possible'
+  // Passive CSRF Low is an unverified, evidence-based heuristic — a sensitive
+  // form merely *appears* to lack protection. It must stay `possible` in
+  // scoring + API/UI display (never `likely`); active verification would emit a
+  // different id. Keeps passive CSRF clearly unverified and capped at Low.
+  if (isCsrfPassiveRiskId(id)) return 'possible'
   // Sensitive-path 200 whose body we could NOT confirm — detection only.
   if (id.includes('-exposed-needs-review')) return 'possible'
   if (traits.knownPublicAsset) return 'possible'

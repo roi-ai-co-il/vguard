@@ -40,7 +40,7 @@ UI.
 | 7  | Mixed content | `mixed-content` | transport |
 | 8  | HTTP→HTTPS redirect | `tls-no-http-redirect` | transport |
 | 9  | Cookie/session hardening | `cookie-<name>` | posture |
-| 10 | CSRF token on POST forms | `html-form-no-csrf` | access |
+| 10 | CSRF token on POST forms | `html-form-no-csrf`, `csrf-protection-not-visible-info` (both recon/info, zero score); `csrf-sensitive-action-no-passive-protection-low` (posture, small capped Low); `csrf-active-bypass-accepted-medium` / `csrf-state-change-confirmed-high` / `csrf-critical-state-change-confirmed` (exploit, active/deep-scan only) | recon → posture → exploit by tier — see [CSRF-DECISION-ENGINE.md](CSRF-DECISION-ENGINE.md); passive never exceeds Low |
 | 11 | Sensitive path exposure | `path-<slug>`, `paths-admin*`, `paths-openapi-spec-public`, `paths-graphql-introspection` | data/access |
 | 12 | robots.txt sensitive-path analysis | `paths-robots-disclosure` | recon |
 | 13 | sitemap.xml internal URL leak | `paths-sitemap-internal` | recon |

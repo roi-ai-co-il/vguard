@@ -38,6 +38,8 @@ import {
   isAdvancedHardeningHeaderId,
   isAnonymousWriteId,
   isCsrfId,
+  isCsrfPassiveRiskId,
+  isCsrfVerifiedRiskId,
   isGoldenKindId,
   isGradeCapGoldenId,
   isIdorId,
@@ -639,6 +641,27 @@ export function mapToRiskCategory(
 
   if (isReconFinding(finding, opts)) return 'recon'
 
+  // CSRF (the `html-form-no-csrf` form-token heuristic) is VISIBILITY-ONLY until
+  // a real CSRF verification engine ships. Not seeing a hidden HTML token is NOT
+  // evidence of a vulnerability — SameSite cookies, Origin/Referer checks,
+  // framework middleware, custom CSRF headers, SPA/API auth, and double-submit
+  // cookies all defend without a visible token and are invisible to a passive
+  // scan. Classifying it `recon` (0% weight) makes it structurally incapable of
+  // moving the score, grade, or critical/warning counts — even if its severity
+  // is ever raised. When active forged-request verification exists, emit the
+  // VERIFIED result under a new id and route THAT id to 'exploit'. (2026-06-25)
+  //
+  // The CSRF DECISION ENGINE emits distinct risk ids that MUST be routed BEFORE
+  // the blanket `isCsrfId → recon` line below (they also contain "csrf"):
+  //   • passive/unverified Low  → `posture` (small, clamped ≤5 — cannot move
+  //     grade or warning count; passive CSRF can never exceed this).
+  //   • active/verified Med+     → `exploit` (only a deep-scan verification path
+  //     ever emits these).
+  if (isCsrfPassiveRiskId(id)) return 'posture'
+  if (isCsrfVerifiedRiskId(id)) return 'exploit'
+  // Visibility-only heuristic + engine info id → recon (zero score impact).
+  if (isCsrfId(id)) return 'recon'
+
   // data — secret & data exposure
   if (
     isRealProviderSecretId(id) ||
@@ -661,7 +684,8 @@ export function mapToRiskCategory(
     isPathTraversalId(id) ||
     isOpenRedirectId(id) ||
     isRceId(id) ||
-    isCsrfId(id) ||
+    // NOTE: CSRF is handled above as `recon` (visibility-only heuristic). When a
+    // real CSRF verification detector ships, route its VERIFIED id here.
     isPromptInjectionId(id) ||
     isSubdomainTakeoverId(id)
   ) {

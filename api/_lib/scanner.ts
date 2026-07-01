@@ -14,6 +14,7 @@ import { evidenceContainsRealSecret, isSpaShellBody } from './scoring-policy.js'
 import { oastEnabled, makeOastToken, oastUrl, checkOastHits } from './oast.js'
 import { buildAttackSurface, discoverSubdomainsFromCT } from './attack-surface.js'
 import { isCustomerFacingFinding } from './canonical-checks.js'
+import { decideCsrf, maxDecision, type CsrfEvidence, type CsrfDecisionResult, type CsrfFramework } from './csrf-decision-engine.js'
 import { withDisplayScore } from './display-score.js'
 import { analyzeBundles as analyzeBundlesAst } from './js-ast.js'
 import { deriveTargetProfile, computeCoverage, type TargetSignals } from './target-profile.js'
@@ -3740,17 +3741,167 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
     }
   }
   if (formsTotalPost > 0 && formsWithoutCsrf > 0) {
+    // HEURISTIC / INFORMATIONAL ONLY (2026-06-25). The absence of a *visible*
+    // HTML token is NOT evidence of a CSRF vulnerability — modern apps defend
+    // with SameSite cookies, Origin/Referer validation, framework CSRF
+    // middleware, X-CSRF-Token / X-XSRF-Token headers, SPA/API auth flows, or
+    // the double-submit-cookie pattern, none of which a passive HTML scan can
+    // see. So this ships as `info` (never warn/critical), carries zero score
+    // penalty, and is classified `recon` (visibility-only) by the V6 engine —
+    // it can never move the score, grade, or critical/warning counts. When a
+    // real CSRF verification engine is built (active forged-cross-site-POST
+    // testing + middleware/header/SameSite detection), emit the verified result
+    // under a NEW finding id and route THAT id to a scoring risk category.
+    const countLine = `${formsWithoutCsrf} of ${formsTotalPost} POST form${
+      formsTotalPost === 1 ? '' : 's'
+    } had no visible HTML CSRF token field.`
     findings.push({
       id: 'html-form-no-csrf',
-      severity: 'warn',
+      severity: 'info',
       category: 'html',
-      title: `${formsWithoutCsrf} of ${formsTotalPost} POST form${
-        formsTotalPost === 1 ? '' : 's'
-      } missing a CSRF token field`,
-      description: `Forms that POST without a CSRF token can be triggered by a hostile site (Cross-Site Request Forgery). If the form changes server-side state — login, password change, money transfer, profile update — this is exploitable. We checked for the common token field names: _csrf, csrf, csrf_token, authenticity_token, _token, csrfmiddlewaretoken, __RequestVerificationToken.`,
-      evidence: sampleFormActions.length > 0 ? sampleFormActions.join('\n') : '(form has no action attribute)',
-      fixPrompt: `Pick a CSRF strategy: (1) double-submit cookie — issue a token in a SameSite=Lax cookie and require the same token as a hidden field, server compares. (2) framework-builtin — Django/Rails/NextAuth all ship CSRF middleware, just enable it. (3) Modern alternative: rely on SameSite=Lax cookies (default in Chrome) for browser-only CSRF defense, but verify the cookie is Lax on the auth cookie. The safest default is double-submit cookie + SameSite=Lax. Add the token as a hidden input named "_csrf" to every <form method="POST">.`,
+      title: 'Potential CSRF protection not visible',
+      description: `No visible CSRF token was detected in one or more HTML POST forms. This does not necessarily indicate a vulnerability because many modern applications implement CSRF protection using alternative mechanisms. Manual verification is recommended.`,
+      evidence:
+        sampleFormActions.length > 0
+          ? `${countLine}\n${sampleFormActions.join('\n')}`
+          : `${countLine}\n(form has no action attribute)`,
+      fixPrompt: `This is an informational heuristic, not a confirmed finding — do NOT treat it as a vulnerability on its own. First VERIFY whether CSRF protection already exists via a mechanism this passive scan can't see: (a) SameSite=Lax/Strict on the session/auth cookie, (b) server-side Origin/Referer validation on state-changing routes, (c) framework CSRF middleware (Django/Rails/Laravel/NextAuth), (d) a custom header the client must send (X-CSRF-Token / X-XSRF-Token), (e) SPA/API token-based auth (Authorization: Bearer …) where cookies aren't the auth credential, or (f) the double-submit-cookie pattern. If, after checking, a state-changing form genuinely has NO CSRF defense, add one: the safest default is double-submit cookie + SameSite=Lax — issue a token in a SameSite=Lax cookie and require the same token as a hidden field the server compares, or just enable your framework's built-in CSRF middleware.`,
     })
+  }
+
+  // === CSRF Decision Engine (PASSIVE) ===
+  // Runs alongside the visibility-only `html-form-no-csrf` signal above. Instead
+  // of "token not visible → flag", it weighs CONTEXT (tokens, meta tags, custom
+  // CSRF headers in inline JS, SameSite on auth cookies, double-submit patterns,
+  // framework, endpoint sensitivity) before deciding whether a *sensitive*
+  // state-changing form appears to lack passive protection. Passive mode is
+  // hard-capped at `low`; Medium/High/Critical require an active/deep-scan
+  // verification path (not run here). See docs/CSRF-DECISION-ENGINE.md.
+  {
+    // --- Page-level evidence (computed once from html + already-parsed cookies) ---
+    const csrfHeaderInJs = /X-CSRF-?Token|X-XSRF-?Token|X-Requested-With/i.test(html)
+    const metaCsrfToken = /<meta\b[^>]*\bname\s*=\s*["'](?:csrf-token|csrf-param|_csrf)["'][^>]*>/i.test(html)
+    // Heuristic: JS reads the meta token (to send it as a header) if a meta token
+    // exists AND the page references reading a meta[name=csrf...] / a csrf header.
+    const metaTokenUsedByJs =
+      metaCsrfToken && (csrfHeaderInJs || /meta\[name=["']?csrf|content.*csrf-token/i.test(html))
+
+    // Auth/session cookie SameSite + double-submit signals from `setCookies`
+    // (parsed earlier in the COOKIES section). `setCookies` is in scope here.
+    const SAMESITE_RANK: Record<string, number> = { strict: 3, lax: 2, none: 1 }
+    let authCookieSameSite: CsrfEvidence['authCookieSameSite'] = null
+    let hasAuthSessionCookie = false
+    let xsrfCookiePresent = false
+    let csrftokenCookiePresent = false
+    let laravelSessionPresent = false
+    let aspnetCookiePresent = false
+    let jsessionidPresent = false
+    let connectSidPresent = false
+    let phpSessPresent = false
+    for (const cookieStr of setCookies) {
+      const cname = (cookieStr.split(';')[0]?.split('=')[0] ?? '').trim()
+      const lc = cname.toLowerCase()
+      const isAuthSession =
+        /^(session|sid|auth|token|jwt|laravel_session|csrftoken|xsrf-token|asp\.net_sessionid|jsessionid|connect\.sid|phpsessid|django_session)$/i.test(
+          cname,
+        ) || /sess|auth|token|jwt|sid/i.test(lc)
+      if (lc === 'xsrf-token') xsrfCookiePresent = true
+      if (lc === 'csrftoken') csrftokenCookiePresent = true
+      if (lc === 'laravel_session') laravelSessionPresent = true
+      if (lc === 'asp.net_sessionid') aspnetCookiePresent = true
+      if (lc === 'jsessionid') jsessionidPresent = true
+      if (lc === 'connect.sid') connectSidPresent = true
+      if (lc === 'phpsessid') phpSessPresent = true
+      if (isAuthSession) {
+        hasAuthSessionCookie = true
+        const ss = /samesite=([a-z]+)/i.exec(cookieStr)?.[1]?.toLowerCase() ?? null
+        if (ss && (SAMESITE_RANK[ss] ?? 0) > (authCookieSameSite ? SAMESITE_RANK[authCookieSameSite] : 0)) {
+          authCookieSameSite = ss as CsrfEvidence['authCookieSameSite']
+        }
+      }
+    }
+    const doubleSubmitCookiePattern =
+      (xsrfCookiePresent && /X-XSRF-?Token/i.test(html)) ||
+      (csrftokenCookiePresent && /X-CSRF-?Token/i.test(html))
+
+    // Framework hint (never sole proof).
+    const framework: CsrfFramework = laravelSessionPresent
+      ? 'laravel'
+      : csrftokenCookiePresent || /csrfmiddlewaretoken/i.test(html)
+        ? 'django'
+        : xsrfCookiePresent
+          ? 'angular'
+          : aspnetCookiePresent || /__RequestVerificationToken/i.test(html)
+            ? 'aspnet'
+            : /csrf-param|authenticity_token/i.test(html)
+              ? 'rails'
+              : jsessionidPresent
+                ? 'spring'
+                : connectSidPresent
+                  ? 'express'
+                  : null
+
+    // Expanded token detector (per the required pattern list) — kept separate
+    // from the visibility heuristic above so that finding is unchanged.
+    const tokenRe =
+      /name\s*=\s*["'](?:_csrf|csrf|csrf_token|authenticity_token|_token|csrfmiddlewaretoken|__RequestVerificationToken|xsrf|xsrf_token|anti-?forgery|antiforgery)["']/i
+
+    let topDecision: CsrfDecisionResult | null = null
+    const sensitiveSamples: string[] = []
+    for (const m of forms) {
+      const formTag = m[0].slice(0, m[0].indexOf('>') + 1)
+      const method = (/\bmethod\s*=\s*["']?(post|put|patch|delete)["']?/i.exec(formTag)?.[1] ?? '')
+        .toUpperCase() as CsrfEvidence['target']['method'] | ''
+      if (method !== 'POST' && method !== 'PUT' && method !== 'PATCH' && method !== 'DELETE') continue
+      const inner = m[1]
+      const action = /\baction\s*=\s*["']([^"']+)["']/i.exec(formTag)?.[1] ?? ''
+      const hasVisibleToken = tokenRe.test(inner) || tokenRe.test(formTag)
+      // same-origin: relative/empty → yes; absolute → compare host.
+      let sameOrigin = true
+      const abs = /^https?:\/\//i.exec(action)
+      if (abs) {
+        try {
+          sameOrigin = new URL(action).host === url.host
+        } catch {
+          sameOrigin = false
+        }
+      }
+      const ev: CsrfEvidence = {
+        target: { method, action, sameOrigin, kind: 'form' },
+        hasVisibleToken,
+        hasTokenMetaTag: metaCsrfToken,
+        metaTokenUsedByJs,
+        hasCsrfHeaderEvidence: csrfHeaderInJs,
+        doubleSubmitCookiePattern,
+        authCookieSameSite,
+        hasAuthSessionCookie,
+        framework,
+        mode: 'passive',
+      }
+      const decision = decideCsrf(ev)
+      if (decision.decision === 'low') {
+        if (sensitiveSamples.length < 4) sensitiveSamples.push(action || '(no action attr)')
+      }
+      topDecision = maxDecision(topDecision, decision)
+    }
+
+    // Passive mode only ever yields Low as its most-severe decision; emit the
+    // small, capped Low finding when a sensitive action lacks passive protection.
+    if (topDecision && topDecision.decision === 'low' && topDecision.findingId) {
+      findings.push({
+        id: topDecision.findingId,
+        severity: 'warn',
+        category: 'html',
+        confidence: 'possible',
+        title: 'Sensitive action may lack visible CSRF protection',
+        description: `A sensitive state-changing form or endpoint appears to lack visible CSRF protection, and no strong passive evidence of alternative protection was detected. This is not yet a verified CSRF vulnerability, but it should be reviewed because the action may be security-relevant.`,
+        evidence:
+          sensitiveSamples.length > 0
+            ? `${topDecision.reasons.join(' ')}\n${sensitiveSamples.join('\n')}`
+            : topDecision.reasons.join(' '),
+        fixPrompt: `This is a small-impact, UNVERIFIED passive signal — not a confirmed CSRF vulnerability. A sensitive state-changing endpoint (${topDecision.sensitivity}) showed no visible token, no custom CSRF header, no double-submit cookie, and no strong SameSite mitigation on an auth/session cookie. VERIFY manually: (1) check the auth/session cookie's SameSite attribute (Lax/Strict defends most cross-site POST CSRF), (2) check for server-side Origin/Referer validation, (3) check whether the client sends a custom CSRF header (X-CSRF-Token / X-XSRF-Token), (4) confirm whether framework CSRF middleware is enabled. If, after verifying, the action genuinely has NO CSRF defense, add one: enable your framework's built-in CSRF middleware, or use double-submit cookie + SameSite=Lax.`,
+      })
+    }
   }
 
   // === AUTH SIGNUP endpoint probing ===
