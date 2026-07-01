@@ -2,6 +2,11 @@ import { motion } from 'framer-motion'
 import { ArrowRight, ChevronDown } from 'lucide-react'
 import { VGuardsLogo } from '@/components/ui/vguards-logo'
 
+const revealUp = {
+  hidden: { opacity: 0, y: 16 },
+  show: { opacity: 1, y: 0 },
+}
+
 /**
  * Pricing (/pricing) — one continuous flowing section. The "free" statement and
  * the closing CTA share a single background (transparent → the site's smoke +
@@ -22,24 +27,39 @@ export default function Pricing() {
       </div>
 
       <div className="relative max-w-2xl mx-auto px-4 sm:px-6 pt-20 sm:pt-32 pb-20 sm:pb-28 flex flex-col items-center text-center">
-        {/* Beat 1 — the price */}
+        {/* Beat 1 — the price. Staggered so the logo → eyebrow → headline → line
+            reveal one after another instead of as one block. */}
         <motion.div
-          initial={{ opacity: 0, y: 16 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5 }}
+          initial="hidden"
+          animate="show"
+          variants={{ hidden: {}, show: { transition: { staggerChildren: 0.1, delayChildren: 0.05 } } }}
           className="flex flex-col items-center"
         >
-          <VGuardsLogo size={48} className="mb-5" />
-          <div className="font-mono text-[10px] sm:text-xs text-(--color-fg-dim) tracking-widest uppercase mb-4">
+          <motion.div variants={revealUp} transition={{ duration: 0.5 }}>
+            <VGuardsLogo size={48} className="mb-5" />
+          </motion.div>
+          <motion.div
+            variants={revealUp}
+            transition={{ duration: 0.5 }}
+            className="font-mono text-[10px] sm:text-xs text-(--color-fg-dim) tracking-widest uppercase mb-4"
+          >
             Pricing
-          </div>
-          <h1 className="text-[2rem] sm:text-5xl font-bold tracking-tight leading-[1.1] text-balance">
+          </motion.div>
+          <motion.h1
+            variants={revealUp}
+            transition={{ duration: 0.5 }}
+            className="text-[2rem] sm:text-5xl font-bold tracking-tight leading-[1.1] text-balance"
+          >
             All services are <span className="text-(--color-accent)">free</span> right now.
-          </h1>
-          <p className="mt-5 text-(--color-fg-muted) text-[15px] sm:text-lg leading-relaxed max-w-md">
+          </motion.h1>
+          <motion.p
+            variants={revealUp}
+            transition={{ duration: 0.5 }}
+            className="mt-5 text-(--color-fg-muted) text-[15px] sm:text-lg leading-relaxed max-w-md"
+          >
             Every stage — scan, report, and the ready-to-paste fixes — is free. No card, no
             account, no catch.
-          </p>
+          </motion.p>
         </motion.div>
 
         {/* Connector — a gradient line + chevron that physically links the two

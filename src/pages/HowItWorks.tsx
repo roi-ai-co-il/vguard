@@ -1,7 +1,70 @@
-import { motion } from 'framer-motion'
+import { useState } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
 import { Search, FileCheck2, Wrench, ArrowRight } from 'lucide-react'
 import { VGuardsLogo } from '@/components/ui/vguards-logo'
 import { CpuArchitecture } from '@/components/ui/cpu-architecture'
+
+const revealUp = {
+  hidden: { opacity: 0, y: 16 },
+  show: { opacity: 1, y: 0 },
+}
+
+/** The STP acronym → its words. The capital of each word IS the acronym letter,
+ *  so a tight "STP" can visibly unfold into "Scan To Prompt". The trailing
+ *  no-break space on the first two lives inside the width-animated span so it
+ *  collapses too — closed reads "STP", open reads "Scan To Prompt". */
+const STP = [
+  { cap: 'S', rest: 'can ' },
+  { cap: 'T', rest: 'o ' },
+  { cap: 'P', rest: 'rompt' },
+] as const
+
+/** STP reveal — the three capitals flip up tight together ("STP"), then each
+ *  word's remaining letters write themselves in one-by-one with a per-char
+ *  flip-up (rotateX 90°→0), while `layout` smoothly spreads the letters apart
+ *  into "Scan To Prompt". */
+function StpReveal() {
+  const [open, setOpen] = useState(false)
+  return (
+    <motion.div
+      viewport={{ once: true, amount: 'some' }}
+      onViewportEnter={() => window.setTimeout(() => setOpen(true), 700)}
+      className="flex flex-wrap justify-center items-baseline font-sans font-bold tracking-tight text-[2.25rem] sm:text-6xl leading-none [perspective:800px]"
+    >
+      {STP.map((w, i) => (
+        <motion.span layout key={w.rest} className="inline-flex items-baseline">
+          <motion.span
+            layout
+            initial={{ opacity: 0, rotateX: 90, y: 10 }}
+            whileInView={{ opacity: 1, rotateX: 0, y: 0 }}
+            viewport={{ once: true, amount: 'some' }}
+            transition={{ delay: 0.1 + i * 0.12, duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+            style={{ transformOrigin: 'bottom' }}
+            className="inline-block text-(--color-accent)"
+          >
+            {w.cap}
+          </motion.span>
+          <AnimatePresence>
+            {open &&
+              w.rest.split('').map((ch, ci) => (
+                <motion.span
+                  layout
+                  key={ci}
+                  initial={{ opacity: 0, rotateX: 90, y: 10 }}
+                  animate={{ opacity: 1, rotateX: 0, y: 0 }}
+                  transition={{ delay: i * 0.18 + ci * 0.045, duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+                  style={{ transformOrigin: 'bottom' }}
+                  className="inline-block text-(--color-fg)"
+                >
+                  {ch === ' ' ? ' ' : ch}
+                </motion.span>
+              ))}
+          </AnimatePresence>
+        </motion.span>
+      ))}
+    </motion.div>
+  )
+}
 
 const STEPS = [
   {
@@ -35,33 +98,47 @@ export default function HowItWorks() {
       {/* Page intro */}
       <section className="max-w-6xl mx-auto px-4 sm:px-6 pt-14 sm:pt-24 pb-2 sm:pb-6 text-center">
         <motion.div
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5 }}
+          initial="hidden"
+          animate="show"
+          variants={{ hidden: {}, show: { transition: { staggerChildren: 0.1, delayChildren: 0.05 } } }}
           className="max-w-2xl mx-auto"
         >
-          <div className="font-mono text-[10px] sm:text-xs text-(--color-accent) tracking-widest uppercase mb-3">
+          <motion.div
+            variants={revealUp}
+            transition={{ duration: 0.5 }}
+            className="font-mono text-[10px] sm:text-xs text-(--color-accent) tracking-widest uppercase mb-3"
+          >
             How it works
-          </div>
-          <h1 className="text-[1.75rem] sm:text-4xl lg:text-5xl font-bold tracking-tight leading-[1.12] text-balance">
+          </motion.div>
+          <motion.h1
+            variants={revealUp}
+            transition={{ duration: 0.5 }}
+            className="text-[1.75rem] sm:text-4xl lg:text-5xl font-bold tracking-tight leading-[1.12] text-balance"
+          >
             From paste to fixed in under a minute.
-          </h1>
-          <p className="mt-4 text-(--color-fg-muted) text-[15px] sm:text-lg leading-relaxed">
+          </motion.h1>
+          <motion.p
+            variants={revealUp}
+            transition={{ duration: 0.5 }}
+            className="mt-4 text-(--color-fg-muted) text-[15px] sm:text-lg leading-relaxed"
+          >
             Three steps. No source code, no setup — just a URL.
-          </p>
+          </motion.p>
         </motion.div>
       </section>
 
-      {/* 3 steps */}
+      {/* 3 steps — smooth iOS-style entrance: a soft fade + gentle rise + tiny
+          scale, animated on MOUNT (not on scroll), so it replays cleanly every
+          time the tab mounts or the page refreshes. Only opacity + transform
+          animate (GPU, no reflow) → buttery, never a jump. */}
       <section>
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-12 sm:py-16">
           <motion.div
             initial="hidden"
-            whileInView="show"
-            viewport={{ once: true, amount: 'some' }}
+            animate="show"
             variants={{
               hidden: {},
-              show: { transition: { staggerChildren: 0.12 } },
+              show: { transition: { staggerChildren: 0.09, delayChildren: 0.06 } },
             }}
             className="grid grid-cols-1 sm:grid-cols-3 gap-5 sm:gap-6"
           >
@@ -69,10 +146,10 @@ export default function HowItWorks() {
               <motion.div
                 key={s.n}
                 variants={{
-                  hidden: { opacity: 0, y: 12 },
-                  show: { opacity: 1, y: 0 },
+                  hidden: { opacity: 0, y: 14, scale: 0.98 },
+                  show: { opacity: 1, y: 0, scale: 1 },
                 }}
-                transition={{ duration: 0.4 }}
+                transition={{ duration: 0.55, ease: [0.25, 0.1, 0.25, 1] }}
                 className="group rounded-2xl border border-(--color-border) bg-(--color-surface-elevated) p-6 sm:p-7 shadow-[0_1px_2px_rgba(0,0,0,0.04)] hover:shadow-[0_16px_40px_-20px_rgba(2,8,23,0.25)] hover:border-(--color-accent-border) hover:-translate-y-1 transition-all duration-300"
               >
                 <div className="flex items-center gap-3 mb-3 sm:mb-4">
@@ -146,6 +223,19 @@ export default function HowItWorks() {
             <ArrowRight size={16} strokeWidth={2.5} aria-hidden="true" />
           </a>
         </motion.div>
+      </section>
+
+      {/* STP sign-off — the acronym S · T · P lands first, then each capital
+          unfurls into its full word (left-to-right clip): S→Scan, T→To,
+          P→Prompt. One clean reveal, nothing else. */}
+      <section className="border-t border-(--color-border)">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-16 sm:py-28 flex flex-col items-center">
+          <div className="font-mono text-[10px] sm:text-xs text-(--color-fg-dim) tracking-widest uppercase mb-8 sm:mb-10">
+            The whole loop
+          </div>
+
+          <StpReveal />
+        </div>
       </section>
     </>
   )

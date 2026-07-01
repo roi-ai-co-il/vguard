@@ -44,11 +44,15 @@ export default function SiteLayout({
       <div className="bg-grid absolute inset-0 pointer-events-none" aria-hidden="true" />
       <div className="hero-glow absolute top-0 left-0 right-0 h-[60vh] pointer-events-none" aria-hidden="true" />
 
+      {/* Sticky liquid-glass header: stays pinned to the top on scroll so the
+          logo + tabs are always reachable, while the strong backdrop-blur +
+          saturate + low-opacity fill let the content scroll visibly *through*
+          it (frosted-glass look). z-30 keeps it above the scrolling <main>. */}
       <motion.header
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ duration: 0.4 }}
-        className="relative border-b border-(--color-border) backdrop-blur-sm bg-(--color-bg)/60 z-10"
+        className="sticky top-0 z-30 border-b border-(--color-border)/70 bg-(--color-bg)/55 backdrop-blur-xl backdrop-saturate-150 shadow-[0_1px_0_0_rgba(255,255,255,0.04)_inset,0_10px_30px_-16px_rgba(2,8,23,0.25)]"
       >
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between gap-3">
           <a href="/" className="flex items-center gap-2.5 font-mono text-base sm:text-lg" aria-label="V-Guards home">

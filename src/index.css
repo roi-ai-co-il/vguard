@@ -194,6 +194,18 @@ input:focus-visible {
   }
 }
 
+@keyframes vgScanningLogo {
+  0%, 100% {
+    opacity: 0.85;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.06);
+    filter: drop-shadow(0 0 10px rgba(34, 211, 238, 0.5));
+  }
+}
+
 .vg-scanning-ring {
   animation: vgScanningRing 5s linear infinite;
 }
@@ -202,9 +214,14 @@ input:focus-visible {
   animation: vgScanningLetter 2.4s infinite;
 }
 
+.vg-scanning-logo {
+  animation: vgScanningLogo 2s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .vg-scanning-ring,
-  .vg-scanning-letter {
+  .vg-scanning-letter,
+  .vg-scanning-logo {
     animation: none;
   }
   .vg-scanning-letter {

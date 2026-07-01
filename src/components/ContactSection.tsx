@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
+import { motion } from 'framer-motion'
 import { Send, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react'
+
+const revealUp = {
+  hidden: { opacity: 0, y: 16 },
+  show: { opacity: 1, y: 0 },
+}
 
 const TURNSTILE_SITE_KEY = '0x4AAAAAAC_BzqF_UH-VXX5R'
 
@@ -89,17 +95,35 @@ export default function ContactSection() {
       className="relative max-w-3xl mx-auto px-4 sm:px-6 py-20 sm:py-28"
       aria-labelledby="contact-heading"
     >
-      <div className="font-mono text-xs tracking-widest uppercase text-(--color-accent) mb-3">
-        Contact us
-      </div>
-      <h2 id="contact-heading" className="text-3xl sm:text-4xl font-bold tracking-tight mb-3">
-        Have a question, found a bug, or want to chat?
-      </h2>
-      <p className="text-(--color-fg-muted) text-base sm:text-lg mb-8">
-        Drop us a line — we read every message and reply within 2 business days.
-      </p>
+      <motion.div
+        initial="hidden"
+        animate="show"
+        variants={{ hidden: {}, show: { transition: { staggerChildren: 0.1, delayChildren: 0.05 } } }}
+      >
+        <motion.div
+          variants={revealUp}
+          transition={{ duration: 0.5 }}
+          className="font-mono text-xs tracking-widest uppercase text-(--color-accent) mb-3"
+        >
+          Contact us
+        </motion.div>
+        <motion.h2
+          variants={revealUp}
+          transition={{ duration: 0.5 }}
+          id="contact-heading"
+          className="text-3xl sm:text-4xl font-bold tracking-tight mb-3"
+        >
+          Have a question, found a bug, or want to chat?
+        </motion.h2>
+        <motion.p
+          variants={revealUp}
+          transition={{ duration: 0.5 }}
+          className="text-(--color-fg-muted) text-base sm:text-lg mb-8"
+        >
+          Drop us a line — we read every message and reply within 2 business days.
+        </motion.p>
 
-      <form onSubmit={submit} className="space-y-4">
+        <motion.form variants={revealUp} transition={{ duration: 0.5 }} onSubmit={submit} className="space-y-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label htmlFor="contact-name" className="block text-xs font-mono uppercase tracking-wider text-(--color-fg-dim) mb-1.5">
@@ -200,7 +224,8 @@ export default function ContactSection() {
             )}
           </button>
         </div>
-      </form>
+        </motion.form>
+      </motion.div>
     </section>
   )
 }

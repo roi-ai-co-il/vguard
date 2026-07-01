@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Globe, ShieldCheck, Lock, Check, Copy, RefreshCw, X, ArrowRight, Loader2, Sparkles } from 'lucide-react'
 import type { ScanResult } from '@/lib/scanner-types'
+import { TextShimmer } from '@/components/core/text-shimmer'
 
 interface NextStagesPanelProps {
   scannedUrl: string
@@ -125,7 +126,11 @@ export function NextStagesPanel({ scannedUrl, stage2Status, stage2FindingCount, 
                   Browser-Assisted Scan
                 </h4>
                 <p className="mt-1.5 text-sm text-(--color-fg-muted) leading-relaxed">
-                  {stage2Status === 'done'
+                  {stage2Status === 'running' ? (
+                    <TextShimmer duration={1.4} spread={1.5} className="text-sm leading-relaxed">
+                      Running a headless browser on your site — catching runtime-only leaks…
+                    </TextShimmer>
+                  ) : stage2Status === 'done'
                     ? 'A real headless browser ran your site to catch what only happens at runtime — cookies without HttpOnly, auth tokens in localStorage, runtime-only API calls. Findings already merged above.'
                     : stage2Status === 'unavailable'
                       ? 'Server-side worker isn\'t configured on this deployment. Tap to use the bookmarklet flow on your own browser instead.'

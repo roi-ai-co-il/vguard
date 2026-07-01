@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import { motion } from 'framer-motion'
 import SiteLayout from './components/SiteLayout'
 import Home from './pages/Home'
 import HowItWorks from './pages/HowItWorks'
@@ -92,16 +91,12 @@ export default function App({ initialPath }: { initialPath: string }) {
 
   return (
     <SiteLayout pathname={path}>
-      {/* key={path} remounts on each navigation so the enter animation replays.
-          No exit animation = zero gap → the new page builds in immediately. */}
-      <motion.div
-        key={path}
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-      >
-        {pageFor(path)}
-      </motion.div>
+      {/* key={path} remounts the page on each navigation so every page's own
+          staggered text-reveal replays from scratch. We deliberately DON'T wrap
+          this in a block-level fade/blur — that would animate the whole page as
+          one opaque unit and mask the per-line reveal underneath. Let each page
+          drive its own entrance. */}
+      <div key={path}>{pageFor(path)}</div>
     </SiteLayout>
   )
 }
