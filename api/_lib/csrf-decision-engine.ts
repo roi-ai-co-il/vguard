@@ -154,6 +154,7 @@ const SENSITIVITY_KEYWORDS: { bucket: EndpointSensitivity; words: string[] }[] =
     bucket: 'auth',
     words: [
       'login', 'logout', 'register', 'signup', 'sign-up',
+      'signin', 'sign-in', 'sign_in',
       'forgot-password', 'forgot_password', 'reset-password', 'reset_password',
     ],
   },

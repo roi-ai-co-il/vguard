@@ -167,6 +167,21 @@ describe('classifyEndpointSensitivity', () => {
     assert.equal(classifyEndpointSensitivity('/admin'), 'financial')
     assert.equal(classifyEndpointSensitivity('/x9q7z'), 'unknown')
   })
+
+  it('signin aliases classify as auth (not unknown)', () => {
+    assert.equal(classifyEndpointSensitivity('/signin.html'), 'auth')
+    assert.equal(classifyEndpointSensitivity('/sign-in'), 'auth')
+    assert.equal(classifyEndpointSensitivity('/users/sign_in'), 'auth')
+  })
+})
+
+describe('CSRF decision engine — signin aliases drive the Low path', () => {
+  it('POST to /signin.html with no protection → low', () => {
+    const d = decideCsrf(ev({ action: '/signin.html' }))
+    assert.equal(d.decision, 'low')
+    assert.equal(d.sensitivity, 'auth')
+    assert.equal(d.confidence, 'possible')
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -233,6 +248,8 @@ describe('CSRF scoring — visibility-only heuristic stays recon/info/zero', () 
     assert.equal(out.findings[0].riskCategory, 'posture')
     // reconciles down to low/info — never high/medium/critical
     assert.ok(['low', 'info'].includes(out.findings[0].effectiveSeverity!), `got ${out.findings[0].effectiveSeverity}`)
+    // display confidence is pinned to possible/unverified (never 'likely')
+    assert.equal(out.findings[0].confidence, 'possible')
     assert.equal(out.severityCounts.high, 0)
     assert.equal(out.severityCounts.medium, 0)
     assert.equal(out.severityCounts.critical, 0)
