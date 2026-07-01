@@ -17,6 +17,7 @@
  */
 
 import type { Finding, ScanResult } from '../../src/lib/scanner-types.js'
+import { gradeForScore } from './scoring-policy.js'
 
 /** Lower bound of the cosmetic bump window (inclusive). */
 export const DISPLAY_BUMP_MIN = 96
@@ -34,6 +35,24 @@ export function findingsHaveCritical(
   return findings.some((f) => (f.effectiveSeverity ?? f.severity) === 'critical')
 }
 
+/**
+ * True when any finding must block a "perfect" display — a critical, OR any
+ * finding the scoring engine flagged `blocksPerfectScore` (its reconciled
+ * severity is high/critical). Low/medium hardening findings never block the
+ * bump, so a strong site with only hardening notes still displays cleanly.
+ * (2026-07-01)
+ */
+export function findingsBlockPerfect(
+  findings: Pick<Finding, 'severity' | 'effectiveSeverity' | 'blocksPerfectScore'>[],
+): boolean {
+  return findings.some(
+    (f) =>
+      f.blocksPerfectScore === true ||
+      (f.effectiveSeverity ?? f.severity) === 'critical' ||
+      f.effectiveSeverity === 'high',
+  )
+}
+
 export interface DisplayScore {
   /** The number the UI renders. Equals rawScore except for the 96–99→100 bump. */
   displayScore: number
@@ -42,22 +61,29 @@ export interface DisplayScore {
 }
 
 /**
- * The single rule. Never mutates anything; takes the raw score + whether a
- * critical exists and returns the display pair.
+ * The single rule. Never mutates anything; takes the raw score + whether any
+ * perfect-score blocker exists, and returns the display pair.
  *
- *   raw ≤ 95           → display raw            (adjusted: false)
- *   raw 96–99, no crit → display 100            (adjusted: true)
- *   raw 96–99, crit    → display raw            (adjusted: false)  ← rule 11
- *   raw 100            → display 100            (adjusted: false)  ← already perfect
+ *   raw ≤ 95              → display raw           (adjusted: false)
+ *   raw 96–99, unblocked  → display 100           (adjusted: true)
+ *   raw 96–99, blocked    → display raw           (adjusted: false)
+ *   raw 100               → display 100           (adjusted: false)  ← already perfect
+ *
+ * `blocked` is the STRICT gate (see `withDisplayScore`): any critical, any high,
+ * any verified impact, or any `blocksPerfectScore:true` finding. Low/medium
+ * hardening/contextual notes never block it.
  */
-export function computeDisplayScore(rawScore: number, _opts: { hasCritical: boolean }): DisplayScore {
-  // Cosmetic 96–99→100 bump DISABLED (2026-06-25). User testing showed that a
-  // perfect 100 on ordinary marketing sites read as "the tool didn't check
-  // anything." Showing the honest score (97/98/99) — and letting different
-  // sites land on different numbers — makes the scan feel like it actually
-  // measured something. Aligns with scoring-v6 ("100 requires zero deductions").
-  // The DISPLAY_BUMP_* constants + scoreAdjustedForDisplay field are kept so the
-  // bump can be re-enabled by restoring the window check here.
+export function computeDisplayScore(rawScore: number, opts: { blocked: boolean }): DisplayScore {
+  // Cosmetic 96–99 → 100 bump — DISABLED 2026-06-25 (a perfect 100 on ordinary
+  // marketing sites read as "the tool didn't check anything"), RE-ENABLED
+  // 2026-07-01 behind the strict blocker gate above. This separates raw
+  // technical posture (`vibeScore`, always honest) from the user-facing display
+  // number — it never hides findings: the raw score, breakdown, severities, and
+  // reasonCodes are all untouched, and any real risk (high/critical/verified/
+  // blocksPerfectScore) keeps the honest 96–99.
+  if (!opts.blocked && rawScore >= DISPLAY_BUMP_MIN && rawScore <= DISPLAY_BUMP_MAX) {
+    return { displayScore: 100, scoreAdjustedForDisplay: true }
+  }
   return { displayScore: rawScore, scoreAdjustedForDisplay: false }
 }
 
@@ -67,10 +93,20 @@ export function computeDisplayScore(rawScore: number, _opts: { hasCritical: bool
  * `severityCounts.critical`, falling back to per-finding reconciled severity.
  */
 export function withDisplayScore<T extends ScanResult>(result: T): T {
-  const hasCritical =
-    (result.severityCounts?.critical ?? 0) > 0 || findingsHaveCritical(result.findings)
+  // A high/critical reconciled severity (incl. contextually-escalated cookie/
+  // transport findings via `blocksPerfectScore`) blocks the perfect display —
+  // not just an explicit `critical`. Low/medium hardening never blocks it.
+  const blocked =
+    (result.severityCounts?.critical ?? 0) > 0 ||
+    (result.severityCounts?.high ?? 0) > 0 ||
+    findingsBlockPerfect(result.findings)
   const { displayScore, scoreAdjustedForDisplay } = computeDisplayScore(result.vibeScore, {
-    hasCritical,
+    blocked,
   })
-  return { ...result, displayScore, scoreAdjustedForDisplay }
+  // Grade follows the number it's shown next to: `displayGrade` off displayScore
+  // (user-facing), `rawGrade` off the untouched vibeScore (debug/admin). `grade`
+  // stays the raw technical grade for back-compat.
+  const rawGrade = result.grade ?? gradeForScore(result.vibeScore)
+  const displayGrade = gradeForScore(displayScore)
+  return { ...result, displayScore, scoreAdjustedForDisplay, rawGrade, displayGrade }
 }

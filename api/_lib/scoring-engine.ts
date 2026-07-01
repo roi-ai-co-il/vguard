@@ -42,6 +42,10 @@ import {
 } from './finding-ids.js'
 import { deriveFindingTraits } from './finding-traits.js'
 import {
+  classifyContextualFinding,
+  type ContextualClassification,
+} from './contextual-risk-classifier.js'
+import {
   BUSINESS_IMPACT_MULT,
   CATEGORY_LABELS,
   CONFIDENCE_MULT,
@@ -477,6 +481,8 @@ export interface ScoredFinding {
   scoreImpact: number
   /** Point penalty after in-category diminishing returns + posture clamp. */
   effectivePenalty: number
+  /** Present when the contextual-risk-classifier re-graded this finding. */
+  contextual?: ContextualClassification
 }
 
 export interface SeverityCounts {
@@ -530,13 +536,35 @@ function decayPenalties(items: { penalty: number }[]): Map<{ penalty: number }, 
 export function runScoringEngine(findings: Finding[], ctx: ScoringContext): EngineOutput {
   const scored: ScoredFinding[] = findings.map((f) => {
     const traits = extractTraits(f, ctx)
-    const riskClass = classifyRiskClass(f, traits, ctx)
-    const confidence = classifyConfidence(f, traits)
+    let riskClass = classifyRiskClass(f, traits, ctx)
+    let confidence = classifyConfidence(f, traits)
+    let riskCategory = mapToRiskCategory(f, { knownPublicAsset: traits.knownPublicAsset })
+
+    // -----------------------------------------------------------------------
+    // Contextual re-grading (2026-07-01) — NOT a new stage. When observable
+    // site context is available, let the contextual-risk-classifier override
+    // the generic riskClass/confidence for the `cookie-*` and
+    // `tls-no-http-redirect` hardening findings. Everything downstream
+    // (effectiveSeverity, penalty tier, uiGroup) derives from riskClass, so the
+    // override stays fully consistent. Findings the classifier doesn't own
+    // return null and are untouched. Never fires when ctx.siteContext is unset,
+    // so existing tests/consumers are byte-for-byte unchanged.
+    // -----------------------------------------------------------------------
+    let contextual: ContextualClassification | undefined
+    if (ctx.siteContext && f.severity !== 'ok') {
+      const c = classifyContextualFinding(f, ctx.siteContext)
+      if (c) {
+        contextual = c
+        riskClass = c.riskClass
+        confidence = c.confidence
+        if (c.riskCategoryOverride) riskCategory = c.riskCategoryOverride
+      }
+    }
+
     const riskScore = computeFindingRisk(f, traits, riskClass, confidence, ctx)
     const effectiveSeverity: EffectiveSeverity =
       f.severity === 'ok' ? 'info' : RISKCLASS_TO_EFFECTIVE[riskClass]
     const pro = deriveFindingTraits(f, ctx)
-    const riskCategory = mapToRiskCategory(f, { knownPublicAsset: traits.knownPublicAsset })
     const businessImpact = pro.businessImpact
     const isGolden = isGoldenFinding(f, {
       knownPublicAsset: traits.knownPublicAsset,
@@ -562,6 +590,7 @@ export function runScoringEngine(findings: Finding[], ctx: ScoringContext): Engi
       riskScore,
       scoreImpact,
       effectivePenalty: 0,
+      contextual,
     }
   })
 
@@ -743,6 +772,13 @@ export function applyEngine(findings: Finding[], ctx: ScoringContext): ApplyResu
     // Attach the professional, evidence-based trait set so every shipped
     // finding self-describes its exploitability / impact / evidence strength.
     const pro = deriveFindingTraits(s.finding, ctx)
+    // A finding blocks a "perfect" display when its reconciled severity is
+    // high/critical. The contextual classifier decides this explicitly for the
+    // findings it owns; for everything else it's derived from effectiveSeverity
+    // so the field is meaningful across the whole report.
+    const blocksPerfectScore =
+      s.contextual?.blocksPerfectScore ??
+      (s.effectiveSeverity === 'high' || s.effectiveSeverity === 'critical')
     return {
       ...s.finding,
       riskScore: s.riskScore,
@@ -751,7 +787,14 @@ export function applyEngine(findings: Finding[], ctx: ScoringContext): ApplyResu
       effectiveSeverity: s.effectiveSeverity,
       confidence: s.confidence,
       uiGroup: uiGroupFor(s.finding, s.riskClass, s.traits),
-      verifiedImpact: pro.verifiedImpact,
+      blocksPerfectScore,
+      reasonCodes: s.contextual?.reasonCodes,
+      contextExplanation: s.contextual?.explanation,
+      contextClass: s.contextual?.contextClass,
+      // A contextual Critical (e.g. session cookie set over HTTP) is a verified
+      // observation — keep the self-describing `verifiedImpact` in lockstep so
+      // it can't read "critical" while claiming no verified impact.
+      verifiedImpact: s.contextual?.confidence === 'verified' ? true : pro.verifiedImpact,
       exploitability: pro.exploitability,
       attackPrerequisite: pro.attackPrerequisite,
       remoteReachable: pro.remoteReachable,

@@ -10,6 +10,7 @@ import type { Finding, ScanResponse, Severity } from '../../src/lib/scanner-type
 import { enrichFindings } from './fix-prompt-composer.js'
 import { aggregateBand, applyRisk, classifyRouteContext, computeAggregateRisk } from './risk-scorer.js'
 import { applyEngine, defaultContext } from './scoring-engine.js'
+import { buildSiteSecurityContext } from './contextual-risk-classifier.js'
 import { evidenceContainsRealSecret, isSpaShellBody } from './scoring-policy.js'
 import { oastEnabled, makeOastToken, oastUrl, checkOastHits } from './oast.js'
 import { buildAttackSurface, discoverSubdomainsFromCT } from './attack-surface.js'
@@ -4618,15 +4619,31 @@ export async function runScan(rawUrl: string): Promise<ScanResponse> {
   )
     ? /'unsafe-(?:inline|eval)'/i.test(mainResp.headers.get('content-security-policy') || '')
     : false
-  const engineCtx = defaultContext({
-    pathname: new URL(finalUrl).pathname,
-    isHttps: finalUrl.startsWith('https://'),
-    cspHasUnsafe,
-    stage: 1,
-    // V6 — WAF presence grants a small bonus (the synthetic `meta-waf-detected`
-    // finding is appended after the engine runs, so it must travel via ctx).
-    wafPresent: Boolean(wafState.vendor && wafState.vendor !== 'unknown'),
+  // 2026-07-01 — observable site context so the engine's contextual-risk-
+  // classifier can re-grade the `cookie-*` + `tls-no-http-redirect` hardening
+  // findings from real evidence (cookie sensitivity/flags/source, login/admin/
+  // payment/private-data surface, HSTS, http reachability). Built from signals
+  // already gathered by the passive scan — NOT a new probe/stage.
+  const siteContext = buildSiteSecurityContext({
+    finalUrl,
+    httpsActive: finalUrl.startsWith('https://'),
+    httpReachableWithoutRedirect: enriched.some((f) => f.id === 'tls-no-http-redirect'),
+    hstsHeaderPresent: Boolean(mainResp.headers.get('strict-transport-security')),
+    html,
+    setCookies,
   })
+  const engineCtx = {
+    ...defaultContext({
+      pathname: new URL(finalUrl).pathname,
+      isHttps: finalUrl.startsWith('https://'),
+      cspHasUnsafe,
+      stage: 1 as const,
+      // V6 — WAF presence grants a small bonus (the synthetic `meta-waf-detected`
+      // finding is appended after the engine runs, so it must travel via ctx).
+      wafPresent: Boolean(wafState.vendor && wafState.vendor !== 'unknown'),
+    }),
+    siteContext,
+  }
   const legacyScored = applyRisk(enriched, routeContext)
   const engineOut = applyEngine(legacyScored, engineCtx)
   const scored = engineOut.findings
