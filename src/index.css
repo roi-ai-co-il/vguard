@@ -194,18 +194,6 @@ input:focus-visible {
   }
 }
 
-@keyframes vgScanningLogo {
-  0%, 100% {
-    opacity: 0.85;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 1;
-    transform: scale(1.06);
-    filter: drop-shadow(0 0 10px rgba(34, 211, 238, 0.5));
-  }
-}
-
 .vg-scanning-ring {
   animation: vgScanningRing 5s linear infinite;
 }
@@ -214,14 +202,9 @@ input:focus-visible {
   animation: vgScanningLetter 2.4s infinite;
 }
 
-.vg-scanning-logo {
-  animation: vgScanningLogo 2s ease-in-out infinite;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .vg-scanning-ring,
-  .vg-scanning-letter,
-  .vg-scanning-logo {
+  .vg-scanning-letter {
     animation: none;
   }
   .vg-scanning-letter {
@@ -354,15 +337,62 @@ html[data-a11y-motion="reduced"] *::after {
   animation-delay: 3s;
   animation-duration: 3s;
 }
+/* Density additions (streams 9–14) — pulses ride the same trace the path draws. */
+.cpu-line-9 {
+  offset-path: path("M 5 80 h 48 q 5 0 5 -5 v -15 q 0 -5 5 -5 h 22");
+  animation-delay: 2s;
+  animation-duration: 5s;
+}
+.cpu-line-10 {
+  offset-path: path("M 45 5 v 18 q 0 5 5 5 h 37 q 5 0 5 5 v 7");
+  animation-delay: 7s;
+  animation-duration: 4s;
+}
+.cpu-line-11 {
+  offset-path: path("M 160 8 h -42 q -5 0 -5 5 v 17 q 0 5 -5 5 v 5");
+  animation-delay: 1.5s;
+  animation-duration: 6s;
+}
+.cpu-line-12 {
+  offset-path: path("M 192 60 h -60 q -5 0 -5 -5 h -12");
+  animation-delay: 5s;
+  animation-duration: 3s;
+}
+.cpu-line-13 {
+  offset-path: path("M 50 95 h 30 q 5 0 5 -5 v -25 q 0 -5 5 -5 h 5");
+  animation-delay: 8s;
+  animation-duration: 5s;
+}
+.cpu-line-14 {
+  offset-path: path("M 150 95 h -28 q -5 0 -5 -5 v -25 q 0 -5 -5 -5 h -5");
+  animation-delay: 4s;
+  animation-duration: 4s;
+}
 
 @keyframes animation-path {
   0%   { offset-distance: 0%; }
   100% { offset-distance: 100%; }
 }
 
-/* Honor reduced-motion: freeze the particles + drop the text-gradient sweep. */
+/* Board node dots: a slow twinkle (opacity + tiny scale) so the grid feels
+   alive while the pulses pass through. Lit nodes pulse a touch stronger. */
+.cpu-node {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: cpu-node-twinkle 4s ease-in-out infinite;
+}
+.cpu-node-lit {
+  animation-duration: 3s;
+}
+@keyframes cpu-node-twinkle {
+  0%, 100% { opacity: 0.7; transform: scale(0.82); }
+  50%      { opacity: 1;   transform: scale(1.12); }
+}
+
+/* Honor reduced-motion: freeze the particles + nodes + drop the text sweep. */
 @media (prefers-reduced-motion: reduce) {
   .cpu-architecture { animation: none !important; }
+  .cpu-node { animation: none !important; }
 }
 
 /* Mascot watermark with a cyan "scan wave" sweeping top→bottom.
